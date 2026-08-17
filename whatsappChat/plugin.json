@@ -8,6 +8,7 @@
     "capabilities": ["chat", "messaging"],
     "icon": "chat",
     "bridge": ["./bin/whatsapp-chat-bridge"],
+    "warning": "WhatsApp does not officially support third-party clients. Linking this bridge is not something they endorse, and accounts have been restricted for using unofficial clients. It works, and has for years, but the risk is yours to weigh.",
     "settings": "./WhatsappChatSettings.qml",
     "startupCheck": "./WhatsappChatStartupCheck.qml",
     "dependencies": ["go"],

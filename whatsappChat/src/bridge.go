@@ -68,6 +68,21 @@ func (b *bridge) settingBool(key string, fallback bool) bool {
 	return fallback
 }
 
+// settingInt reads a numeric preference. JSON numbers arrive as float64, so the
+// obvious int assertion would always miss.
+func (b *bridge) settingInt(key string, fallback int) int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	switch v := b.settings[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return fallback
+}
+
 // ---------------------------------------------------------------- configure
 
 func (b *bridge) handleConfigure(ctx context.Context, c call) {
