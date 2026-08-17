@@ -1,0 +1,16 @@
+{
+    "id": "screenCatcher",
+    "name": "Screen Catcher",
+    "description": "Screenshot (selection, fullscreen, text/OCR) and screen recording (fullscreen, selection, GIF) with mic/system-audio capture, from one bar popup.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget"],
+    "component": "./ScreenCatcherWidget.qml",
+    "icon": "screenshot_monitor",
+    "settings": "./ScreenCatcherSettings.qml",
+    "startupCheck": "./ScreenCatcherStartupCheck.qml",
+    "dependencies": ["grim", "slurp", "wf-recorder"],
+    "requires": ["grim", "slurp", "wf-recorder"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}
