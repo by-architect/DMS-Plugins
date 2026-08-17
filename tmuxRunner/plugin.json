@@ -1,0 +1,20 @@
+{
+    "id": "tmuxRunner",
+    "name": "Tmux Runner",
+    "description": "Search and switch between tmux sessions from the launcher, or create a new one by typing a name that doesn't exist yet.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "command-execution"],
+    "component": "./TmuxRunnerLauncher.qml",
+    "settings": "./TmuxRunnerSettings.qml",
+    "startupCheck": "./TmuxRunnerStartupCheck.qml",
+    "trigger": "tmux ",
+    "icon": "tab",
+    "dependencies": ["tmux"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
