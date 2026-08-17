@@ -8,16 +8,26 @@ import qs.Services
 // albums, and songs found inside playlists) and merges them into one ranked
 // list.
 //
-// Two async subsystems run side by side:
+// A playlist is one row no matter how it matched - by its own name, or by a
+// track found inside it - since the result-row layout is a single elided
+// line (no real multi-line rows exist in this launcher), so "list name, then
+// each matching track indented under it" becomes "list name, matching
+// tracks summarized in the subtitle". Selecting that row always acts on the
+// playlist, never on one track inside it.
+//
+// Three async subsystems run side by side, each with its own Process so none
+// waits behind another:
 //  - the query chain (songs/artists/albums): a fresh mpc search per category,
 //    re-run whenever the typed query settles.
 //  - the poll chain (playlists, and songs-inside-playlists): mpc search
 //    doesn't cover saved-playlist contents, so those are fetched ahead of time
 //    on a throttle and filtered locally, the same way tmuxRunner polls
 //    `tmux list-sessions` instead of re-listing per keystroke.
-// Both share the same "never block getItems()" contract: it always answers
-// from cache immediately and kicks results in later via
-// PluginService.requestLauncherUpdate().
+//  - the action chain: resolves a playlist's/artist's/album's file list on
+//    demand when "add after current song" is picked, since mpc can only
+//    insert file paths, not playlist/artist/album names.
+// getItems() never blocks on any of them - it always answers from cache
+// immediately, and results land later via PluginService.requestLauncherUpdate().
 Item {
     id: root
 
@@ -38,14 +48,35 @@ Item {
     property bool searchAlbums: true
     property bool searchPlaylistTracks: true
     property int maxPerCategory: 6
-    property string primaryAction: "enqueue"
 
     readonly property int _minChars: 2
     readonly property int _namesIntervalMs: 8000
     readonly property int _tracksIntervalMs: 30000
+    readonly property int _maxInsertTracks: 30
     readonly property string _songFormat: "%file%\t%artist%\t%title%\t%time%"
     readonly property string _albumFormat: "%album%\t%albumartist%\t%artist%"
     readonly property string _trackFormat: "%artist%\t%title%\t%file%"
+
+    // Enter always runs the first action in the kind's list; right-click
+    // exposes all of them in this order. Songs get a non-destructive default
+    // (cut in line, keep the rest of the queue); playlists/artists/albums
+    // default to replacing the queue, matching how most music apps treat
+    // "open an album/playlist" as "start listening to just this".
+    readonly property var _songActions: [
+        { id: "insertPlayNow", icon: "play_circle", label: "Add after current song and play" },
+        { id: "insertNext", icon: "playlist_play", label: "Add after current song" },
+        { id: "replace", icon: "restart_alt", label: "Replace queue and play" },
+        { id: "enqueueEnd", icon: "playlist_add", label: "Add to end of queue" }
+    ]
+    readonly property var _groupActions: [
+        { id: "replace", icon: "restart_alt", label: "Replace queue and play" },
+        { id: "enqueueEnd", icon: "playlist_add", label: "Add to end of queue" },
+        { id: "insertNext", icon: "playlist_play", label: "Add after current song" }
+    ]
+
+    function _actionsForKind(kind) {
+        return kind === "song" ? _songActions : _groupActions;
+    }
 
     Component.onCompleted: _loadSettings()
     onPluginServiceChanged: _loadSettings()
@@ -77,7 +108,6 @@ Item {
         searchAlbums = pluginService.loadPluginData(pluginId, "searchAlbums", true);
         searchPlaylistTracks = pluginService.loadPluginData(pluginId, "searchPlaylistTracks", true);
         maxPerCategory = pluginService.loadPluginData(pluginId, "maxPerCategory", 6);
-        primaryAction = pluginService.loadPluginData(pluginId, "primaryAction", "enqueue");
     }
 
     // ---------------------------------------------------------------- launcher
@@ -107,12 +137,9 @@ Item {
         if (searchAlbums && cached)
             for (const a of cached.albums)
                 results.push({ kind: "album", entry: a });
-        if (searchPlaylists)
-            for (const p of _matchPlaylistNames(q))
+        if (searchPlaylists || searchPlaylistTracks)
+            for (const p of _matchPlaylists(q))
                 results.push({ kind: "playlist", entry: p });
-        if (searchPlaylistTracks)
-            for (const t of _matchPlaylistTracks(q))
-                results.push({ kind: "track", entry: t });
 
         const ranked = _rankResults(results, q);
         const items = ranked.slice(0, 40).map((r, i) => _toItem(r, 9000 - i));
@@ -127,36 +154,24 @@ Item {
     }
 
     function executeItem(item) {
-        if (!item)
+        if (!item || !item.mpdKind)
             return;
-        if (item.action === "noop")
-            return;
-        _runAction(item, primaryAction);
+        const table = _actionsForKind(item.mpdKind);
+        if (table.length > 0)
+            _runKindAction(item, table[0].id);
     }
 
     function getContextMenuActions(item) {
         if (!item || !item.mpdKind)
             return [];
 
-        const actions = [];
-        const label = item.mpdKind === "song" || item.mpdKind === "track" ? "song" : item.mpdKind === "playlist" ? "playlist" : item.mpdKind === "artist" ? "artist's songs" : "album's songs";
+        const actions = _actionsForKind(item.mpdKind).map(a => ({
+            icon: a.icon,
+            text: a.label,
+            action: () => root._runKindAction(item, a.id)
+        }));
 
-        actions.push({
-            icon: "playlist_add",
-            text: "Enqueue " + label,
-            action: () => root._runAction(item, "enqueue")
-        });
-        actions.push({
-            icon: "play_circle",
-            text: "Play now",
-            action: () => root._runAction(item, "playNow")
-        });
-        if (item.mpdKind === "song" || item.mpdKind === "track") {
-            actions.push({
-                icon: "playlist_play",
-                text: "Play next",
-                action: () => root._runAction(item, "playNext")
-            });
+        if (item.mpdKind === "song") {
             actions.push({
                 icon: "content_copy",
                 text: "Copy file path",
@@ -183,7 +198,7 @@ Item {
         if (searchPlaylists) {
             const names = _plNames.slice(0, Math.max(1, maxPerCategory) * 2);
             if (names.length > 0)
-                return names.map((n, i) => _toItem({ kind: "playlist", entry: { name: n } }, 9000 - i));
+                return names.map((n, i) => _toItem({ kind: "playlist", entry: { name: n, matchedTracks: [] } }, 9000 - i));
         }
         return [_statusItem("search", "Search your MPD library", "Type a song, playlist, artist or album name")];
     }
@@ -348,14 +363,43 @@ Item {
         });
     }
 
-    function _matchPlaylistNames(q) {
+    // A playlist can match two independent ways - its own name, or a track
+    // inside it - so both routes are folded into one result per playlist
+    // ("every list can be one row") rather than one row per matching track.
+    // Selecting that row always acts on the playlist, never on a single track
+    // inside it.
+    function _matchPlaylists(q) {
         const lower = q.toLowerCase();
-        return _plNames.filter(n => n.toLowerCase().includes(lower)).slice(0, maxPerCategory * 3).map(n => ({ name: n }));
+        const byName = {};
+
+        if (searchPlaylists) {
+            for (const n of _plNames) {
+                if (n.toLowerCase().includes(lower))
+                    byName[n] = { name: n, matchedTracks: [] };
+            }
+        }
+
+        if (searchPlaylistTracks) {
+            for (const t of _plTracks) {
+                if (!t.title.toLowerCase().includes(lower) && !t.artist.toLowerCase().includes(lower))
+                    continue;
+                if (!byName[t.playlist])
+                    byName[t.playlist] = { name: t.playlist, matchedTracks: [] };
+                byName[t.playlist].matchedTracks.push(t.title);
+            }
+        }
+
+        return Object.keys(byName).map(k => byName[k]).slice(0, maxPerCategory * 3);
     }
 
-    function _matchPlaylistTracks(q) {
-        const lower = q.toLowerCase();
-        return _plTracks.filter(t => t.title.toLowerCase().includes(lower) || t.artist.toLowerCase().includes(lower)).slice(0, maxPerCategory * 3);
+    function _playlistComment(e) {
+        if (e.matchedTracks && e.matchedTracks.length > 0) {
+            const shown = e.matchedTracks.slice(0, 3);
+            const rest = e.matchedTracks.length - shown.length;
+            return shown.join(" • ") + (rest > 0 ? " +" + rest + " more" : "");
+        }
+        const count = _plTracks.filter(t => t.playlist === e.name).length;
+        return count > 0 ? (count + (count === 1 ? " track" : " tracks")) : "Playlist";
     }
 
     // ------------------------------------------------------------- workers
@@ -432,6 +476,53 @@ Item {
             pollWorker._exitCode = exitCode;
             pollWorker._exitDone = true;
             pollWorker._maybeDone();
+        }
+
+        function run(args, onDone) {
+            _onDone = onDone;
+            command = args;
+            running = true;
+        }
+        function _maybeDone() {
+            if (!_stdoutDone || !_exitDone)
+                return;
+            const cb = _onDone, out = _stdout, err = _stderr, code = _exitCode;
+            _onDone = null;
+            _stdout = "";
+            _stderr = "";
+            _stdoutDone = false;
+            _exitDone = false;
+            _exitCode = 0;
+            if (cb)
+                cb(out, err, code);
+        }
+    }
+
+    Process {
+        id: actionWorker
+        readonly property bool busy: running
+        property var _onDone: null
+        property string _stdout: ""
+        property string _stderr: ""
+        property bool _stdoutDone: false
+        property bool _exitDone: false
+        property int _exitCode: 0
+        running: false
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                actionWorker._stdout = text;
+                actionWorker._stdoutDone = true;
+                actionWorker._maybeDone();
+            }
+        }
+        stderr: StdioCollector {
+            onStreamFinished: actionWorker._stderr = text
+        }
+        onExited: exitCode => {
+            actionWorker._exitCode = exitCode;
+            actionWorker._exitDone = true;
+            actionWorker._maybeDone();
         }
 
         function run(args, onDone) {
@@ -569,15 +660,27 @@ Item {
     // Category priority only breaks ties when text-match quality is equal;
     // it exists so "Kanye West" the artist doesn't get buried under twenty
     // equally-substring-matched track titles.
-    readonly property var _kindPriority: ({ "song": 5, "playlist": 4, "artist": 3, "album": 2, "track": 1 })
+    readonly property var _kindPriority: ({ "song": 4, "playlist": 3, "artist": 2, "album": 1 })
 
     function _rankResults(results, q) {
         const lower = q.toLowerCase();
         const scored = results.map(r => {
-            const text = r.kind === "song" ? (r.entry.title + " " + r.entry.artist) : r.kind === "track" ? (r.entry.title + " " + r.entry.artist) : (r.entry.name || "");
+            let score;
+            if (r.kind === "song") {
+                score = _scoreText(r.entry.title + " " + r.entry.artist, lower);
+            } else if (r.kind === "playlist") {
+                // A playlist that only matched via a track inside it should
+                // rank by how good THAT match is, not by its own (possibly
+                // unrelated) name.
+                score = _scoreText(r.entry.name, lower);
+                for (const t of (r.entry.matchedTracks || []))
+                    score = Math.max(score, _scoreText(t, lower));
+            } else {
+                score = _scoreText(r.entry.name || "", lower);
+            }
             return {
                 r: r,
-                score: _scoreText(text, lower)
+                score: score
             };
         });
         scored.sort((a, b) => {
@@ -610,7 +713,7 @@ Item {
                 id: "mpd:playlist:" + e.name,
                 name: e.name,
                 icon: "material:queue_music",
-                comment: "Playlist",
+                comment: _playlistComment(e),
                 action: "primary",
                 categories: ["MPD Playlists"],
                 _preScored: preScored,
@@ -644,18 +747,6 @@ Item {
                 mpdEntry: e
             };
         }
-        // track
-        return {
-            id: "mpd:track:" + e.file,
-            name: e.title,
-            icon: "material:playlist_play",
-            comment: "In: " + e.playlist + (e.artist ? " · " + e.artist : ""),
-            action: "primary",
-            categories: ["MPD Playlist Tracks"],
-            _preScored: preScored,
-            mpdKind: "track",
-            mpdEntry: e
-        };
     }
 
     function _statusItem(icon, name, comment) {
@@ -693,43 +784,50 @@ Item {
         return _mpcArgv(subArgs).map(_shQuote).join(" ");
     }
 
-    function _runAction(item, mode) {
+    function _runKindAction(item, actionId) {
         const kind = item.mpdKind;
         const e = item.mpdEntry;
 
-        if (kind === "song" || kind === "track") {
-            if (mode === "playNext") {
-                Quickshell.execDetached(_mpcArgv(["insert", e.file]));
+        if (kind === "song") {
+            if (actionId === "insertPlayNow") {
+                _runChain(["insert", e.file], ["next"]);
                 _toast("Playing next", e.title);
-            } else if (mode === "playNow") {
+            } else if (actionId === "insertNext") {
+                Quickshell.execDetached(_mpcArgv(["insert", e.file]));
+                _toast("Added after current song", e.title);
+            } else if (actionId === "replace") {
                 _runChain(["clear"], ["add", e.file], ["play"]);
-                _toast("Playing now", e.title);
-            } else {
+                _toast("Replaced queue", e.title);
+            } else if (actionId === "enqueueEnd") {
                 Quickshell.execDetached(_mpcArgv(["add", e.file]));
-                _toast("Enqueued", e.title);
+                _toast("Added to end of queue", e.title);
             }
             return;
         }
 
         if (kind === "playlist") {
-            if (mode === "playNow") {
+            if (actionId === "replace") {
                 _runChain(["clear"], ["load", e.name], ["play"]);
-                _toast("Playing now", e.name);
-            } else {
+                _toast("Replaced queue", e.name);
+            } else if (actionId === "enqueueEnd") {
                 Quickshell.execDetached(_mpcArgv(["load", e.name]));
-                _toast("Enqueued playlist", e.name);
+                _toast("Added to end of queue", e.name);
+            } else if (actionId === "insertNext") {
+                _resolvePlaylistFiles(e.name, files => root._insertFilesNext(files, e.name));
             }
             return;
         }
 
         if (kind === "artist") {
             const findArgs = ["findadd", "artist", e.name];
-            if (mode === "playNow") {
+            if (actionId === "replace") {
                 _runChain(["clear"], findArgs, ["play"]);
-                _toast("Playing now", e.name);
-            } else {
+                _toast("Replaced queue", e.name);
+            } else if (actionId === "enqueueEnd") {
                 Quickshell.execDetached(_mpcArgv(findArgs));
-                _toast("Enqueued " + e.name, "All matching songs");
+                _toast("Added to end of queue", e.name);
+            } else if (actionId === "insertNext") {
+                _resolveArtistFiles(e.name, files => root._insertFilesNext(files, e.name));
             }
             return;
         }
@@ -738,14 +836,93 @@ Item {
             const findArgs = ["findadd", "album", e.name];
             if (e.artist)
                 findArgs.push("albumartist", e.artist);
-            if (mode === "playNow") {
+            if (actionId === "replace") {
                 _runChain(["clear"], findArgs, ["play"]);
-                _toast("Playing now", e.name);
-            } else {
+                _toast("Replaced queue", e.name);
+            } else if (actionId === "enqueueEnd") {
                 Quickshell.execDetached(_mpcArgv(findArgs));
-                _toast("Enqueued " + e.name, "All tracks");
+                _toast("Added to end of queue", e.name);
+            } else if (actionId === "insertNext") {
+                _resolveAlbumFiles(e.name, e.artist, files => root._insertFilesNext(files, e.name));
             }
         }
+    }
+
+    // mpc has no "insert this playlist/artist/album after current" primitive
+    // - insert only takes file paths - so those three actions resolve the
+    // matching file list first (via actionWorker, kept separate from the
+    // search/poll workers so an action never waits behind an in-flight
+    // search), then insert it as a block.
+    function _resolvePlaylistFiles(name, cb) {
+        if (actionWorker.busy) {
+            root._toast("Still working…", "Wait for the previous action to finish first.");
+            return;
+        }
+        actionWorker.run(_mpcArgv(["-f", "%file%", "playlist", name]), (out, err, code) => {
+            if (code !== 0) {
+                root._toastError("Could not read playlist", _firstErrorLine(err) || ("mpc exited with code " + code));
+                return;
+            }
+            cb(_splitNonEmptyLines(out));
+        });
+    }
+
+    function _resolveArtistFiles(name, cb) {
+        if (actionWorker.busy) {
+            root._toast("Still working…", "Wait for the previous action to finish first.");
+            return;
+        }
+        actionWorker.run(_mpcArgv(["-f", "%file%", "search", "artist", name]), (out, err, code) => {
+            if (code !== 0) {
+                root._toastError("Could not look up songs", _firstErrorLine(err) || ("mpc exited with code " + code));
+                return;
+            }
+            cb(_splitNonEmptyLines(out));
+        });
+    }
+
+    function _resolveAlbumFiles(name, artist, cb) {
+        if (actionWorker.busy) {
+            root._toast("Still working…", "Wait for the previous action to finish first.");
+            return;
+        }
+        const args = artist ? ["-f", "%file%", "search", "album", name, "albumartist", artist] : ["-f", "%file%", "search", "album", name];
+        actionWorker.run(_mpcArgv(args), (out, err, code) => {
+            if (code !== 0) {
+                root._toastError("Could not look up songs", _firstErrorLine(err) || ("mpc exited with code " + code));
+                return;
+            }
+            cb(_splitNonEmptyLines(out));
+        });
+    }
+
+    function _insertFilesNext(files, label) {
+        if (files.length === 0) {
+            root._toastError("Nothing to add", "No matching tracks found for \"" + label + "\".");
+            return;
+        }
+        const capped = files.slice(0, _maxInsertTracks);
+        Quickshell.execDetached(["sh", "-c", _insertChainScript(capped)]);
+        const countLabel = capped.length + (capped.length === 1 ? " track" : " tracks") + (files.length > capped.length ? " (of " + files.length + ")" : "");
+        root._toast("Added after current song", countLabel + " from " + label);
+    }
+
+    // insert() places ONE file immediately after the current position, so
+    // building an ordered block at current+1..current+N means inserting in
+    // REVERSE - the last file goes in first (landing at current+1), then each
+    // earlier file's insert pushes it one further back, ending in original
+    // order. This holds regardless of whether mpc's own multi-argument
+    // "insert a b c" batches order the same way, so it doesn't depend on that
+    // being true.
+    function _insertChainScript(files) {
+        const reversed = files.slice().reverse();
+        return reversed.map(f => _mpcCmdStr(["insert", f])).join(" && ");
+    }
+
+    function _splitNonEmptyLines(text) {
+        if (!text || text.trim().length === 0)
+            return [];
+        return text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
     }
 
     // Runs 2+ mpc invocations in guaranteed order (each waits for the previous
@@ -760,6 +937,13 @@ Item {
     function _toast(title, body) {
         if (typeof ToastService !== "undefined")
             ToastService.showInfo(title, body);
+    }
+
+    function _toastError(title, body) {
+        if (typeof ToastService !== "undefined" && typeof ToastService.showError === "function")
+            ToastService.showError(title, body);
+        else
+            _toast(title, body);
     }
 
     function _notify() {

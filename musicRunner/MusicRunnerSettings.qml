@@ -59,23 +59,6 @@ PluginSettings {
         leftIcon: "filter_list"
     }
 
-    SelectionSetting {
-        settingKey: "primaryAction"
-        label: "Enter key action"
-        description: "What happens when you pick a result. \"Play now\" clears the current queue first. Right-click always offers both, plus \"Play next\" for individual songs."
-        defaultValue: "enqueue"
-        options: [
-            {
-                label: "Enqueue (add to end of queue)",
-                value: "enqueue"
-            },
-            {
-                label: "Play now (clear queue and play)",
-                value: "playNow"
-            }
-        ]
-    }
-
     StringSetting {
         settingKey: "mpcBin"
         label: "mpc binary"
