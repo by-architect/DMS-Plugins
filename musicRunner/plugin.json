@@ -1,0 +1,20 @@
+{
+    "id": "musicRunner",
+    "name": "Music Runner",
+    "description": "Search your MPD library from the launcher: songs, playlists, artists, albums, and songs inside playlists. Each category can be turned on or off in settings.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "command-execution"],
+    "component": "./MusicRunnerLauncher.qml",
+    "settings": "./MusicRunnerSettings.qml",
+    "startupCheck": "./MusicRunnerStartupCheck.qml",
+    "trigger": "mpd ",
+    "icon": "music_note",
+    "dependencies": ["mpc"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
