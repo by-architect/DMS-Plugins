@@ -1,0 +1,20 @@
+{
+    "id": "nixSearch",
+    "name": "Nix Search",
+    "description": "Search nixpkgs from the launcher. Type 'nix <query>' to find packages by name or description.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher"],
+    "component": "./NixSearchLauncher.qml",
+    "settings": "./NixSearchSettings.qml",
+    "startupCheck": "./NixSearchStartupCheck.qml",
+    "trigger": "nix ",
+    "icon": "deployed_code",
+    "dependencies": ["nix"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}

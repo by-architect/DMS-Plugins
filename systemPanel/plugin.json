@@ -1,0 +1,16 @@
+{
+    "id": "systemPanel",
+    "name": "System Panel",
+    "description": "Fullscreen 3x3 system panel: login history, boot health, tailscale devices, inbound SSH, sudo activity, sessions, failed units, listening ports and a system overview",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "dankbar-widget", "monitoring", "security"],
+    "icon": "monitor_heart",
+    "components": {
+        "daemon": "./SystemPanelDaemon.qml",
+        "widget": "./SystemPanelWidget.qml"
+    },
+    "settings": "./SystemPanelSettings.qml",
+    "permissions": ["settings_read", "settings_write"]
+}
