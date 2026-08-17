@@ -33,7 +33,7 @@ PanelWindow {
 
     onOpenChanged: {
         if (open)
-            focusAnchor.forceActiveFocus();
+            searchField.field.forceActiveFocus();
     }
 
     readonly property var searchTokens: Filters.parseFilter(searchQuery)
@@ -109,21 +109,6 @@ PanelWindow {
                     win.closeRequested();
                     event.accepted = true;
                 }
-            }
-
-            // A FocusScope's forceActiveFocus() backfills to whichever
-            // descendant last held focus (e.g. the search field) rather than
-            // focusing the scope itself. Since the window now persists across
-            // close/reopen instead of being destroyed, that backfill would
-            // silently reclaim the search field's cursor on every reopen.
-            // Targeting this concrete leaf item instead resets the backfill
-            // chain to something harmless.
-            Item {
-                id: focusAnchor
-
-                width: 0
-                height: 0
-                focus: true
             }
 
             ColumnLayout {

@@ -108,8 +108,10 @@ quickshell -p <shell-path> ipc call notificationPanel toggle   # also: open, clo
 `status` reports whether the panel holds keyboard focus (`keyboard=ready`),
 useful when debugging compositor focus behaviour.
 
-Inside the panel: **Esc** or **q** (when the search field isn't focused)
-closes it.
+The search bar takes keyboard focus automatically on open, so typing starts
+filtering immediately. **Esc** closes from anywhere, including while typing;
+**q** also closes, but only when the search field isn't focused (otherwise
+it'd just be typed as a search character).
 
 ## Implementation notes
 
