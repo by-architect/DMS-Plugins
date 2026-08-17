@@ -1,0 +1,8 @@
+# Compiled plugin bridges. These are built per machine by the plugin's
+# build.sh, not shipped: a Go binary is ~25 MB and architecture specific.
+bin/
+
+# `go build` inside a bridge's src/ drops a module-named binary next to the
+# sources; build.sh writes to bin/ instead.
+whatsappChat/src/whatsappchatbridge
+commit-changes.md

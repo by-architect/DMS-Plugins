@@ -1,0 +1,20 @@
+{
+    "id": "whatsappChat",
+    "name": "WhatsApp",
+    "description": "Connects DMS to WhatsApp as a linked device. Chats, media, replies and read receipts appear in the DMS chat window.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "chat",
+    "capabilities": ["chat", "messaging"],
+    "icon": "chat",
+    "bridge": ["./bin/whatsapp-chat-bridge"],
+    "settings": "./WhatsappChatSettings.qml",
+    "startupCheck": "./WhatsappChatStartupCheck.qml",
+    "dependencies": ["go"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "network",
+        "process"
+    ]
+}
