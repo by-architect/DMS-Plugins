@@ -61,6 +61,10 @@ type messageObj struct {
 	Status     string `json:"status,omitempty"`
 	ReplyTo    string `json:"replyTo,omitempty"`
 
+	// MediaPath is set once an attachment has actually been written to the
+	// media directory the host provided; until then only a thumbnail and a ref
+	// are sent.
+	MediaPath  string `json:"mediaPath,omitempty"`
 	MediaBytes string `json:"mediaBytes,omitempty"`
 	MediaRef   string `json:"mediaRef,omitempty"`
 	MediaMime  string `json:"mediaMime,omitempty"`

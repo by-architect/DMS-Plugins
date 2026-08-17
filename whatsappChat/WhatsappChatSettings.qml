@@ -18,4 +18,21 @@ PluginSettings {
         description: "Pull past conversations when the device is first linked. Turning this off starts from an empty history and only shows messages that arrive from now on."
         defaultValue: true
     }
+
+    ToggleSetting {
+        settingKey: "autoDownloadMedia"
+        label: "Download attachments automatically"
+        description: "Fetch photos, video and voice notes as messages arrive, instead of when you open them. Backfilled history is always fetched on demand, so linking a device never downloads years of media at once."
+        defaultValue: true
+    }
+
+    SliderSetting {
+        settingKey: "autoDownloadMaxMB"
+        label: "Skip attachments larger than"
+        description: "Anything above this is left to download when you open it."
+        defaultValue: 16
+        minimum: 1
+        maximum: 100
+        unit: " MB"
+    }
 }

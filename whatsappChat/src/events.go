@@ -59,6 +59,13 @@ func (b *bridge) onMessage(evt *events.Message) {
 
 	emitEvent("message", map[string]any{"message": msg})
 
+	// Fetch the attachment in the background and re-emit once it has landed.
+	// Only for live messages: doing this during backfill would download years
+	// of media the moment a device is linked.
+	if msg.MediaRef != "" {
+		go b.autoDownload(*msg)
+	}
+
 	// Keep the conversation's activity line in step. The host would derive it
 	// anyway, but sending it means the chat list reorders immediately.
 	emitEvent("chat", map[string]any{"chat": chatObj{

@@ -246,6 +246,90 @@ func (b *bridge) rememberMedia(msg *messageObj, wa *waE2E.Message, mime string) 
 	}
 }
 
+// ---------------------------------------------------------------- auto-download
+
+// defaultAutoDownloadMaxMB is the ceiling on unattended downloads. A long video
+// arriving unannounced should not silently consume the connection.
+const defaultAutoDownloadMaxMB = 16
+
+// autoDownload fetches an attachment as its message arrives and re-emits the
+// message with a real path.
+//
+// Re-emitting rather than delaying the original: the message appears instantly
+// with WhatsApp's embedded thumbnail, and the full image replaces it when ready.
+// The host upserts on message id and keeps media it already has, so the second
+// emission fills in the path without duplicating anything.
+func (b *bridge) autoDownload(msg messageObj) {
+	if !b.settingBool("autoDownloadMedia", true) {
+		return
+	}
+
+	limit := int64(b.settingInt("autoDownloadMaxMB", defaultAutoDownloadMaxMB)) << 20
+	if limit > 0 && msg.FileSize > limit {
+		logf("debug", "skipping auto-download of %s (%d bytes, over the limit)", msg.ID, msg.FileSize)
+		return
+	}
+
+	b.mu.RLock()
+	handle, found := b.pendingMedia[msg.ID]
+	dir := b.mediaDir
+	b.mu.RUnlock()
+
+	if !found || dir == "" {
+		return
+	}
+
+	downloadable := downloadableOf(handle.msg)
+	if downloadable == nil {
+		return
+	}
+
+	client := b.getClient()
+	if client == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	defer cancel()
+
+	data, err := client.Download(ctx, downloadable)
+	if err != nil {
+		// Not fatal: the attachment stays fetchable on demand.
+		logf("debug", "auto-download failed for %s: %v", msg.ID, err)
+		return
+	}
+
+	path, err := b.writeMedia(dir, msg.ID, handle.mime, data)
+	if err != nil {
+		logf("warn", "could not store auto-downloaded media: %v", err)
+		return
+	}
+
+	// Only the fields that changed; everything else the host already has.
+	emitEvent("message", map[string]any{"message": messageObj{
+		ID:        msg.ID,
+		ChatID:    msg.ChatID,
+		TS:        msg.TS,
+		FromMe:    msg.FromMe,
+		Kind:      msg.Kind,
+		MediaPath: path,
+		MediaMime: handle.mime,
+	}})
+}
+
+// writeMedia stores attachment bytes in the directory the host provided.
+func (b *bridge) writeMedia(dir, messageID, mime string, data []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create media directory: %w", err)
+	}
+
+	path := filepath.Join(dir, sanitize(messageID)+extensionFor(mime))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write attachment: %w", err)
+	}
+	return path, nil
+}
+
 // ---------------------------------------------------------------- fetchMedia
 
 func (b *bridge) handleFetchMedia(ctx context.Context, c call) {
@@ -300,14 +384,9 @@ func (b *bridge) handleFetchMedia(ctx context.Context, c call) {
 		return
 	}
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		fail(c.ID, "fetch_failed", "could not create the media directory: %v", err)
-		return
-	}
-
-	path := filepath.Join(dir, sanitize(params.MessageID)+extensionFor(handle.mime))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		fail(c.ID, "fetch_failed", "could not write the attachment: %v", err)
+	path, err := b.writeMedia(dir, params.MessageID, handle.mime, data)
+	if err != nil {
+		fail(c.ID, "fetch_failed", "%v", err)
 		return
 	}
 
