@@ -126,9 +126,20 @@ away from "add to end" instead if you'd rather not interrupt what's playing.
 
 ## Requirements
 
-`mpc`, and a reachable MPD server. A startup check verifies the configured
-`mpc` binary is on PATH, then tries an actual connection (5s timeout) before
-letting the trigger go live — useful specifically because `MPD_HOST` can point
-at a remote server, and connecting to an unreachable one doesn't fail fast, it
-can hang. If the check fails you'll see one of two distinct messages: mpc
-missing, or MPD unreachable.
+`mpc`. MPD itself does **not** need to be reachable for the plugin to enable —
+only the `mpc` binary being on PATH is checked at startup, since MPD being
+down is a normal, recoverable state (a remote server rebooting, a laptop
+closed), not a reason to make the whole plugin unusable until it happens to
+be up at the exact moment you enable it.
+
+Connectivity is checked continuously at runtime instead. If MPD can't be
+reached, the launcher shows **"MPD not connected"** — with the actual reason
+(connection refused, timed out, etc.) and "Press Enter to retry" — right in
+the results, as soon as you open the trigger, before you've even typed
+anything. It clears itself automatically the moment a search or the
+background playlist poll succeeds again; there's nothing to re-enable or
+reload once MPD comes back. Every mpc call (search, poll, and the
+resolve-then-insert action lookups) is timeout-bounded for the same reason
+the old startup check was: connecting to an unreachable host can hang for a
+long time instead of failing fast, and none of them should get stuck waiting
+on that forever.

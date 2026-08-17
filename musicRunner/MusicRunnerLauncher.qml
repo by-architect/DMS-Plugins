@@ -117,6 +117,15 @@ Item {
 
         const q = (query || "").trim();
 
+        // Shown immediately, regardless of query length, so opening the
+        // trigger while MPD is down says so up front instead of just
+        // returning nothing or "Searching...". Clears itself the moment any
+        // subsystem's next attempt succeeds - no action needed once MPD
+        // comes back, though "Press Enter to retry" forces an immediate
+        // attempt instead of waiting for the next scheduled poll.
+        if (_mpdError)
+            return [_statusItem("cloud_off", "MPD not connected", _mpdError + "  ·  Press Enter to retry", "retryConnection")];
+
         if (q.length === 0)
             return _emptyQueryItems();
 
@@ -154,7 +163,23 @@ Item {
     }
 
     function executeItem(item) {
-        if (!item || !item.mpdKind)
+        if (!item)
+            return;
+
+        if (item.action === "retryConnection") {
+            // Reset the poll throttle so this doesn't just wait out the
+            // normal 8s/30s cycle, then immediately retry whatever's
+            // relevant: the playlist poll, and the active query if there is
+            // one.
+            _plNamesLastFetchAt = 0;
+            _plTracksLastFetchAt = 0;
+            _maybePoll();
+            if (_desiredQuery.length >= _minChars)
+                _maybeStartQuery(_desiredQuery, true);
+            return;
+        }
+
+        if (!item.mpdKind)
             return;
         const table = _actionsForKind(item.mpdKind);
         if (table.length > 0)
@@ -213,7 +238,22 @@ Item {
     property string _queryPending: ""
     property var _queryFetchQueue: []
     property var _queryAccum: ({ songs: [], artists: [], albums: [] })
-    property string _queryError: ""
+    property bool _queryHadError: false
+
+    // Single shared status for "can we currently talk to MPD at all",
+    // updated by every subsystem (query chain, poll chain, actions). Empty
+    // means the most recent attempt succeeded. This is what getItems()
+    // surfaces as a top-level "MPD not connected" row - a failed mpc call is
+    // overwhelmingly a connectivity problem in practice, not a per-query one.
+    property string _mpdError: ""
+
+    function _reportMpdOk() {
+        _mpdError = "";
+    }
+
+    function _reportMpdError(code, err) {
+        _mpdError = code === -1 ? "Timed out connecting to MPD." : (_firstErrorLine(err) || ("mpc exited with code " + code + "."));
+    }
 
     Timer {
         id: queryDebounce
@@ -240,6 +280,7 @@ Item {
         _queryPending = q;
         _queryAccum = { songs: [], artists: [], albums: [] };
         _queryFetchQueue = [];
+        _queryHadError = false;
         if (searchSongs)
             _queryFetchQueue.push("songs");
         if (searchArtists)
@@ -255,7 +296,11 @@ Item {
             return;
         }
         if (_queryFetchQueue.length === 0) {
-            if (_queryPending.length >= _minChars)
+            // Failed fetches are never cached, so the exact same query
+            // retries automatically the next time it's submitted (typing
+            // resumes, or the "MPD not connected" row is retried) instead of
+            // permanently showing an empty result for that query string.
+            if (_queryPending.length >= _minChars && !_queryHadError)
                 _queryCachePut(_queryPending, _queryAccum);
             _notify();
             return;
@@ -279,9 +324,10 @@ Item {
                     _queryAccum.artists = _dedupeLines(out).slice(0, maxPerCategory * 3);
                 else
                     _queryAccum.albums = _parseAlbumLines(out).slice(0, maxPerCategory * 3);
-                _queryError = "";
+                _reportMpdOk();
             } else {
-                _queryError = _firstErrorLine(err) || ("mpc exited with code " + code);
+                _queryHadError = true;
+                _reportMpdError(code, err);
             }
             _advanceQueryChain();
         });
@@ -314,8 +360,6 @@ Item {
     property var _plTrackQueue: []
     property var _plTracksAccum: []
 
-    property string _plError: ""
-
     function _maybePoll() {
         if (pollWorker.busy)
             return;
@@ -329,9 +373,9 @@ Item {
                 _plNamesLastFetchAt = Date.now();
                 if (code === 0) {
                     _plNames = _dedupeLines(out);
-                    _plError = "";
+                    _reportMpdOk();
                 } else {
-                    _plError = _firstErrorLine(err) || ("mpc exited with code " + code);
+                    _reportMpdError(code, err);
                 }
                 _notify();
             });
@@ -357,8 +401,12 @@ Item {
 
         const name = _plTrackQueue.shift();
         pollWorker.run(_mpcArgv(["-f", _trackFormat, "playlist", name]), (out, err, code) => {
-            if (code === 0)
+            if (code === 0) {
                 _plTracksAccum = _plTracksAccum.concat(_parseTrackLines(out, name));
+                _reportMpdOk();
+            } else {
+                _reportMpdError(code, err);
+            }
             _advanceTrackQueue();
         });
     }
@@ -403,146 +451,23 @@ Item {
     }
 
     // ------------------------------------------------------------- workers
+    //
+    // Three independent workers so a stuck one never blocks the others: a
+    // hung search shouldn't stop the playlist poll from refreshing, and an
+    // in-flight action shouldn't wait behind either. Each is timeout-bounded
+    // (see MpdWorker.qml) so an unreachable MPD host surfaces as a clean
+    // failure instead of hanging forever.
 
-    Process {
+    MpdWorker {
         id: queryWorker
-        readonly property bool busy: running
-        property var _onDone: null
-        property string _stdout: ""
-        property string _stderr: ""
-        property bool _stdoutDone: false
-        property bool _exitDone: false
-        property int _exitCode: 0
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                queryWorker._stdout = text;
-                queryWorker._stdoutDone = true;
-                queryWorker._maybeDone();
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: queryWorker._stderr = text
-        }
-        onExited: exitCode => {
-            queryWorker._exitCode = exitCode;
-            queryWorker._exitDone = true;
-            queryWorker._maybeDone();
-        }
-
-        function run(args, onDone) {
-            _onDone = onDone;
-            command = args;
-            running = true;
-        }
-        function _maybeDone() {
-            if (!_stdoutDone || !_exitDone)
-                return;
-            const cb = _onDone, out = _stdout, err = _stderr, code = _exitCode;
-            _onDone = null;
-            _stdout = "";
-            _stderr = "";
-            _stdoutDone = false;
-            _exitDone = false;
-            _exitCode = 0;
-            if (cb)
-                cb(out, err, code);
-        }
     }
 
-    Process {
+    MpdWorker {
         id: pollWorker
-        readonly property bool busy: running
-        property var _onDone: null
-        property string _stdout: ""
-        property string _stderr: ""
-        property bool _stdoutDone: false
-        property bool _exitDone: false
-        property int _exitCode: 0
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                pollWorker._stdout = text;
-                pollWorker._stdoutDone = true;
-                pollWorker._maybeDone();
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: pollWorker._stderr = text
-        }
-        onExited: exitCode => {
-            pollWorker._exitCode = exitCode;
-            pollWorker._exitDone = true;
-            pollWorker._maybeDone();
-        }
-
-        function run(args, onDone) {
-            _onDone = onDone;
-            command = args;
-            running = true;
-        }
-        function _maybeDone() {
-            if (!_stdoutDone || !_exitDone)
-                return;
-            const cb = _onDone, out = _stdout, err = _stderr, code = _exitCode;
-            _onDone = null;
-            _stdout = "";
-            _stderr = "";
-            _stdoutDone = false;
-            _exitDone = false;
-            _exitCode = 0;
-            if (cb)
-                cb(out, err, code);
-        }
     }
 
-    Process {
+    MpdWorker {
         id: actionWorker
-        readonly property bool busy: running
-        property var _onDone: null
-        property string _stdout: ""
-        property string _stderr: ""
-        property bool _stdoutDone: false
-        property bool _exitDone: false
-        property int _exitCode: 0
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                actionWorker._stdout = text;
-                actionWorker._stdoutDone = true;
-                actionWorker._maybeDone();
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: actionWorker._stderr = text
-        }
-        onExited: exitCode => {
-            actionWorker._exitCode = exitCode;
-            actionWorker._exitDone = true;
-            actionWorker._maybeDone();
-        }
-
-        function run(args, onDone) {
-            _onDone = onDone;
-            command = args;
-            running = true;
-        }
-        function _maybeDone() {
-            if (!_stdoutDone || !_exitDone)
-                return;
-            const cb = _onDone, out = _stdout, err = _stderr, code = _exitCode;
-            _onDone = null;
-            _stdout = "";
-            _stderr = "";
-            _stdoutDone = false;
-            _exitDone = false;
-            _exitCode = 0;
-            if (cb)
-                cb(out, err, code);
-        }
     }
 
     // -------------------------------------------------------------- parsing
@@ -749,13 +674,13 @@ Item {
         }
     }
 
-    function _statusItem(icon, name, comment) {
+    function _statusItem(icon, name, comment, action) {
         return {
             id: "mpd:status",
             name: name,
             icon: "material:" + icon,
             comment: comment,
-            action: "noop",
+            action: action || "noop",
             categories: ["MPD"],
             _preScored: 10000
         };
