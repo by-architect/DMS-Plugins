@@ -74,6 +74,7 @@ func (b *bridge) onMessage(evt *events.Message) {
 		IsGroup:  evt.Info.IsGroup,
 		LastTS:   msg.TS,
 		LastText: previewOf(msg),
+		Handles:  b.handlesFor(evt.Info.Chat),
 	}})
 }
 
@@ -138,6 +139,7 @@ func (b *bridge) onHistorySync(evt *events.HistorySync) {
 			IsGroup:  jid.Server == types.GroupServer,
 			Archived: conv.GetArchived(),
 			Unread:   &unread,
+			Handles:  b.handlesFor(jid),
 		}
 		if chat.Name == "" {
 			chat.Name = b.chatName(jid)
@@ -177,32 +179,87 @@ func (b *bridge) onHistorySync(evt *events.HistorySync) {
 	emitEvent("sync", map[string]any{"done": len(conversations), "total": len(conversations)})
 }
 
-// syncChats publishes the group list on connect, so conversations have real
-// names before any message arrives in them.
+// syncChats publishes what the session already knows on connect: the groups it
+// belongs to, and every contact with the number they can be found by.
+//
+// Without this, a conversation only becomes searchable once a message arrives
+// in it -- so an account with years of history would appear almost empty, and
+// searching a phone number would find nothing at all.
 func (b *bridge) syncChats(ctx context.Context) {
 	client := b.getClient()
 	if client == nil {
 		return
 	}
 
-	groups, err := client.GetJoinedGroups(ctx)
-	if err != nil {
+	var chats []chatObj
+
+	if groups, err := client.GetJoinedGroups(ctx); err == nil {
+		for _, group := range groups {
+			chats = append(chats, chatObj{
+				ID:      group.JID.String(),
+				Name:    group.Name,
+				IsGroup: true,
+			})
+		}
+	} else {
 		logf("debug", "could not list groups: %v", err)
-		return
 	}
 
-	var chats []chatObj
-	for _, group := range groups {
-		chats = append(chats, chatObj{
-			ID:      group.JID.String(),
-			Name:    group.Name,
-			IsGroup: true,
-		})
+	chats = append(chats, b.contactChats(ctx)...)
+
+	// Batched: an address book runs to thousands, and the host stores a batch
+	// in one transaction.
+	const batchSize = 500
+	for start := 0; start < len(chats); start += batchSize {
+		end := start + batchSize
+		if end > len(chats) {
+			end = len(chats)
+		}
+		emitEvent("chats", map[string]any{"chats": chats[start:end]})
 	}
 
 	if len(chats) > 0 {
-		emitEvent("chats", map[string]any{"chats": chats})
+		logf("info", "published %d known conversations", len(chats))
 	}
+}
+
+// contactChats turns the address book into conversations that can be found
+// before anyone has written in them.
+//
+// Carries no timestamp on purpose: these are contacts, not activity, and the
+// host keeps them out of the conversation list until a message arrives.
+func (b *bridge) contactChats(ctx context.Context) []chatObj {
+	client := b.getClient()
+	if client == nil || client.Store == nil || client.Store.Contacts == nil {
+		return nil
+	}
+
+	contacts, err := client.Store.Contacts.GetAllContacts(ctx)
+	if err != nil {
+		logf("debug", "could not list contacts: %v", err)
+		return nil
+	}
+
+	out := make([]chatObj, 0, len(contacts))
+	for jid, info := range contacts {
+		if !isRelevantChat(jid) || jid.Server == types.GroupServer {
+			continue
+		}
+
+		name := contactDisplayName(info)
+		handles := b.handlesFor(jid)
+		// Nothing to contribute: no name to search for and no number to match.
+		if name == "" && len(handles) == 0 {
+			continue
+		}
+
+		out = append(out, chatObj{
+			ID:      jid.String(),
+			Name:    name,
+			Handles: handles,
+		})
+	}
+	return out
 }
 
 // isRelevantChat filters out the conversations nobody treats as chats.

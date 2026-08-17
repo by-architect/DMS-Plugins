@@ -47,6 +47,10 @@ type chatObj struct {
 	Archived   bool   `json:"archived,omitempty"`
 	Muted      bool   `json:"muted,omitempty"`
 	AvatarPath string `json:"avatarPath,omitempty"`
+	// Handles are the reachable identifiers for this conversation -- for
+	// WhatsApp, the phone number. Sent explicitly because the id no longer
+	// contains one: WhatsApp addresses contacts by LID, a privacy identifier.
+	Handles []string `json:"handles,omitempty"`
 }
 
 type messageObj struct {
