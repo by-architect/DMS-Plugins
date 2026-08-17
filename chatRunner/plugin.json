@@ -1,0 +1,17 @@
+{
+    "id": "chatRunner",
+    "name": "Chat Runner",
+    "description": "List every conversation from every chat provider in one place. Type 'c ' then a name, phone number or address.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher"],
+    "component": "./ChatRunnerLauncher.qml",
+    "settings": "./ChatRunnerSettings.qml",
+    "trigger": "c ",
+    "icon": "forum",
+    "permissions": [
+        "settings_read",
+        "settings_write"
+    ]
+}

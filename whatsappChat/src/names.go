@@ -10,6 +10,62 @@ import (
 // "what is this called". A conversation may be a group with a subject, a saved
 // contact, or a bare phone number that only ever announced a push name.
 
+// phoneHandle is the phone number a conversation can be found by.
+//
+// WhatsApp addresses contacts by LID now, so the number is not in the id and
+// has to be looked up through the session's own mapping. Groups have no number;
+// neither does a contact whose mapping the session has never seen.
+func (b *bridge) phoneHandle(jid types.JID) string {
+	client := b.getClient()
+	if client == nil || client.Store == nil {
+		return ""
+	}
+
+	switch jid.Server {
+	case types.GroupServer, types.NewsletterServer, types.BroadcastServer:
+		return ""
+	}
+
+	// Already a phone-number address: use it directly.
+	if jid.Server == types.DefaultUserServer {
+		return "+" + jid.User
+	}
+
+	if jid.Server != types.HiddenUserServer || client.Store.LIDs == nil {
+		return ""
+	}
+
+	pn, err := client.Store.LIDs.GetPNForLID(context.Background(), jid)
+	if err != nil || pn.IsEmpty() {
+		return ""
+	}
+	return "+" + pn.User
+}
+
+// handlesFor is the handle list for a conversation, empty when it has none.
+func (b *bridge) handlesFor(jid types.JID) []string {
+	if phone := b.phoneHandle(jid); phone != "" {
+		return []string{phone}
+	}
+	return nil
+}
+
+// contactDisplayName picks what a person should be called, preferring what the
+// user themselves chose over what the contact announced.
+func contactDisplayName(info types.ContactInfo) string {
+	switch {
+	case info.FullName != "":
+		return info.FullName
+	case info.FirstName != "":
+		return info.FirstName
+	case info.BusinessName != "":
+		return info.BusinessName
+	case info.PushName != "":
+		return info.PushName
+	}
+	return ""
+}
+
 // chatName is the display name for a conversation.
 func (b *bridge) chatName(jid types.JID) string {
 	client := b.getClient()
