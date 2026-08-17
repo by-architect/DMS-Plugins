@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -40,6 +41,10 @@ type bridge struct {
 
 	// qrCancel stops an in-flight pairing loop when a new one is requested.
 	qrCancel context.CancelFunc
+
+	// pairMu serialises pairing attempts. Separate from mu because pairing
+	// waits on the network and must not hold the state lock while doing so.
+	pairMu sync.Mutex
 
 	stopOnce sync.Once
 }
@@ -192,6 +197,11 @@ func (b *bridge) connect(ctx context.Context) {
 // WhatsApp rotates the code every ~20s and the channel delivers each one, so
 // the panel stays scannable without the user having to ask for a new code.
 func (b *bridge) startPairing(parent context.Context, client *whatsmeow.Client) {
+	// Only one pairing attempt at a time. Enabling the provider already starts
+	// one, and pressing Sign in would otherwise start a second that fails.
+	b.pairMu.Lock()
+	defer b.pairMu.Unlock()
+
 	ctx, cancel := context.WithCancel(parent)
 
 	b.mu.Lock()
@@ -200,6 +210,19 @@ func (b *bridge) startPairing(parent context.Context, client *whatsmeow.Client) 
 	}
 	b.qrCancel = cancel
 	b.mu.Unlock()
+
+	// whatsmeow requires the QR channel to be opened before connecting, and
+	// Disconnect is not synchronous -- asking for a channel while the socket is
+	// still up fails with "GetQRChannel must be called before connecting".
+	if client.IsConnected() {
+		client.Disconnect()
+		if !waitUntilDisconnected(ctx, client, 5*time.Second) {
+			logf("error", "could not start pairing: the previous session did not close")
+			emitState("disconnected")
+			cancel()
+			return
+		}
+	}
 
 	qrChan, err := client.GetQRChannel(ctx)
 	if err != nil {
@@ -257,9 +280,8 @@ func (b *bridge) handleLogin(ctx context.Context, c call) {
 
 	ok(c.ID, nil)
 
-	// Reconnect first: a client that was already connected for a previous,
-	// expired pairing cannot open a second QR channel.
-	client.Disconnect()
+	// startPairing takes care of closing any existing socket first; doing it
+	// here as well raced with the pairing already running.
 	go b.startPairing(context.Background(), client)
 }
 
@@ -288,6 +310,23 @@ func (b *bridge) handleLogout(ctx context.Context, c call) {
 // is the correct way to say "nothing more right now".
 func (b *bridge) handleHistory(c call) {
 	ok(c.ID, nil)
+}
+
+// waitUntilDisconnected polls until the socket is actually down, since
+// Disconnect only asks.
+func waitUntilDisconnected(ctx context.Context, client *whatsmeow.Client, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if !client.IsConnected() {
+			return true
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return !client.IsConnected()
 }
 
 func (b *bridge) shutdown() {
