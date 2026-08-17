@@ -125,7 +125,6 @@ PanelWindow {
                 height: 0
                 focus: true
             }
-
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: Theme.spacingL

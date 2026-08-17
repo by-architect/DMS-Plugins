@@ -33,11 +33,7 @@ PanelWindow {
 
     onOpenChanged: {
         if (open)
-<<<<<<< HEAD
-            searchField.field.forceActiveFocus();
-=======
             focusAnchor.forceActiveFocus();
->>>>>>> bce2a81 (#0 Add fullscreen notification panel plugin, fix panel fullscreen/focus/perf)
     }
 
     readonly property var searchTokens: Filters.parseFilter(searchQuery)
@@ -115,8 +111,6 @@ PanelWindow {
                 }
             }
 
-<<<<<<< HEAD
-=======
             // A FocusScope's forceActiveFocus() backfills to whichever
             // descendant last held focus (e.g. the search field) rather than
             // focusing the scope itself. Since the window now persists across
@@ -131,8 +125,10 @@ PanelWindow {
                 height: 0
                 focus: true
             }
+<<<<<<< HEAD
 
->>>>>>> bce2a81 (#0 Add fullscreen notification panel plugin, fix panel fullscreen/focus/perf)
+=======
+>>>>>>> 10fa6ec (- New composite plugin `notificationPanel` (daemon + bar widget): a live vertical flow of every notification on the right, six user-defined filterable category tiles on the left, and a search bar on the bottom)
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: Theme.spacingL

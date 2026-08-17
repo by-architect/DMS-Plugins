@@ -6,10 +6,6 @@ the left, and a search bar that narrows all of them at once.
 
 ## Layout
 
-![The Notification Panel: the six category tiles on the left, still empty before any filter is assigned, the full flow on the right, and the search bar along the bottom](docs/panel.png)
-
-The schematic, with all six category slots filled:
-
 ```
 ┌───────────────────┬───────────────────┬──────────────┐
 │  category 1        │  category 2        │              │
@@ -112,8 +108,6 @@ quickshell -p <shell-path> ipc call notificationPanel toggle   # also: open, clo
 `status` reports whether the panel holds keyboard focus (`keyboard=ready`),
 useful when debugging compositor focus behaviour.
 
-Inside the panel: **Esc** or **q** (when the search field isn't focused)
-closes it.
 
 ## Implementation notes
 
