@@ -1,0 +1,15 @@
+{
+    "id": "notificationPanel",
+    "name": "Notification Panel",
+    "description": "Fullscreen notification browser: a live flow of every notification plus six filterable categories and search",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "dankbar-widget", "notifications"],
+    "icon": "notifications",
+    "components": {
+        "daemon": "./NotificationPanelDaemon.qml",
+        "widget": "./NotificationPanelWidget.qml"
+    },
+    "permissions": ["settings_read", "settings_write"]
+}
