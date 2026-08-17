@@ -1,0 +1,18 @@
+{
+    "id": "commandRunner",
+    "name": "Command Runner",
+    "description": "Launcher for your own shell commands. Add commands with a name in the plugin settings, then type 'run <name>' to find and launch them.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "command-execution"],
+    "component": "./CommandRunnerLauncher.qml",
+    "settings": "./CommandRunnerSettings.qml",
+    "trigger": "run ",
+    "icon": "terminal",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
