@@ -51,6 +51,9 @@ type chatObj struct {
 	// WhatsApp, the phone number. Sent explicitly because the id no longer
 	// contains one: WhatsApp addresses contacts by LID, a privacy identifier.
 	Handles []string `json:"handles,omitempty"`
+	// Tags say what kind of conversation this is, so it can be filtered without
+	// the shell knowing anything about WhatsApp.
+	Tags []string `json:"tags,omitempty"`
 }
 
 type messageObj struct {
