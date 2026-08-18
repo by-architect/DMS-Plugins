@@ -14,7 +14,7 @@ QtObject {
             }
             done({
                 "title": "Missing screenshot/recording tools",
-                "details": "Screen Catcher needs grim, slurp and wf-recorder on the shell's PATH. Install them, then re-enable this plugin. (Optional: tesseract for 'Screenshot to Text', ffmpeg for GIF recording, wl-clipboard for clipboard copy, pipewire-pulse/pactl for audio device detection.)"
+                "details": "Screen Catcher needs grim, slurp and wf-recorder on the shell's PATH. Install them, then re-enable this plugin. (Optional: tesseract for 'Screenshot to Text', ffmpeg for GIF recording, wl-clipboard for clipboard copy, pipewire's pw-dump/pw-loopback + jq for mic/system-audio detection and mixing.)"
             });
         });
     }
