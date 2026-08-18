@@ -68,6 +68,12 @@ type messageObj struct {
 	Status     string `json:"status,omitempty"`
 	ReplyTo    string `json:"replyTo,omitempty"`
 
+	// A link the message is about. WhatsApp sends this with the message, so it
+	// costs nothing and never involves fetching the page ourselves.
+	LinkURL   string `json:"linkUrl,omitempty"`
+	LinkTitle string `json:"linkTitle,omitempty"`
+	LinkDesc  string `json:"linkDesc,omitempty"`
+
 	// MediaPath is set once an attachment has actually been written to the
 	// media directory the host provided; until then only a thumbnail and a ref
 	// are sent.

@@ -122,6 +122,19 @@ func (b *bridge) fillContent(msg *messageObj, wa *waE2E.Message) {
 		msg.Text = ext.GetText()
 		msg.ReplyTo = ext.GetContextInfo().GetStanzaID()
 
+		// WhatsApp resolves link previews itself and ships them with the
+		// message, so passing them on costs nothing and avoids fetching the
+		// page here -- which would tell whoever hosts it that this was read.
+		//
+		// The preview thumbnail is deliberately not attached as media: this is
+		// a text message about a link, and treating it as an attachment would
+		// make it open and copy as an image.
+		if url := ext.GetMatchedText(); url != "" {
+			msg.LinkURL = url
+			msg.LinkTitle = ext.GetTitle()
+			msg.LinkDesc = ext.GetDescription()
+		}
+
 	case wa.GetImageMessage() != nil:
 		m := wa.GetImageMessage()
 		msg.Kind = "image"
@@ -418,6 +431,12 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 		Text        string   `json:"text"`
 		ReplyTo     string   `json:"replyTo"`
 		Attachments []string `json:"attachments"`
+
+		// What is being replied to. WhatsApp puts the quoted message inside the
+		// reply, so without these the recipient sees a reply to nothing.
+		ReplyToText   string `json:"replyToText"`
+		ReplyToSender string `json:"replyToSender"`
+		ReplyToFromMe bool   `json:"replyToFromMe"`
 	}
 	if err := json.Unmarshal(c.Params, &params); err != nil {
 		fail(c.ID, "bad_request", "%v", err)
@@ -449,7 +468,13 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 		return
 	}
 
-	msg := buildTextMessage(params.Text, params.ReplyTo, to)
+	quoted := quotedContext{
+		id:     params.ReplyTo,
+		text:   params.ReplyToText,
+		sender: params.ReplyToSender,
+		fromMe: params.ReplyToFromMe,
+	}
+	msg := b.buildTextMessage(params.Text, quoted, to)
 	resp, err := client.SendMessage(sendCtx, to, msg)
 	if err != nil {
 		fail(c.ID, "send_failed", "%v", err)
@@ -461,18 +486,46 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 
 // buildTextMessage produces a plain message, or an extended one when it is a
 // reply, since only the extended form carries reply context.
-func buildTextMessage(text, replyTo string, chat types.JID) *waE2E.Message {
-	if replyTo == "" {
+// quotedContext is the message a reply is answering.
+type quotedContext struct {
+	id     string
+	text   string
+	sender string
+	fromMe bool
+}
+
+// buildTextMessage produces a plain message, or an extended one carrying reply
+// context.
+//
+// The quoted message has to be reconstructed, not left blank: WhatsApp shows
+// the recipient whatever is in QuotedMessage, so an empty one renders as a
+// reply to nothing. Participant must be whoever wrote the quoted message --
+// naming the chat instead leaves the reply unattributed.
+func (b *bridge) buildTextMessage(text string, quoted quotedContext, chat types.JID) *waE2E.Message {
+	if quoted.id == "" {
 		return &waE2E.Message{Conversation: proto.String(text)}
+	}
+
+	participant := quoted.sender
+	if quoted.fromMe {
+		// Our own message: quote it as coming from this account.
+		if self := b.selfJID(); !self.IsEmpty() {
+			participant = self.ToNonAD().String()
+		}
+	}
+	if participant == "" {
+		// Falling back to the chat is wrong for a group but right for a direct
+		// conversation, where the other party is the chat.
+		participant = chat.String()
 	}
 
 	return &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text: proto.String(text),
 			ContextInfo: &waE2E.ContextInfo{
-				StanzaID:      proto.String(replyTo),
-				Participant:   proto.String(chat.String()),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+				StanzaID:      proto.String(quoted.id),
+				Participant:   proto.String(participant),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String(quoted.text)},
 			},
 		},
 	}
