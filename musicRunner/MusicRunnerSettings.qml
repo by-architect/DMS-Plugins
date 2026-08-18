@@ -9,7 +9,7 @@ PluginSettings {
     StringSetting {
         settingKey: "trigger"
         label: "Trigger"
-        description: "Prefix that activates the launcher. The trailing space keeps unrelated words from matching."
+        description: "Prefix that activates the launcher. The trailing space keeps unrelated words from matching. Follow it with a category prefix to search just that one, e.g. 'mpd l rap' for Lists only, 'mpd s kanye' for Musics only, 'mpd ar' for Artists, 'mpd al' for Albums, 'mpd q' for Now Playing - this overrides the toggles below for that one search."
         placeholder: "mpd "
         defaultValue: "mpd "
     }
@@ -45,7 +45,14 @@ PluginSettings {
     ToggleSetting {
         settingKey: "searchPlaylistTracks"
         label: "Musics in Lists"
-        description: "Search for songs inside your saved playlists specifically, shown as \"In: <playlist name>\". Needs to read every playlist's contents ahead of time, so it refreshes on a slower cycle (about every 30s) than the other categories."
+        description: "Search for songs inside your saved playlists specifically. A match shows the playlist as a header with the matching track(s) listed on their own line underneath it. Needs to read every playlist's contents ahead of time, so it refreshes on a slower cycle (about every 30s) than the other categories."
+        defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "searchNowPlaying"
+        label: "Now Playing"
+        description: "Search the songs already in your current playback queue. Picking a match jumps straight to playing it - it's already loaded, so nothing gets added, replaced, or reordered."
         defaultValue: true
     }
 

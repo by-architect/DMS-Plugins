@@ -4,25 +4,31 @@ import Quickshell.Io
 import qs.Services
 
 // Launcher provider backed by `mpc`, MPD's command-line client. Searches up to
-// five independently-toggleable categories at once (songs, playlists, artists,
-// albums, and songs found inside playlists) and merges them into one ranked
-// list.
+// six independently-toggleable categories at once (songs, playlists, artists,
+// albums, songs found inside playlists, and the current playback queue) and
+// merges them into one ranked list. A query can be scoped to just one
+// category with a short prefix - see _parseScope/_scopeAliases - e.g.
+// "mpd l rap" searches only Lists.
 //
 // A playlist is one row no matter how it matched - by its own name, or by a
 // track found inside it - since the result-row layout is a single elided
-// line (no real multi-line rows exist in this launcher), so "list name, then
-// each matching track indented under it" becomes "list name, matching
-// tracks summarized in the subtitle". Selecting that row always acts on the
-// playlist, never on one track inside it.
+// line (no real multi-line rows, and no per-item icon color, exist anywhere
+// in this launcher - both checked directly against ResultItem.qml /
+// AppIconRenderer.qml). "List name, then each matching track on its own line
+// underneath" is built from several single-line rows: a header (acts on the
+// whole playlist) followed by one label row per matching track (visible,
+// not independently selectable - there's no way to make an individual row
+// skip keyboard navigation here, only a whole section can).
 //
 // Three async subsystems run side by side, each with its own Process so none
 // waits behind another:
 //  - the query chain (songs/artists/albums): a fresh mpc search per category,
 //    re-run whenever the typed query settles.
-//  - the poll chain (playlists, and songs-inside-playlists): mpc search
-//    doesn't cover saved-playlist contents, so those are fetched ahead of time
-//    on a throttle and filtered locally, the same way tmuxRunner polls
-//    `tmux list-sessions` instead of re-listing per keystroke.
+//  - the poll chain (playlists, songs-inside-playlists, and the current
+//    queue): mpc search doesn't cover saved-playlist contents or the queue,
+//    so those are fetched ahead of time on a throttle and filtered locally,
+//    the same way tmuxRunner polls `tmux list-sessions` instead of
+//    re-listing per keystroke.
 //  - the action chain: resolves a playlist's/artist's/album's file list on
 //    demand when "add after current song" is picked, since mpc can only
 //    insert file paths, not playlist/artist/album names.
@@ -47,6 +53,7 @@ Item {
     property bool searchArtists: true
     property bool searchAlbums: true
     property bool searchPlaylistTracks: true
+    property bool searchNowPlaying: true
     property int maxPerCategory: 6
 
     readonly property int _minChars: 2
@@ -57,25 +64,23 @@ Item {
     readonly property string _albumFormat: "%album%\t%albumartist%\t%artist%"
     readonly property string _trackFormat: "%artist%\t%title%\t%file%"
 
-    // Enter always runs the first action in the kind's list; right-click
-    // exposes all of them in this order. Songs get a non-destructive default
-    // (cut in line, keep the rest of the queue); playlists/artists/albums
-    // default to replacing the queue, matching how most music apps treat
-    // "open an album/playlist" as "start listening to just this".
-    readonly property var _songActions: [
-        { id: "insertPlayNow", icon: "play_circle", label: "Add after current song and play" },
-        { id: "insertNext", icon: "playlist_play", label: "Add after current song" },
-        { id: "replace", icon: "restart_alt", label: "Replace queue and play" },
-        { id: "enqueueEnd", icon: "playlist_add", label: "Add to end of queue" }
-    ]
+    // One global action list, shared by every kind except "queue" (which only
+    // ever means "jump to it" - see _queueActions). Enter runs the first
+    // action; right-click exposes all of them in this order. "Replace queue
+    // and play" is deliberately first: pushing a song/list/artist/album
+    // starts listening to just that, the way most music apps treat clicking
+    // an album as "play this now".
     readonly property var _groupActions: [
         { id: "replace", icon: "restart_alt", label: "Replace queue and play" },
         { id: "enqueueEnd", icon: "playlist_add", label: "Add to end of queue" },
         { id: "insertNext", icon: "playlist_play", label: "Add after current song" }
     ]
+    readonly property var _queueActions: [
+        { id: "jumpTo", icon: "play_circle", label: "Play this song now" }
+    ]
 
     function _actionsForKind(kind) {
-        return kind === "song" ? _songActions : _groupActions;
+        return kind === "queue" ? _queueActions : _groupActions;
     }
 
     Component.onCompleted: _loadSettings()
@@ -91,6 +96,7 @@ Item {
             root._queryCacheOrder = [];
             root._plNamesEverFetched = false;
             root._plTracksEverFetched = false;
+            root._queueEverFetched = false;
             root.itemsChanged();
         }
     }
@@ -107,15 +113,38 @@ Item {
         searchArtists = pluginService.loadPluginData(pluginId, "searchArtists", true);
         searchAlbums = pluginService.loadPluginData(pluginId, "searchAlbums", true);
         searchPlaylistTracks = pluginService.loadPluginData(pluginId, "searchPlaylistTracks", true);
+        searchNowPlaying = pluginService.loadPluginData(pluginId, "searchNowPlaying", true);
         maxPerCategory = pluginService.loadPluginData(pluginId, "maxPerCategory", 6);
     }
 
     // ---------------------------------------------------------------- launcher
 
+    // A query can be scoped to one category by starting it with a short
+    // prefix and a space, e.g. "mpd l rap" searches only Lists. Overrides
+    // whatever's enabled in settings for that one query - useful to reach a
+    // category you've turned off without going into settings for it.
+    readonly property var _scopeAliases: ({
+        "s": "songs", "song": "songs", "songs": "songs", "music": "songs", "musics": "songs",
+        "l": "lists", "list": "lists", "lists": "lists", "playlist": "lists", "playlists": "lists",
+        "ar": "artists", "artist": "artists", "artists": "artists",
+        "al": "albums", "album": "albums", "albums": "albums",
+        "q": "queue", "queue": "queue", "now": "queue", "nowplaying": "queue", "playing": "queue"
+    })
+
+    function _parseScope(text) {
+        const m = text.match(/^(\S+)\s+([\s\S]*)$/);
+        if (!m)
+            return null;
+        const scope = _scopeAliases[m[1].toLowerCase()];
+        if (!scope)
+            return null;
+        return { scope: scope, rest: m[2] };
+    }
+
     function getItems(query) {
         _maybePoll();
 
-        const q = (query || "").trim();
+        const raw = (query || "").trim();
 
         // Shown immediately, regardless of query length, so opening the
         // trigger while MPD is down says so up front instead of just
@@ -126,37 +155,76 @@ Item {
         if (_mpdError)
             return [_statusItem("cloud_off", "MPD not connected", _mpdError + "  ·  Press Enter to retry", "retryConnection")];
 
+        const parsed = _parseScope(raw);
+        const scope = parsed ? parsed.scope : "all";
+        const q = (parsed ? parsed.rest : raw).trim();
+
+        const activeSongs = scope === "all" ? searchSongs : scope === "songs";
+        const activeArtists = scope === "all" ? searchArtists : scope === "artists";
+        const activeAlbums = scope === "all" ? searchAlbums : scope === "albums";
+        const activeLists = scope === "all" ? (searchPlaylists || searchPlaylistTracks) : scope === "lists";
+        const activeQueue = scope === "all" ? searchNowPlaying : scope === "queue";
+
         if (q.length === 0)
-            return _emptyQueryItems();
+            return _emptyQueryItems(scope, activeLists, activeQueue);
 
         if (q.length < _minChars)
             return [_statusItem("keyboard", "Keep typing…", "At least " + _minChars + " characters needed")];
 
-        _maybeStartQuery(q);
+        if (activeSongs || activeArtists || activeAlbums)
+            _maybeStartQuery(scope, q);
 
-        const results = [];
-        const cached = _queryCacheGet(q);
+        // Each match is a "group" of 1+ rows that must stay together and
+        // move as a unit when sorted by relevance - a matching playlist is a
+        // header row plus one label row per matching track underneath it
+        // (see _playlistGroup), everything else is a single-row group.
+        // Result rows have no real multi-line layout in this launcher (see
+        // ResultItem.qml - every row is a single elided line, for every
+        // plugin), so "list name, tracks indented underneath" is built from
+        // several single-line rows instead of one row spanning several
+        // lines.
+        const groups = [];
+        const cached = _queryCacheGet(scope + " " + q);
+        const lower = q.toLowerCase();
 
-        if (searchSongs && cached)
+        if (activeSongs && cached)
             for (const s of cached.songs)
-                results.push({ kind: "song", entry: s });
-        if (searchArtists && cached)
+                groups.push({ score: _scoreText(s.title + " " + s.artist, lower), kind: "song", rows: [_toItem({ kind: "song", entry: s }, 0)] });
+        if (activeArtists && cached)
             for (const a of cached.artists)
-                results.push({ kind: "artist", entry: { name: a } });
-        if (searchAlbums && cached)
+                groups.push({ score: _scoreText(a, lower), kind: "artist", rows: [_toItem({ kind: "artist", entry: { name: a } }, 0)] });
+        if (activeAlbums && cached)
             for (const a of cached.albums)
-                results.push({ kind: "album", entry: a });
-        if (searchPlaylists || searchPlaylistTracks)
-            for (const p of _matchPlaylists(q))
-                results.push({ kind: "playlist", entry: p });
+                groups.push({ score: _scoreText(a.name || "", lower), kind: "album", rows: [_toItem({ kind: "album", entry: a }, 0)] });
+        if (activeLists)
+            for (const p of _matchPlaylists(q, scope === "lists"))
+                groups.push(_playlistGroup(p, lower));
+        if (activeQueue)
+            for (const t of _matchQueue(q))
+                groups.push({ score: _scoreText(t.title + " " + t.artist, lower), kind: "queue", rows: [_toItem({ kind: "queue", entry: t }, 0)] });
 
-        const ranked = _rankResults(results, q);
-        const items = ranked.slice(0, 40).map((r, i) => _toItem(r, 9000 - i));
+        groups.sort((a, b) => {
+            if (b.score !== a.score)
+                return b.score - a.score;
+            return _kindPriority[b.kind] - _kindPriority[a.kind];
+        });
+
+        const items = [];
+        const maxRows = 40;
+        for (const g of groups) {
+            if (items.length + g.rows.length > maxRows)
+                break;
+            for (const row of g.rows)
+                items.push(row);
+        }
+        for (let i = 0; i < items.length; i++)
+            items[i]._preScored = 9000 - i;
 
         if (items.length === 0) {
-            if (cached || (!searchSongs && !searchArtists && !searchAlbums))
-                return [_statusItem("search_off", "No matches for \"" + q + "\"", "")];
-            return [_statusItem("hourglass_empty", "Searching MPD…", "")];
+            const stillWaiting = (activeSongs || activeArtists || activeAlbums) && !cached;
+            if (stillWaiting)
+                return [_statusItem("hourglass_empty", "Searching MPD…", "")];
+            return [_statusItem("search_off", "No matches for \"" + q + "\"", "")];
         }
 
         return items;
@@ -169,13 +237,14 @@ Item {
         if (item.action === "retryConnection") {
             // Reset the poll throttle so this doesn't just wait out the
             // normal 8s/30s cycle, then immediately retry whatever's
-            // relevant: the playlist poll, and the active query if there is
-            // one.
+            // relevant: the playlist/queue poll, and the active query if
+            // there is one.
             _plNamesLastFetchAt = 0;
             _plTracksLastFetchAt = 0;
+            _queueLastFetchAt = 0;
             _maybePoll();
-            if (_desiredQuery.length >= _minChars)
-                _maybeStartQuery(_desiredQuery, true);
+            if (_desiredText.length >= _minChars)
+                _maybeStartQuery(_desiredScope, _desiredText, true);
             return;
         }
 
@@ -196,7 +265,7 @@ Item {
             action: () => root._runKindAction(item, a.id)
         }));
 
-        if (item.mpdKind === "song") {
+        if (item.mpdKind === "song" || item.mpdKind === "queue") {
             actions.push({
                 icon: "content_copy",
                 text: "Copy file path",
@@ -219,13 +288,30 @@ Item {
         return actions;
     }
 
-    function _emptyQueryItems() {
-        if (searchPlaylists) {
-            const names = _plNames.slice(0, Math.max(1, maxPerCategory) * 2);
-            if (names.length > 0)
-                return names.map((n, i) => _toItem({ kind: "playlist", entry: { name: n, matchedTracks: [] } }, 9000 - i));
+    function _emptyQueryItems(scope, activeLists, activeQueue) {
+        if (activeLists) {
+            const items = _browseListsItems();
+            if (items.length > 0)
+                return items;
         }
+        if (activeQueue) {
+            const items = _browseQueueItems();
+            if (items.length > 0)
+                return items;
+        }
+        if (scope !== "all")
+            return [_statusItem("keyboard", "Type something to search " + scope, "")];
         return [_statusItem("search", "Search your MPD library", "Type a song, playlist, artist or album name")];
+    }
+
+    function _browseListsItems() {
+        const names = _plNames.slice(0, Math.max(1, maxPerCategory) * 2);
+        return names.map((n, i) => _toItem({ kind: "playlist", entry: { name: n, matchedTracks: [] } }, 9000 - i));
+    }
+
+    function _browseQueueItems() {
+        const shown = _queueTracks.slice(0, Math.max(1, maxPerCategory) * 2);
+        return shown.map((t, i) => _toItem({ kind: "queue", entry: t }, 9000 - i));
     }
 
     // ------------------------------------------------------------ query chain
@@ -234,8 +320,15 @@ Item {
     property var _queryCacheOrder: []
     readonly property int _queryCacheLimit: 30
 
-    property string _desiredQuery: ""
-    property string _queryPending: ""
+    // "Desired" is what getItems() most recently asked for; "pending" is
+    // what's actually in flight. A scoped query ("mpd s kanye") and an
+    // unscoped one ("mpd kanye") must be tracked and cached separately, since
+    // they can search different categories for the same text - both halves
+    // (scope, text) are compared, not just the text.
+    property string _desiredScope: "all"
+    property string _desiredText: ""
+    property string _queryPendingScope: "all"
+    property string _queryPendingText: ""
     property var _queryFetchQueue: []
     property var _queryAccum: ({ songs: [], artists: [], albums: [] })
     property bool _queryHadError: false
@@ -259,40 +352,46 @@ Item {
         id: queryDebounce
         interval: 250
         repeat: false
-        onTriggered: root._maybeStartQuery(root._desiredQuery, true)
+        onTriggered: root._maybeStartQuery(root._desiredScope, root._desiredText, true)
     }
 
-    function _maybeStartQuery(q, settled) {
-        if (_queryCacheGet(q))
+    function _maybeStartQuery(scope, text, settled) {
+        if (_queryCacheGet(scope + " " + text))
             return;
         if (!settled) {
-            _desiredQuery = q;
+            _desiredScope = scope;
+            _desiredText = text;
             queryDebounce.restart();
             return;
         }
-        _desiredQuery = q;
+        _desiredScope = scope;
+        _desiredText = text;
         if (queryWorker.busy)
             return;
-        _beginQueryChain(q);
+        _beginQueryChain(scope, text);
     }
 
-    function _beginQueryChain(q) {
-        _queryPending = q;
+    function _beginQueryChain(scope, text) {
+        _queryPendingScope = scope;
+        _queryPendingText = text;
         _queryAccum = { songs: [], artists: [], albums: [] };
         _queryFetchQueue = [];
         _queryHadError = false;
-        if (searchSongs)
+        const wantSongs = scope === "all" ? searchSongs : scope === "songs";
+        const wantArtists = scope === "all" ? searchArtists : scope === "artists";
+        const wantAlbums = scope === "all" ? searchAlbums : scope === "albums";
+        if (wantSongs)
             _queryFetchQueue.push("songs");
-        if (searchArtists)
+        if (wantArtists)
             _queryFetchQueue.push("artists");
-        if (searchAlbums)
+        if (wantAlbums)
             _queryFetchQueue.push("albums");
         _advanceQueryChain();
     }
 
     function _advanceQueryChain() {
-        if (_desiredQuery !== _queryPending && _desiredQuery.length >= _minChars) {
-            _beginQueryChain(_desiredQuery);
+        if ((_desiredScope !== _queryPendingScope || _desiredText !== _queryPendingText) && _desiredText.length >= _minChars) {
+            _beginQueryChain(_desiredScope, _desiredText);
             return;
         }
         if (_queryFetchQueue.length === 0) {
@@ -300,14 +399,14 @@ Item {
             // retries automatically the next time it's submitted (typing
             // resumes, or the "MPD not connected" row is retried) instead of
             // permanently showing an empty result for that query string.
-            if (_queryPending.length >= _minChars && !_queryHadError)
-                _queryCachePut(_queryPending, _queryAccum);
+            if (_queryPendingText.length >= _minChars && !_queryHadError)
+                _queryCachePut(_queryPendingScope + " " + _queryPendingText, _queryAccum);
             _notify();
             return;
         }
 
         const cat = _queryFetchQueue.shift();
-        const q = _queryPending;
+        const q = _queryPendingText;
         let args;
         if (cat === "songs")
             args = _mpcArgv(["-f", _songFormat, "search", "any", q]);
@@ -333,15 +432,18 @@ Item {
         });
     }
 
-    function _queryCacheGet(q) {
-        return Object.prototype.hasOwnProperty.call(_queryCache, q) ? _queryCache[q] : null;
+    // Keyed by "scope text" (e.g. "songs kanye" vs "all kanye") so a scoped
+    // query and an unscoped one for the same text don't collide - they can
+    // search different categories.
+    function _queryCacheGet(key) {
+        return Object.prototype.hasOwnProperty.call(_queryCache, key) ? _queryCache[key] : null;
     }
 
-    function _queryCachePut(q, result) {
+    function _queryCachePut(key, result) {
         const next = Object.assign({}, _queryCache);
-        next[q] = result;
-        const order = _queryCacheOrder.filter(k => k !== q);
-        order.push(q);
+        next[key] = result;
+        const order = _queryCacheOrder.filter(k => k !== key);
+        order.push(key);
         while (order.length > _queryCacheLimit)
             delete next[order.shift()];
         _queryCache = next;
@@ -360,12 +462,17 @@ Item {
     property var _plTrackQueue: []
     property var _plTracksAccum: []
 
+    property var _queueTracks: []
+    property bool _queueEverFetched: false
+    property double _queueLastFetchAt: 0
+
     function _maybePoll() {
         if (pollWorker.busy)
             return;
         const now = Date.now();
         const wantNames = searchPlaylists || searchPlaylistTracks;
         const wantTracks = searchPlaylistTracks;
+        const wantQueue = searchNowPlaying;
 
         if (wantNames && (!_plNamesEverFetched || now - _plNamesLastFetchAt >= _namesIntervalMs)) {
             pollWorker.run(_mpcArgv(["lsplaylists"]), (out, err, code) => {
@@ -386,7 +493,43 @@ Item {
             _plTrackQueue = _plNames.slice();
             _plTracksAccum = [];
             _advanceTrackQueue();
+            return;
         }
+
+        if (wantQueue && (!_queueEverFetched || now - _queueLastFetchAt >= _namesIntervalMs)) {
+            // No %position% here - combining it with other tag fields in one
+            // -f format string returns bare position numbers only, silently
+            // dropping every other field (reproduced live against the real
+            // server). Position is just the 1-based line number instead,
+            // which `mpc playlist` (bare, no name = the current queue, not a
+            // saved playlist) already guarantees is in queue order.
+            pollWorker.run(_mpcArgv(["-f", _songFormat, "playlist"]), (out, err, code) => {
+                _queueEverFetched = true;
+                _queueLastFetchAt = Date.now();
+                if (code === 0) {
+                    _queueTracks = _parseQueueLines(out);
+                    _reportMpdOk();
+                } else {
+                    _reportMpdError(code, err);
+                }
+                _notify();
+            });
+        }
+    }
+
+    function _parseQueueLines(text) {
+        return _parseSongLines(text).map((s, i) => ({
+            position: i + 1,
+            file: s.file,
+            artist: s.artist,
+            title: s.title,
+            time: s.time
+        }));
+    }
+
+    function _matchQueue(q) {
+        const lower = q.toLowerCase();
+        return _queueTracks.filter(t => t.title.toLowerCase().includes(lower) || t.artist.toLowerCase().includes(lower)).slice(0, maxPerCategory * 3);
     }
 
     function _advanceTrackQueue() {
@@ -416,18 +559,22 @@ Item {
     // ("every list can be one row") rather than one row per matching track.
     // Selecting that row always acts on the playlist, never on a single track
     // inside it.
-    function _matchPlaylists(q) {
+    // forceAll is set when a query is explicitly scoped to lists ("mpd l
+    // ..."), which searches both name and track matches regardless of
+    // whether the two are individually enabled in settings - an explicit
+    // scope request overrides the per-category toggles for that one query.
+    function _matchPlaylists(q, forceAll) {
         const lower = q.toLowerCase();
         const byName = {};
 
-        if (searchPlaylists) {
+        if (forceAll || searchPlaylists) {
             for (const n of _plNames) {
                 if (n.toLowerCase().includes(lower))
                     byName[n] = { name: n, matchedTracks: [] };
             }
         }
 
-        if (searchPlaylistTracks) {
+        if (forceAll || searchPlaylistTracks) {
             for (const t of _plTracks) {
                 if (!t.title.toLowerCase().includes(lower) && !t.artist.toLowerCase().includes(lower))
                     continue;
@@ -440,12 +587,12 @@ Item {
         return Object.keys(byName).map(k => byName[k]).slice(0, maxPerCategory * 3);
     }
 
-    function _playlistComment(e) {
-        if (e.matchedTracks && e.matchedTracks.length > 0) {
-            const shown = e.matchedTracks.slice(0, 3);
-            const rest = e.matchedTracks.length - shown.length;
-            return shown.join(" • ") + (rest > 0 ? " +" + rest + " more" : "");
-        }
+    // The header row's own subtitle. When the match came from tracks inside
+    // the playlist, those tracks get their own label rows right below (see
+    // _playlistGroup) instead of being summarized here too.
+    function _playlistHeaderComment(e) {
+        if (e.matchedTracks && e.matchedTracks.length > 0)
+            return e.matchedTracks.length + (e.matchedTracks.length === 1 ? " matching track" : " matching tracks");
         const count = _plTracks.filter(t => t.playlist === e.name).length;
         return count > 0 ? (count + (count === 1 ? " track" : " tracks")) : "Playlist";
     }
@@ -582,38 +729,66 @@ Item {
         return 0;
     }
 
-    // Category priority only breaks ties when text-match quality is equal;
-    // it exists so "Kanye West" the artist doesn't get buried under twenty
-    // equally-substring-matched track titles.
-    readonly property var _kindPriority: ({ "song": 4, "playlist": 3, "artist": 2, "album": 1 })
+    // Category priority only breaks ties when text-match quality is equal.
+    // Order: queue (already loaded, most directly actionable) > lists >
+    // albums > artists > songs.
+    readonly property var _kindPriority: ({ "queue": 5, "playlist": 4, "album": 3, "artist": 2, "song": 1 })
 
-    function _rankResults(results, q) {
-        const lower = q.toLowerCase();
-        const scored = results.map(r => {
-            let score;
-            if (r.kind === "song") {
-                score = _scoreText(r.entry.title + " " + r.entry.artist, lower);
-            } else if (r.kind === "playlist") {
-                // A playlist that only matched via a track inside it should
-                // rank by how good THAT match is, not by its own (possibly
-                // unrelated) name.
-                score = _scoreText(r.entry.name, lower);
-                for (const t of (r.entry.matchedTracks || []))
-                    score = Math.max(score, _scoreText(t, lower));
-            } else {
-                score = _scoreText(r.entry.name || "", lower);
-            }
-            return {
-                r: r,
-                score: score
-            };
-        });
-        scored.sort((a, b) => {
-            if (b.score !== a.score)
-                return b.score - a.score;
-            return _kindPriority[b.r.kind] - _kindPriority[a.r.kind];
-        });
-        return scored.map(e => e.r);
+    // A playlist match becomes a header row (acts on the whole playlist,
+    // per "you run the list, not the music") followed by one label row per
+    // matching track underneath it - visible, but not independently
+    // selectable, since there's no way to make individual rows skip keyboard
+    // navigation in this launcher (only whole section headers can do that,
+    // and this plugin only has the one section). The whole group is scored
+    // by its best-matching row so it moves together under ranking, rather
+    // than the header and its children scattering to wherever their
+    // individual scores would place them.
+    readonly property int _maxTrackLabelsPerPlaylist: 5
+
+    function _playlistGroup(e, lower) {
+        let score = _scoreText(e.name, lower);
+        for (const t of (e.matchedTracks || []))
+            score = Math.max(score, _scoreText(t, lower));
+
+        const rows = [_toItem({ kind: "playlist", entry: e }, 0)];
+        if (e.matchedTracks && e.matchedTracks.length > 0) {
+            const shown = e.matchedTracks.slice(0, _maxTrackLabelsPerPlaylist);
+            for (let i = 0; i < shown.length; i++)
+                rows.push(_trackLabelItem(e.name, shown[i], i));
+            const rest = e.matchedTracks.length - shown.length;
+            if (rest > 0)
+                rows.push(_moreLabelItem(e.name, rest));
+        }
+
+        return { score: score, kind: "playlist", rows: rows };
+    }
+
+    // Leading spaces are the only "tab" available - a plain Text element has
+    // no per-row indent/margin control exposed to a plugin, so the indent is
+    // baked into the name string itself. Widened from the original 3 spaces
+    // to read more clearly as nested under the header above it.
+    readonly property string _trackLabelIndent: "        "
+
+    function _trackLabelItem(playlistName, title, index) {
+        return {
+            id: "mpd:tracklabel:" + playlistName + ":" + index,
+            name: _trackLabelIndent + "- " + title,
+            icon: "material:music_note",
+            comment: "",
+            action: "noop",
+            categories: ["MPD Playlist Tracks"]
+        };
+    }
+
+    function _moreLabelItem(playlistName, restCount) {
+        return {
+            id: "mpd:tracklabel:" + playlistName + ":more",
+            name: _trackLabelIndent + "+" + restCount + (restCount === 1 ? " more track" : " more tracks"),
+            icon: "material:more_horiz",
+            comment: "",
+            action: "noop",
+            categories: ["MPD Playlist Tracks"]
+        };
     }
 
     // --------------------------------------------------------------- items
@@ -638,7 +813,7 @@ Item {
                 id: "mpd:playlist:" + e.name,
                 name: e.name,
                 icon: "material:queue_music",
-                comment: _playlistComment(e),
+                comment: _playlistHeaderComment(e),
                 action: "primary",
                 categories: ["MPD Playlists"],
                 _preScored: preScored,
@@ -669,6 +844,19 @@ Item {
                 categories: ["MPD Albums"],
                 _preScored: preScored,
                 mpdKind: "album",
+                mpdEntry: e
+            };
+        }
+        if (r.kind === "queue") {
+            return {
+                id: "mpd:queue:" + e.position,
+                name: e.title,
+                icon: "material:queue_music",
+                comment: "Now playing queue · #" + e.position + (e.artist ? " · " + e.artist : ""),
+                action: "primary",
+                categories: ["MPD Now Playing"],
+                _preScored: preScored,
+                mpdKind: "queue",
                 mpdEntry: e
             };
         }
@@ -714,10 +902,7 @@ Item {
         const e = item.mpdEntry;
 
         if (kind === "song") {
-            if (actionId === "insertPlayNow") {
-                _runChain(["insert", e.file], ["next"]);
-                _toast("Playing next", e.title);
-            } else if (actionId === "insertNext") {
+            if (actionId === "insertNext") {
                 Quickshell.execDetached(_mpcArgv(["insert", e.file]));
                 _toast("Added after current song", e.title);
             } else if (actionId === "replace") {
@@ -726,6 +911,14 @@ Item {
             } else if (actionId === "enqueueEnd") {
                 Quickshell.execDetached(_mpcArgv(["add", e.file]));
                 _toast("Added to end of queue", e.title);
+            }
+            return;
+        }
+
+        if (kind === "queue") {
+            if (actionId === "jumpTo") {
+                Quickshell.execDetached(_mpcArgv(["play", String(e.position)]));
+                _toast("Playing", e.title);
             }
             return;
         }
