@@ -111,6 +111,11 @@ Item {
             if (!root.includeUnknown && !chat.lastTs)
                 continue;
 
+            // The same hidden-tag setting the conversation list uses, so the
+            // two agree about what exists.
+            if (root.isHidden(chat))
+                continue;
+
             if (q === "") {
                 // No query: recent conversations only, so the list opens on
                 // what you were just doing rather than the whole address book.
@@ -137,6 +142,21 @@ Item {
         });
 
         return scored.slice(0, root.maxResults).map(entry => entry.chat);
+    }
+
+    // isHidden applies the shell's hidden-tag setting, so archived chats,
+    // statuses and channels stay out unless the user asked for them.
+    function isHidden(chat) {
+        const hidden = SettingsData.chatHiddenTags || [];
+        if (hidden.length === 0)
+            return false;
+
+        const tags = chat.tags || [];
+        for (let i = 0; i < tags.length; i++) {
+            if (hidden.indexOf(tags[i]) !== -1)
+                return true;
+        }
+        return false;
     }
 
     function _score(chat, lowerQuery, digits) {

@@ -11,6 +11,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	_ "modernc.org/sqlite"
@@ -327,6 +328,15 @@ func waitUntilDisconnected(ctx context.Context, client *whatsmeow.Client, limit 
 		}
 	}
 	return !client.IsConnected()
+}
+
+// selfJID is this account's own address, needed when quoting our own message.
+func (b *bridge) selfJID() types.JID {
+	client := b.getClient()
+	if client == nil || client.Store == nil || client.Store.ID == nil {
+		return types.EmptyJID
+	}
+	return *client.Store.ID
 }
 
 func (b *bridge) shutdown() {
