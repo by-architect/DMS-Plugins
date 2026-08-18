@@ -50,6 +50,27 @@ func (b *bridge) handlesFor(jid types.JID) []string {
 	return nil
 }
 
+// tagsFor says what kind of conversation an address is.
+//
+// WhatsApp mixes real conversations with statuses, channels and broadcast
+// lists in the same list. They are all filtered out of the conversation list
+// today; tagging them means the user can decide instead.
+func tagsFor(jid types.JID) []string {
+	switch jid.Server {
+	case types.NewsletterServer:
+		return []string{"channel"}
+	case types.BroadcastServer:
+		// WhatsApp models "my status" as a broadcast address with this user.
+		if jid.User == "status" {
+			return []string{"status"}
+		}
+		return []string{"broadcast"}
+	case types.GroupServer:
+		return []string{"group"}
+	}
+	return nil
+}
+
 // contactDisplayName picks what a person should be called, preferring what the
 // user themselves chose over what the contact announced.
 func contactDisplayName(info types.ContactInfo) string {

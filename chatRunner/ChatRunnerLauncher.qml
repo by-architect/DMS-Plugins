@@ -9,20 +9,24 @@ import qs.Services
 // so two people with the same name -- or the same person on two services -- are
 // told apart by reading the row rather than by guessing.
 //
-// This holds no chat data of its own. Everything comes from the backend, which
-// is what lets it list conversations from providers this file has never heard
-// of.
+// The whole conversation list is fetched once and filtered here, rather than
+// asking the backend per keystroke. The launcher calls getItems on every
+// character and expects an answer immediately, so anything asynchronous shows a
+// "searching" placeholder in place of results that were on screen a moment
+// earlier.
 Item {
     id: root
 
     property var pluginService: null
 
-    // The launcher polls getItems on every keystroke, so results are cached and
-    // answered synchronously; a request is fired off and the list refreshes
-    // when it lands.
-    property var _cache: ({})
-    property string _pendingQuery: ""
-    property string _lastQuery: ""
+    // Every known conversation, including contacts with no messages yet.
+    property var _allChats: []
+    property bool _loading: false
+    property real _loadedAt: 0
+
+    // How long the fetched list is trusted before refreshing. Conversations
+    // change as messages arrive, but not fast enough to matter while typing.
+    readonly property int staleAfterMs: 15000
 
     readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
     readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
@@ -41,10 +45,6 @@ Item {
         }
     }
 
-    function _normalize(query) {
-        return (query || "").trim();
-    }
-
     function _statusItem(icon, name, comment) {
         return [
             {
@@ -58,105 +58,162 @@ Item {
         ];
     }
 
-    // getItems answers from cache and refreshes in the background.
     function getItems(query) {
-        const q = root._normalize(query);
+        const q = (query || "").trim();
 
         if (!ChatService.available)
             return root._statusItem("chat_bubble", "Chat is unavailable", "The DMS backend has no chat support, or no provider is enabled");
 
-        if (q.length === 0) {
-            // No query: the conversations with activity, most recent first.
-            return root._toItems(ChatService.chats.slice(0, root.maxResults), "");
+        root._ensureLoaded();
+
+        if (root._allChats.length === 0) {
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
         }
 
-        if (root._cache[q] !== undefined)
-            return root._toItems(root._cache[q], q);
-
-        root._request(q);
-        return root._statusItem("search", "Searching conversations…", "Looking across every chat provider");
+        return root._toItems(root._filter(q), q);
     }
 
-    // _request asks the backend to rank conversations for a query.
-    //
-    // Uses resolve rather than a local filter so a phone number or an address
-    // matches too, and so conversations that exist but have no messages yet are
-    // still findable.
-    function _request(query) {
-        if (root._pendingQuery === query)
+    // _ensureLoaded fetches the full list, including conversations with no
+    // messages, so someone never written to can still be found.
+    function _ensureLoaded() {
+        if (root._loading)
             return;
-        root._pendingQuery = query;
+        if (root._allChats.length > 0 && (Date.now() - root._loadedAt) < root.staleAfterMs)
+            return;
 
-        DMSService.sendRequest("chat.resolve", {
-            "query": query,
-            "limit": root.maxResults
+        root._loading = true;
+        DMSService.sendRequest("chat.chats", {
+            "all": true,
+            "limit": 5000
         }, response => {
-            root._pendingQuery = "";
+            root._loading = false;
             if (response.error)
                 return;
 
-            const cache = Object.assign({}, root._cache);
-            cache[query] = response.result?.candidates || [];
-            root._cache = cache;
+            root._allChats = response.result?.chats || [];
+            root._loadedAt = Date.now();
 
-            // Nudge the launcher to ask again now that there is an answer.
             if (root.pluginService)
                 root.pluginService.requestLauncherUpdate();
         });
     }
 
-    function _toItems(entries, query) {
-        if (!entries || entries.length === 0) {
-            return root._statusItem("search_off", query === "" ? "No conversations yet" : "No conversation matches \"" + query + "\"", "Try a name, a phone number, or an address");
-        }
+    // _filter ranks locally, matching the backend's own ordering: an exact
+    // identifier beats a name that merely contains the same text.
+    function _filter(query) {
+        const scored = [];
+        const q = query.toLowerCase();
+        const digits = query.replace(/\D/g, "");
 
-        const items = [];
-        for (let i = 0; i < entries.length && i < root.maxResults; i++) {
-            const entry = entries[i];
+        for (let i = 0; i < root._allChats.length; i++) {
+            const chat = root._allChats[i];
 
-            // resolve returns chatId; the live chat list returns id.
-            const chatId = entry.chatId || entry.id;
-            const provider = entry.provider;
-            const providerName = entry.providerName || root._providerName(provider);
-            const name = entry.name || chatId;
-
-            if (!root.includeUnknown && !entry.lastTs)
+            if (!root.includeUnknown && !chat.lastTs)
                 continue;
 
+            if (q === "") {
+                // No query: recent conversations only, so the list opens on
+                // what you were just doing rather than the whole address book.
+                if (chat.lastTs)
+                    scored.push({
+                        "chat": chat,
+                        "score": 1
+                    });
+                continue;
+            }
+
+            const score = root._score(chat, q, digits);
+            if (score > 0)
+                scored.push({
+                    "chat": chat,
+                    "score": score
+                });
+        }
+
+        scored.sort((a, b) => {
+            if (a.score !== b.score)
+                return b.score - a.score;
+            return (b.chat.lastTs || 0) - (a.chat.lastTs || 0);
+        });
+
+        return scored.slice(0, root.maxResults).map(entry => entry.chat);
+    }
+
+    function _score(chat, lowerQuery, digits) {
+        const name = (chat.name || "").toLowerCase();
+
+        if (chat.id === lowerQuery)
+            return 90;
+        if (name !== "" && name === lowerQuery)
+            return 70;
+
+        // Handles are what make a phone number or an address match; the id is
+        // never picked apart, because its shape belongs to the provider.
+        const handles = chat.handles || [];
+        for (let i = 0; i < handles.length; i++) {
+            const handle = handles[i].toLowerCase();
+            if (handle === lowerQuery)
+                return 80;
+            if (digits.length >= 7) {
+                const handleDigits = handles[i].replace(/\D/g, "");
+                if (handleDigits !== "" && handleDigits.indexOf(digits) !== -1)
+                    return 60;
+            }
+            if (handle.indexOf(lowerQuery) !== -1)
+                return 50;
+        }
+
+        if (name !== "") {
+            if (name.indexOf(lowerQuery) === 0)
+                return 40;
+            if (name.indexOf(lowerQuery) !== -1)
+                return 20;
+        }
+
+        return 0;
+    }
+
+    function _toItems(entries, query) {
+        if (!entries || entries.length === 0)
+            return root._statusItem("search_off", query === "" ? "No conversations yet" : "No conversation matches \"" + query + "\"", "Try a name, a phone number, or an address");
+
+        const items = [];
+        for (let i = 0; i < entries.length; i++) {
+            const chat = entries[i];
+            const providerName = root._providerName(chat.provider);
+
             items.push({
-                "id": "chatRunner:" + provider + ":" + chatId,
-                "name": name,
-                "icon": "material:" + (entry.isGroup ? "group" : "person"),
+                "id": "chatRunner:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
                 // The service is part of the row, not a tooltip: it is the only
                 // thing distinguishing two rows with the same name.
-                "comment": root._comment(entry, providerName),
+                "comment": root._comment(chat, providerName),
                 "categories": ["Chats"],
-                "keywords": root._keywords(entry),
-                // Preserve the backend's ranking; the launcher's own scorer
-                // would otherwise drop matches made on a phone number.
+                "keywords": chat.handles || [],
+                // Preserve this ranking; the launcher's own scorer would
+                // otherwise drop matches made on a phone number.
                 "_preScored": 10000 - i,
-                "chatProvider": provider,
-                "chatId": chatId
+                "chatProvider": chat.provider,
+                "chatId": chat.id
             });
         }
         return items;
     }
 
-    function _comment(entry, providerName) {
+    function _comment(chat, providerName) {
         const parts = [providerName];
 
-        if (entry.unread > 0)
-            parts.push(entry.unread + " unread");
-        else if (!entry.lastTs)
+        if (chat.unread > 0)
+            parts.push(chat.unread + " unread");
+        else if (!chat.lastTs)
             parts.push("no messages yet");
 
-        return parts.join("  ·  ");
-    }
+        const handles = chat.handles || [];
+        if (handles.length > 0)
+            parts.push(handles[0]);
 
-    function _keywords(entry) {
-        // Handles are what make a phone number or an address match once the
-        // launcher applies its own filtering on top.
-        return entry.handles || [];
+        return parts.join("  ·  ");
     }
 
     function _providerName(providerId) {
@@ -167,16 +224,8 @@ Item {
     function executeItem(item) {
         if (!item || !item.chatProvider || !item.chatId)
             return;
-        PopoutService.openChat(item.chatProvider, item.chatId);
-    }
-
-    // Results go stale as messages arrive, so the cache is dropped whenever the
-    // conversation list changes.
-    Connections {
-        target: ChatService
-
-        function onChatsChanged() {
-            root._cache = ({});
-        }
+        // The popout, not the full window: picking a row here means "read this
+        // conversation", and the sidebar would just be the list you came from.
+        PopoutService.openChatPopoutFor(item.chatProvider, item.chatId);
     }
 }

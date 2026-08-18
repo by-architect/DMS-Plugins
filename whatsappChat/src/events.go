@@ -75,6 +75,7 @@ func (b *bridge) onMessage(evt *events.Message) {
 		LastTS:   msg.TS,
 		LastText: previewOf(msg),
 		Handles:  b.handlesFor(evt.Info.Chat),
+		Tags:     tagsFor(evt.Info.Chat),
 	}})
 }
 
@@ -140,6 +141,7 @@ func (b *bridge) onHistorySync(evt *events.HistorySync) {
 			Archived: conv.GetArchived(),
 			Unread:   &unread,
 			Handles:  b.handlesFor(jid),
+			Tags:     tagsFor(jid),
 		}
 		if chat.Name == "" {
 			chat.Name = b.chatName(jid)
@@ -199,6 +201,7 @@ func (b *bridge) syncChats(ctx context.Context) {
 				ID:      group.JID.String(),
 				Name:    group.Name,
 				IsGroup: true,
+				Tags:    tagsFor(group.JID),
 			})
 		}
 	} else {
@@ -257,20 +260,18 @@ func (b *bridge) contactChats(ctx context.Context) []chatObj {
 			ID:      jid.String(),
 			Name:    name,
 			Handles: handles,
+			Tags:    tagsFor(jid),
 		})
 	}
 	return out
 }
 
-// isRelevantChat filters out the conversations nobody treats as chats.
+// isRelevantChat rejects only addresses that are not conversations at all.
 //
-// Newsletters and broadcast lists are feeds; including them buries real
-// conversations in a busy account.
+// Newsletters and broadcast lists used to be dropped here, which meant a user
+// who wanted them had no way to get them back. They are tagged instead, and
+// filtered in the shell where the choice belongs.
 func isRelevantChat(jid types.JID) bool {
-	switch jid.Server {
-	case types.NewsletterServer, types.BroadcastServer:
-		return false
-	}
 	return !jid.IsEmpty()
 }
 
