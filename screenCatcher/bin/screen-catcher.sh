@@ -4,7 +4,7 @@
 # Kept outside QML because the actual work (grim/slurp/wf-recorder/ffmpeg/tesseract/
 # PipeWire audio orchestration) is much easier to get right and to test in bash
 # than by building shell command arrays in JS. QML only ever starts this script
-# and, for recordings, holds a handle to send SIGINT to it for a graceful stop.
+# and, for recordings, holds a handle to send it signals (stop/pause/resume).
 #
 # Audio device discovery/mixing uses native PipeWire tools (pw-dump, pw-loopback)
 # rather than pactl, since a PipeWire-only system may not have the PulseAudio
@@ -14,6 +14,8 @@
 #
 # Contract with the QML side:
 #   - stdout line "STARTED <path>"  -> recording has actually begun, <path> is final output
+#   - stdout line "PAUSED"          -> recording paused (segment finalized, waiting)
+#   - stdout line "RESUMED"         -> recording resumed (new segment started)
 #   - stdout line "SAVED <path>"    -> action finished successfully
 #   - stdout line "TEXT <text>"     -> OCR result (shot-ocr only)
 #   - stdout line "EMPTY"           -> OCR found no text (shot-ocr only)
@@ -21,6 +23,8 @@
 #   - exit code 0   success
 #   - exit code 2   cancelled (slurp aborted) — not an error
 #   - anything else -> error, message is on stderr / last stdout line
+#
+# rec-start signals: SIGINT/SIGTERM = stop, SIGUSR1 = pause, SIGUSR2 = resume.
 
 set -uo pipefail
 
@@ -87,6 +91,44 @@ default_sink() {
     pw-dump 2>/dev/null | jq -r '.[] | select(.type=="PipeWire:Interface:Metadata" and .props["metadata.name"]=="default") | .metadata[]? | select(.key=="default.audio.sink") | (.value | fromjson).name' 2>/dev/null | head -1
 }
 
+# wf-recorder prompts *interactively* for which output to record ("Please
+# select an output from the list...") whenever more than one output exists
+# and -o is omitted — fatal for a backgrounded process with no terminal, it
+# just hangs (confirmed: this was why "record fullscreen" silently did
+# nothing on a multi-monitor system). -g mode doesn't need this since
+# wf-recorder derives the output from the geometry itself.
+detect_output() {
+    local name
+    if require hyprctl && require jq; then
+        name=$(hyprctl monitors -j 2>/dev/null | jq -r '.[] | select(.focused==true) | .name' 2>/dev/null | head -1)
+        if [ -n "$name" ]; then
+            echo "$name"
+            return
+        fi
+    fi
+    if require niri && require jq; then
+        # Best-effort Niri support (untested here — no Niri session
+        # available at development time). `niri msg --json focused-output`
+        # is documented to print the focused output's info as JSON.
+        name=$(niri msg --json focused-output 2>/dev/null | jq -r '.name // empty' 2>/dev/null | head -1)
+        if [ -n "$name" ]; then
+            echo "$name"
+            return
+        fi
+    fi
+    # Last resort: pick whatever wf-recorder itself lists first, so a
+    # multi-monitor system without a known compositor tool at least records
+    # something instead of hanging on the interactive prompt forever.
+    if require wf-recorder; then
+        name=$(wf-recorder -L 2>/dev/null | head -1 | sed -n 's/.*Name: \([^ ]*\).*/\1/p')
+        if [ -n "$name" ]; then
+            echo "$name"
+            return
+        fi
+    fi
+    echo ""
+}
+
 mix_pids=""
 
 setup_mix_audio() {
@@ -128,27 +170,32 @@ teardown_mix_audio() {
 case "$cmd" in
 
 shot-full)
-    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"
+    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"; format="${5:-png}"
 
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot failed" "grim is not installed"; exit 1; }
 
     mkdir -p "$outdir"
-    file="$outdir/Screenshot_$(timestamp).png"
+    ext="$format"
+    [ "$format" = "jpeg" ] && ext="jpg"
+    file="$outdir/Screenshot_$(timestamp).${ext}"
 
-    if ! grim "$file"; then
+    if ! grim -t "$format" "$file"; then
         notify "Screenshot failed" "grim could not capture the screen"
         echo "ERROR grim-failed"
         exit 1
     fi
 
-    [ "$clipboard" = "1" ] && copy_mime "image/png" "$file"
+    mime="image/png"
+    [ "$format" = "jpeg" ] && mime="image/jpeg"
+
+    [ "$clipboard" = "1" ] && copy_mime "$mime" "$file"
     [ "$downloads" = "1" ] && save_downloads "$file"
     notify "Screenshot saved" "$file" "$file"
     echo "SAVED $file"
     ;;
 
 shot-select)
-    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"
+    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"; format="${5:-png}"
 
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot failed" "grim is not installed"; exit 1; }
     require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot failed" "slurp is not installed"; exit 1; }
@@ -157,15 +204,20 @@ shot-select)
     [ -n "$geometry" ] || { echo "CANCELLED"; exit 2; }
 
     mkdir -p "$outdir"
-    file="$outdir/Screenshot_$(timestamp).png"
+    ext="$format"
+    [ "$format" = "jpeg" ] && ext="jpg"
+    file="$outdir/Screenshot_$(timestamp).${ext}"
 
-    if ! grim -g "$geometry" "$file"; then
+    if ! grim -g "$geometry" -t "$format" "$file"; then
         notify "Screenshot failed" "grim could not capture the selection"
         echo "ERROR grim-failed"
         exit 1
     fi
 
-    [ "$clipboard" = "1" ] && copy_mime "image/png" "$file"
+    mime="image/png"
+    [ "$format" = "jpeg" ] && mime="image/jpeg"
+
+    [ "$clipboard" = "1" ] && copy_mime "$mime" "$file"
     [ "$downloads" = "1" ] && save_downloads "$file"
     notify "Screenshot saved" "$file" "$file"
     echo "SAVED $file"
@@ -208,20 +260,24 @@ shot-ocr)
     ;;
 
 rec-start)
-    outdir="$1"; mode="$2"; mic="$3"; sysaudio="$4"
-    gif_fps="$5"; gif_scale="$6"; mic_device="${7:-}"; sys_device="${8:-}"
-    NOTIFY="${9:-1}"; clipboard="${10:-0}"; downloads="${11:-0}"
+    outdir="$1"; mode="$2"; format="$3"; mic="$4"; sysaudio="$5"
+    gif_fps="$6"; gif_scale="$7"; mic_device="${8:-}"; sys_device="${9:-}"
+    NOTIFY="${10:-1}"; clipboard="${11:-0}"; downloads="${12:-0}"
 
     require wf-recorder || { echo "ERROR wf-recorder-not-found"; notify "Recording failed" "wf-recorder is not installed"; exit 1; }
-    require slurp || { echo "ERROR slurp-not-found"; notify "Recording failed" "slurp is not installed"; exit 1; }
 
     mkdir -p "$outdir"
     base="$outdir/Recording_$(timestamp)"
 
     geometry=""
-    if [ "$mode" = "select" ] || [ "$mode" = "gif" ]; then
+    output_args=()
+    if [ "$mode" = "select" ]; then
+        require slurp || { echo "ERROR slurp-not-found"; notify "Recording failed" "slurp is not installed"; exit 1; }
         geometry=$(slurp) || { echo "CANCELLED"; exit 2; }
         [ -n "$geometry" ] || { echo "CANCELLED"; exit 2; }
+    else
+        out=$(detect_output)
+        [ -n "$out" ] && output_args=(-o "$out")
     fi
 
     audio_args=()
@@ -248,45 +304,119 @@ rec-start)
         fi
     fi
 
-    if [ "$mode" = "gif" ]; then
-        rawfile="${base}.tmp.mp4"
-        finalfile="${base}.gif"
-    else
-        rawfile="${base}.mp4"
-        finalfile="$rawfile"
-    fi
-
     geo_args=()
     [ -n "$geometry" ] && geo_args=(-g "$geometry")
 
+    # GIF is captured as ordinary mp4 segments first and palette-converted as
+    # a whole once finalized (wf-recorder has no real-time GIF encoder worth
+    # using). mp4/mkv record straight to the target container, since
+    # wf-recorder picks the muxer from the file extension.
+    if [ "$format" = "gif" ]; then
+        container="mp4"
+        finalfile="${base}.gif"
+    else
+        container="$format"
+        finalfile="${base}.${format}"
+    fi
+
+    # wf-recorder has no pause/resume of its own (confirmed: SIGUSR1 just
+    # kills it like SIGINT does). Pause/resume is implemented here instead by
+    # stopping/restarting wf-recorder across "segments" of the same
+    # container, then joining them with ffmpeg's concat demuxer (lossless
+    # stream copy, since every segment shares identical encoder settings) once
+    # the recording is stopped for good.
+    segments=()
+    seg_index=0
     child_pid=""
-    on_signal() {
-        [ -n "$child_pid" ] && kill -INT "$child_pid" 2>/dev/null
+    paused=0
+    stopped=0
+
+    start_segment() {
+        seg_index=$((seg_index + 1))
+        segfile="${base}.part${seg_index}.${container}"
+        wf-recorder -y "${output_args[@]}" "${geo_args[@]}" "${audio_args[@]}" -f "$segfile" &
+        child_pid=$!
+        segments+=("$segfile")
     }
 
-    wf-recorder -y "${geo_args[@]}" "${audio_args[@]}" -f "$rawfile" &
-    child_pid=$!
-    trap on_signal INT TERM
+    stop_segment() {
+        [ -n "$child_pid" ] || return
+        kill -INT "$child_pid" 2>/dev/null
+        while kill -0 "$child_pid" 2>/dev/null; do
+            sleep 0.05
+        done
+        child_pid=""
+    }
 
+    on_pause() {
+        [ "$paused" = "1" ] && return
+        paused=1
+        stop_segment
+        echo "PAUSED"
+    }
+
+    on_resume() {
+        [ "$paused" = "0" ] && return
+        paused=0
+        start_segment
+        echo "RESUMED"
+    }
+
+    on_stop() {
+        stopped=1
+    }
+
+    trap on_pause USR1
+    trap on_resume USR2
+    trap on_stop INT TERM
+
+    start_segment
     echo "STARTED $finalfile"
 
-    # A plain `wait` can return early (interrupted-by-trap) before the child has
-    # actually exited, which would race the gif conversion / success check
-    # below against wf-recorder still flushing its output. Looping on kill -0
-    # guarantees we only proceed once the child is truly gone.
-    while kill -0 "$child_pid" 2>/dev/null; do
-        wait "$child_pid" 2>/dev/null
+    while [ "$stopped" = "0" ]; do
+        sleep 0.1
     done
+
+    [ "$paused" = "0" ] && stop_segment
 
     teardown_mix_audio
 
-    if [ ! -s "$rawfile" ]; then
+    valid_segments=()
+    for s in "${segments[@]}"; do
+        [ -s "$s" ] && valid_segments+=("$s")
+    done
+
+    if [ "${#valid_segments[@]}" -eq 0 ]; then
+        rm -f "${segments[@]}" 2>/dev/null
         notify "Recording failed" "No output was produced"
         echo "ERROR empty-output"
         exit 1
     fi
 
-    if [ "$mode" = "gif" ]; then
+    rawfile="${base}.${container}"
+    if [ "${#valid_segments[@]}" -eq 1 ]; then
+        mv "${valid_segments[0]}" "$rawfile"
+    elif require ffmpeg; then
+        listfile=$(mktemp --suffix=.txt)
+        for s in "${valid_segments[@]}"; do
+            printf "file '%s'\n" "$s" >>"$listfile"
+        done
+        ffmpeg -y -f concat -safe 0 -i "$listfile" -c copy "$rawfile" >/dev/null 2>&1
+        rm -f "$listfile" "${valid_segments[@]}"
+        if [ ! -s "$rawfile" ]; then
+            notify "Recording failed" "Could not join paused segments"
+            echo "ERROR concat-failed"
+            exit 1
+        fi
+    else
+        # No ffmpeg: can't join segments — keep the last one rather than
+        # losing the recording outright.
+        mv "${valid_segments[-1]}" "$rawfile"
+        rm -f "${valid_segments[@]}" 2>/dev/null
+        notify "Only the last segment was kept" "Install ffmpeg to join paused recordings into one file"
+    fi
+
+    if [ "$format" = "gif" ]; then
         if require ffmpeg; then
             palette=$(mktemp --suffix=.png)
             ffmpeg -y -i "$rawfile" -vf "fps=${gif_fps},scale=${gif_scale}:-1:flags=lanczos,palettegen" "$palette" >/dev/null 2>&1
@@ -296,7 +426,6 @@ rec-start)
                 rm -f "$rawfile"
                 [ "$clipboard" = "1" ] && copy_mime "image/gif" "$finalfile"
             else
-                # Conversion failed — keep the raw recording instead of losing it.
                 finalfile="$rawfile"
                 notify "GIF conversion failed" "Kept the raw recording instead"
             fi
@@ -304,6 +433,8 @@ rec-start)
             finalfile="$rawfile"
             notify "GIF conversion skipped" "ffmpeg is not installed; kept the raw recording"
         fi
+    else
+        finalfile="$rawfile"
     fi
 
     [ "$downloads" = "1" ] && save_downloads "$finalfile"

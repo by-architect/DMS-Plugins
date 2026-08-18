@@ -93,9 +93,22 @@ PluginComponent {
             return "OK";
         }
 
-        function recordGif(): string {
-            ScreenCatcherService.startRecording("gif");
-            return "OK";
+        // wf-recorder has no pause/resume of its own — the script implements
+        // it by stopping/restarting wf-recorder across segments and joining
+        // them on stop. See ScreenCatcherService.qml for why these use
+        // different signals than stop.
+        function pause(): string {
+            if (!ScreenCatcherService.isRecording)
+                return "NOT_RECORDING";
+            ScreenCatcherService.pauseRecording();
+            return "PAUSING";
+        }
+
+        function resume(): string {
+            if (!ScreenCatcherService.isRecording)
+                return "NOT_RECORDING";
+            ScreenCatcherService.resumeRecording();
+            return "RESUMING";
         }
 
         function micToggle(): string {
@@ -116,6 +129,23 @@ PluginComponent {
         function downloadsToggle(): string {
             ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
             return ScreenCatcherService.saveToDownloads ? "DOWNLOADS_ON" : "DOWNLOADS_OFF";
+        }
+
+        function notifyToggle(): string {
+            ScreenCatcherService.setNotifyOnComplete(!ScreenCatcherService.notifyOnComplete);
+            return ScreenCatcherService.notifyOnComplete ? "NOTIFY_ON" : "NOTIFY_OFF";
+        }
+
+        // Takes the format as an argument: `ipc call screenCatcher
+        // setImageFormat jpeg` / `setRecordFormat mkv`.
+        function setImageFormat(format: string): string {
+            ScreenCatcherService.setImageFormat(format);
+            return "OK";
+        }
+
+        function setRecordFormat(format: string): string {
+            ScreenCatcherService.setRecordFormat(format);
+            return "OK";
         }
     }
 

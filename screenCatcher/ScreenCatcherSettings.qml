@@ -8,7 +8,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Where screenshots and recordings are saved, plus optional extras. Microphone/system-audio and the record actions themselves live in the bar popup."
+        text: "Where screenshots and recordings are saved, plus optional extras. Microphone/system-audio, format chips, and the record actions themselves live in the panel (open it with your configured shortcut)."
         font.pixelSize: Theme.fontSizeMedium
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -25,7 +25,7 @@ PluginSettings {
     StringSetting {
         settingKey: "recordingDir"
         label: "Recording folder"
-        description: "Where recordings (mp4/gif) are saved."
+        description: "Where recordings (mp4/mkv/gif) are saved."
         placeholder: "~/Videos/Recordings"
         defaultValue: "~/Videos/Recordings"
     }
@@ -51,6 +51,44 @@ PluginSettings {
         defaultValue: true
     }
 
+    SelectionSetting {
+        settingKey: "imageFormat"
+        label: "Default screenshot format"
+        description: "Also switchable per-shot from the panel's format chips (1/2)."
+        defaultValue: "png"
+        options: [
+            {
+                label: "PNG",
+                value: "png"
+            },
+            {
+                label: "JPEG",
+                value: "jpeg"
+            }
+        ]
+    }
+
+    SelectionSetting {
+        settingKey: "recordFormat"
+        label: "Default recording format"
+        description: "MP4/MKV record natively; GIF captures normally then converts (requires ffmpeg). Also switchable from the panel's format chips (3/4/5)."
+        defaultValue: "mp4"
+        options: [
+            {
+                label: "MP4",
+                value: "mp4"
+            },
+            {
+                label: "MKV",
+                value: "mkv"
+            },
+            {
+                label: "GIF",
+                value: "gif"
+            }
+        ]
+    }
+
     StringSetting {
         settingKey: "ocrLang"
         label: "OCR language"
@@ -62,7 +100,7 @@ PluginSettings {
     SliderSetting {
         settingKey: "gifFps"
         label: "GIF frame rate"
-        description: "Frames per second for 'Record Selected as GIF' (requires ffmpeg)."
+        description: "Frames per second when recording with the GIF format chip selected (requires ffmpeg)."
         defaultValue: 12
         minimum: 5
         maximum: 30
