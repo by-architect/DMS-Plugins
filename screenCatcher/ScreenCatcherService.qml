@@ -31,6 +31,8 @@ Singleton {
     property bool micOn: false
     property bool sysAudioOn: false
     property bool saveToDownloads: false
+    property string imageFormat: "png"
+    property string recordFormat: "mp4"
 
     function _loadSettings() {
         screenshotDir = PluginService.loadPluginData(pluginId, "screenshotDir", "~/Pictures/Screenshots");
@@ -45,6 +47,8 @@ Singleton {
         micOn = PluginService.loadPluginData(pluginId, "micOn", false);
         sysAudioOn = PluginService.loadPluginData(pluginId, "sysAudioOn", false);
         saveToDownloads = PluginService.loadPluginData(pluginId, "saveToDownloads", false);
+        imageFormat = PluginService.loadPluginData(pluginId, "imageFormat", "png");
+        recordFormat = PluginService.loadPluginData(pluginId, "recordFormat", "mp4");
     }
 
     Component.onCompleted: _loadSettings()
@@ -75,6 +79,21 @@ Singleton {
     function setSaveToDownloads(value) {
         root.saveToDownloads = value;
         PluginService.savePluginData(pluginId, "saveToDownloads", value);
+    }
+
+    function setNotifyOnComplete(value) {
+        root.notifyOnComplete = value;
+        PluginService.savePluginData(pluginId, "notifyOnComplete", value);
+    }
+
+    function setImageFormat(value) {
+        root.imageFormat = value;
+        PluginService.savePluginData(pluginId, "imageFormat", value);
+    }
+
+    function setRecordFormat(value) {
+        root.recordFormat = value;
+        PluginService.savePluginData(pluginId, "recordFormat", value);
     }
 
     function _dir(path) {
@@ -110,12 +129,18 @@ Singleton {
 
     // -------------------------------------------------------- screenshots
 
+    // slurp/tesseract are interactive/human-paced — the shared Proc helper's
+    // default 10s timeout was firing while the user was still positioning
+    // slurp, killing it and reporting a bogus error a few seconds before the
+    // (still-running) slurp surface actually got composited. Both selection
+    // paths disable the timeout entirely; fullscreen doesn't need slurp so it
+    // keeps the default.
     function takeScreenshotFullscreen() {
-        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
+        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
     }
 
     function takeScreenshotSelected() {
-        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
+        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0, Proc.noTimeout);
     }
 
     function screenshotToText() {
@@ -128,7 +153,7 @@ Singleton {
             }
             if (stdout.trim() === "EMPTY")
                 ToastService.showInfo("Screenshot to text", "No text recognized");
-        }, 0);
+        }, 0, Proc.noTimeout);
     }
 
     function _handleShotResult(label, stdout, exitCode) {
@@ -142,18 +167,19 @@ Singleton {
 
     property bool isSelecting: false
     property bool isRecording: false
+    property bool isPaused: false
     property string recordingMode: ""
+    property string recordingFormat: ""
     property string recordingOutputPath: ""
     property real recordingStartedAt: 0
     property int elapsedSeconds: 0
 
     readonly property var modeLabels: ({
             "full": "Full Screen",
-            "select": "Selection",
-            "gif": "Selection (GIF)"
+            "select": "Selection"
         })
 
-    readonly property string recordingLabel: modeLabels[recordingMode] || ""
+    readonly property string recordingLabel: (modeLabels[recordingMode] || "") + (recordingFormat ? " · " + recordingFormat.toUpperCase() : "")
 
     readonly property string elapsedLabel: {
         const s = Math.max(0, elapsedSeconds);
@@ -165,7 +191,7 @@ Singleton {
     Timer {
         interval: 1000
         repeat: true
-        running: root.isRecording
+        running: root.isRecording && !root.isPaused
         onTriggered: root.elapsedSeconds = Math.floor((Date.now() - root.recordingStartedAt) / 1000)
     }
 
@@ -175,22 +201,46 @@ Singleton {
 
         root.isSelecting = mode !== "full";
         root.recordingMode = mode;
+        root.recordingFormat = recordFormat;
 
-        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyToClipboard), _bool(saveToDownloads)];
+        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, recordFormat, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyToClipboard), _bool(saveToDownloads)];
         recStderr.text = "";
         recProcess.running = true;
     }
 
+    // Stopping/pausing/resuming all target the *wrapper script*, not
+    // wf-recorder directly — the script owns the actual wf-recorder child and
+    // reacts to these by starting/stopping/finalizing it. TERM (not INT) is
+    // used deliberately: a background-started script inheriting bash's
+    // "ignore SIGINT for async jobs" disposition can end up completely unable
+    // to trap SIGINT for its own lifetime (confirmed by testing — the same
+    // trap that worked fine for TERM/USR1/USR2 never fired for INT). TERM
+    // isn't subject to that special case and was verified to make
+    // wf-recorder itself finalize cleanly too, so it's used end to end.
     function stopRecording() {
         if (!root.isRecording)
             return;
-        recProcess.signal(2); // SIGINT — the script forwards this to wf-recorder and finalizes the file
+        recProcess.signal(15); // SIGTERM
+    }
+
+    function pauseRecording() {
+        if (!root.isRecording || root.isPaused)
+            return;
+        recProcess.signal(10); // SIGUSR1
+    }
+
+    function resumeRecording() {
+        if (!root.isRecording || !root.isPaused)
+            return;
+        recProcess.signal(12); // SIGUSR2
     }
 
     function _resetRecordingState() {
         root.isSelecting = false;
         root.isRecording = false;
+        root.isPaused = false;
         root.recordingMode = "";
+        root.recordingFormat = "";
         root.recordingOutputPath = "";
         root.recordingStartedAt = 0;
         root.elapsedSeconds = 0;
@@ -206,8 +256,13 @@ Singleton {
                     root.recordingOutputPath = line.substring(8);
                     root.isSelecting = false;
                     root.isRecording = true;
+                    root.isPaused = false;
                     root.recordingStartedAt = Date.now();
                     root.elapsedSeconds = 0;
+                } else if (line === "PAUSED") {
+                    root.isPaused = true;
+                } else if (line === "RESUMED") {
+                    root.isPaused = false;
                 } else if (line === "CANCELLED") {
                     ToastService.showInfo("Recording cancelled");
                 }

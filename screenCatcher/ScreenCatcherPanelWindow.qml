@@ -58,8 +58,8 @@ PanelWindow {
     // Closes the panel (which destroys this window, being LazyLoader-backed)
     // and hands the actual action off to ScreenCatcherService, which outlives
     // us and runs it after a short delay — see the comment there for why the
-    // delay can't live in this window itself. Toggles (mic/system audio) skip
-    // this and act inline instead, since they don't need the panel hidden.
+    // delay can't live in this window itself. Toggles (mic/system audio/etc.)
+    // skip this and act inline instead, since they don't need the panel hidden.
     function runAction(action) {
         win.closeRequested();
         ScreenCatcherService.runAfterClose(action);
@@ -94,6 +94,15 @@ PanelWindow {
                 case Qt.Key_T:
                     win.runAction(() => ScreenCatcherService.screenshotToText());
                     break;
+                case Qt.Key_C:
+                    ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
+                    break;
+                case Qt.Key_L:
+                    ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
+                    break;
+                case Qt.Key_N:
+                    ScreenCatcherService.setNotifyOnComplete(!ScreenCatcherService.notifyOnComplete);
+                    break;
                 case Qt.Key_M:
                     ScreenCatcherService.setMicOn(!ScreenCatcherService.micOn);
                     break;
@@ -108,19 +117,37 @@ PanelWindow {
                     if (!ScreenCatcherService.isRecording)
                         win.runAction(() => ScreenCatcherService.startRecording("select"));
                     break;
-                case Qt.Key_G:
-                    if (!ScreenCatcherService.isRecording)
-                        win.runAction(() => ScreenCatcherService.startRecording("gif"));
+                case Qt.Key_P:
+                    if (ScreenCatcherService.isRecording) {
+                        if (ScreenCatcherService.isPaused)
+                            ScreenCatcherService.resumeRecording();
+                        else
+                            ScreenCatcherService.pauseRecording();
+                    }
                     break;
                 case Qt.Key_X:
                     if (ScreenCatcherService.isRecording)
                         ScreenCatcherService.stopRecording();
                     break;
-                case Qt.Key_C:
-                    ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
+                case Qt.Key_1:
+                    if (!ScreenCatcherService.isRecording)
+                        ScreenCatcherService.setImageFormat("png");
                     break;
-                case Qt.Key_L:
-                    ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
+                case Qt.Key_2:
+                    if (!ScreenCatcherService.isRecording)
+                        ScreenCatcherService.setImageFormat("jpeg");
+                    break;
+                case Qt.Key_3:
+                    if (!ScreenCatcherService.isRecording)
+                        ScreenCatcherService.setRecordFormat("mp4");
+                    break;
+                case Qt.Key_4:
+                    if (!ScreenCatcherService.isRecording)
+                        ScreenCatcherService.setRecordFormat("mkv");
+                    break;
+                case Qt.Key_5:
+                    if (!ScreenCatcherService.isRecording)
+                        ScreenCatcherService.setRecordFormat("gif");
                     break;
                 default:
                     return;
@@ -182,7 +209,7 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — press X to stop") : "Press a letter, or click — Esc closes"
+                                text: ScreenCatcherService.isRecording ? ((ScreenCatcherService.isPaused ? "Paused " : "Recording ") + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — P to pause/resume, X to stop") : "Press a letter, or click — Esc closes"
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceVariantText
                             }
@@ -245,6 +272,30 @@ PanelWindow {
                                 onActivated: win.runAction(() => ScreenCatcherService.screenshotToText())
                             }
 
+                            Row {
+                                width: parent.width
+                                height: 28
+                                spacing: Theme.spacingXS
+
+                                FormatChip {
+                                    width: (parent.width - parent.spacing) / 2
+                                    height: parent.height
+                                    chipKey: "1"
+                                    label: "PNG"
+                                    selected: ScreenCatcherService.imageFormat === "png"
+                                    onActivated: ScreenCatcherService.setImageFormat("png")
+                                }
+
+                                FormatChip {
+                                    width: (parent.width - parent.spacing) / 2
+                                    height: parent.height
+                                    chipKey: "2"
+                                    label: "JPEG"
+                                    selected: ScreenCatcherService.imageFormat === "jpeg"
+                                    onActivated: ScreenCatcherService.setImageFormat("jpeg")
+                                }
+                            }
+
                             StyledText {
                                 width: parent.width
                                 topPadding: Theme.spacingM
@@ -270,6 +321,15 @@ PanelWindow {
                                 label: "Save to Downloads"
                                 checked: ScreenCatcherService.saveToDownloads
                                 onActivated: ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads)
+                            }
+
+                            ToggleRow {
+                                width: parent.width
+                                height: 32
+                                letter: "N"
+                                label: "Notifications"
+                                checked: ScreenCatcherService.notifyOnComplete
+                                onActivated: ScreenCatcherService.setNotifyOnComplete(!ScreenCatcherService.notifyOnComplete)
                             }
                         }
 
@@ -342,14 +402,48 @@ PanelWindow {
                                 onActivated: win.runAction(() => ScreenCatcherService.startRecording("select"))
                             }
 
+                            Row {
+                                width: parent.width
+                                height: 28
+                                spacing: Theme.spacingXS
+                                visible: !ScreenCatcherService.isRecording
+
+                                FormatChip {
+                                    width: (parent.width - parent.spacing * 2) / 3
+                                    height: parent.height
+                                    chipKey: "3"
+                                    label: "MP4"
+                                    selected: ScreenCatcherService.recordFormat === "mp4"
+                                    onActivated: ScreenCatcherService.setRecordFormat("mp4")
+                                }
+
+                                FormatChip {
+                                    width: (parent.width - parent.spacing * 2) / 3
+                                    height: parent.height
+                                    chipKey: "4"
+                                    label: "MKV"
+                                    selected: ScreenCatcherService.recordFormat === "mkv"
+                                    onActivated: ScreenCatcherService.setRecordFormat("mkv")
+                                }
+
+                                FormatChip {
+                                    width: (parent.width - parent.spacing * 2) / 3
+                                    height: parent.height
+                                    chipKey: "5"
+                                    label: "GIF"
+                                    selected: ScreenCatcherService.recordFormat === "gif"
+                                    onActivated: ScreenCatcherService.setRecordFormat("gif")
+                                }
+                            }
+
                             ActionRow {
                                 width: parent.width
                                 height: 40
-                                visible: !ScreenCatcherService.isRecording
-                                letter: "G"
-                                icon: "gif_box"
-                                label: "Record Selected as GIF"
-                                onActivated: win.runAction(() => ScreenCatcherService.startRecording("gif"))
+                                visible: ScreenCatcherService.isRecording
+                                letter: "P"
+                                icon: ScreenCatcherService.isPaused ? "play_arrow" : "pause"
+                                label: ScreenCatcherService.isPaused ? "Resume Recording" : "Pause Recording"
+                                onActivated: ScreenCatcherService.isPaused ? ScreenCatcherService.resumeRecording() : ScreenCatcherService.pauseRecording()
                             }
 
                             ActionRow {
