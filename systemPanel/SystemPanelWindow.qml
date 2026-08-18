@@ -40,10 +40,9 @@ PanelWindow {
         wanted: KeyboardFocus.wantsGrab(true, null)
     }
 
-    // Fill the usable screen but respect the bar's exclusive zone, otherwise the
-    // panel header renders underneath the bar.
-    exclusionMode: ExclusionMode.Normal
-    WlrLayershell.exclusiveZone: 0
+    // True fullscreen: draw over the bar rather than reserving space below it.
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.exclusiveZone: -1
 
     anchors {
         top: true
