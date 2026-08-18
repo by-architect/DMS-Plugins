@@ -33,8 +33,15 @@ PluginSettings {
     ToggleSetting {
         settingKey: "copyToClipboard"
         label: "Copy to clipboard"
-        description: "Copy screenshots, OCR text, and GIF recordings to the clipboard when finished."
+        description: "Copy screenshots, OCR text, and recordings to the clipboard when finished. Also toggleable from the panel (C)."
         defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "saveToDownloads"
+        label: "Save to Downloads"
+        description: "Also copy every screenshot/recording into your Downloads folder. Also toggleable from the panel (L)."
+        defaultValue: false
     }
 
     ToggleSetting {

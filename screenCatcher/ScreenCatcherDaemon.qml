@@ -107,6 +107,16 @@ PluginComponent {
             ScreenCatcherService.setSysAudioOn(!ScreenCatcherService.sysAudioOn);
             return ScreenCatcherService.sysAudioOn ? "SYSAUDIO_ON" : "SYSAUDIO_OFF";
         }
+
+        function clipboardToggle(): string {
+            ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
+            return ScreenCatcherService.copyToClipboard ? "CLIPBOARD_ON" : "CLIPBOARD_OFF";
+        }
+
+        function downloadsToggle(): string {
+            ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
+            return ScreenCatcherService.saveToDownloads ? "DOWNLOADS_ON" : "DOWNLOADS_OFF";
+        }
     }
 
     Component.onCompleted: console.info("screenCatcher: daemon ready (ipc target 'screenCatcher')")
