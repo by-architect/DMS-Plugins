@@ -50,6 +50,28 @@ copy_mime() {
     wl-copy --type "$1" <"$2" 2>/dev/null
 }
 
+# Respects a localized/custom Downloads folder via xdg-user-dir when
+# available, falling back to the near-universal ~/Downloads.
+downloads_dir() {
+    if require xdg-user-dir; then
+        local d
+        d=$(xdg-user-dir DOWNLOAD 2>/dev/null)
+        if [ -n "$d" ] && [ "$d" != "$HOME" ]; then
+            echo "$d"
+            return
+        fi
+    fi
+    echo "$HOME/Downloads"
+}
+
+save_downloads() {
+    # save_downloads <file>
+    local dir
+    dir=$(downloads_dir)
+    mkdir -p "$dir" 2>/dev/null
+    cp "$1" "$dir/" 2>/dev/null
+}
+
 # default_source/default_sink read the PipeWire session's default-node
 # metadata directly (pw-dump + jq), which is the same information `pactl
 # get-default-source/-sink` would report — just without needing pactl
@@ -106,7 +128,7 @@ teardown_mix_audio() {
 case "$cmd" in
 
 shot-full)
-    outdir="$1"; clipboard="$2"; NOTIFY="$3"
+    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"
 
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot failed" "grim is not installed"; exit 1; }
 
@@ -120,12 +142,13 @@ shot-full)
     fi
 
     [ "$clipboard" = "1" ] && copy_mime "image/png" "$file"
+    [ "$downloads" = "1" ] && save_downloads "$file"
     notify "Screenshot saved" "$file" "$file"
     echo "SAVED $file"
     ;;
 
 shot-select)
-    outdir="$1"; clipboard="$2"; NOTIFY="$3"
+    outdir="$1"; clipboard="$2"; NOTIFY="$3"; downloads="${4:-0}"
 
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot failed" "grim is not installed"; exit 1; }
     require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot failed" "slurp is not installed"; exit 1; }
@@ -143,6 +166,7 @@ shot-select)
     fi
 
     [ "$clipboard" = "1" ] && copy_mime "image/png" "$file"
+    [ "$downloads" = "1" ] && save_downloads "$file"
     notify "Screenshot saved" "$file" "$file"
     echo "SAVED $file"
     ;;
@@ -186,7 +210,7 @@ shot-ocr)
 rec-start)
     outdir="$1"; mode="$2"; mic="$3"; sysaudio="$4"
     gif_fps="$5"; gif_scale="$6"; mic_device="${7:-}"; sys_device="${8:-}"
-    NOTIFY="${9:-1}"
+    NOTIFY="${9:-1}"; clipboard="${10:-0}"; downloads="${11:-0}"
 
     require wf-recorder || { echo "ERROR wf-recorder-not-found"; notify "Recording failed" "wf-recorder is not installed"; exit 1; }
     require slurp || { echo "ERROR slurp-not-found"; notify "Recording failed" "slurp is not installed"; exit 1; }
@@ -270,7 +294,7 @@ rec-start)
             rm -f "$palette"
             if [ -s "$finalfile" ]; then
                 rm -f "$rawfile"
-                copy_mime "image/gif" "$finalfile"
+                [ "$clipboard" = "1" ] && copy_mime "image/gif" "$finalfile"
             else
                 # Conversion failed — keep the raw recording instead of losing it.
                 finalfile="$rawfile"
@@ -282,6 +306,7 @@ rec-start)
         fi
     fi
 
+    [ "$downloads" = "1" ] && save_downloads "$finalfile"
     notify "Recording saved" "$finalfile"
     echo "SAVED $finalfile"
     ;;

@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
 import qs.Common
@@ -14,6 +13,12 @@ import qs.Widgets
 // The layer surface itself is fullscreen (needed to dim the background and
 // catch Esc/letter keys anywhere), but the actual card is centered and sized
 // to half the window's width/height — that's the "panel" the user asked for.
+//
+// Two-column layout uses plain Row/Column with explicit width formulas
+// instead of QtQuick.Layouts — Layout.fillWidth on a Column nested inside a
+// RowLayout was producing a badly off-center split (the Column's own
+// implicit-width-from-children computation fights the Layout's fill
+// assignment), so the split is computed directly here instead.
 PanelWindow {
     id: win
 
@@ -50,24 +55,14 @@ PanelWindow {
         right: true
     }
 
-    // Every action closes the panel first and waits a beat for the compositor
-    // to actually hide the surface, so screenshots/recordings never capture
-    // the panel itself. Toggles (mic/system audio) skip this and act inline.
+    // Closes the panel (which destroys this window, being LazyLoader-backed)
+    // and hands the actual action off to ScreenCatcherService, which outlives
+    // us and runs it after a short delay — see the comment there for why the
+    // delay can't live in this window itself. Toggles (mic/system audio) skip
+    // this and act inline instead, since they don't need the panel hidden.
     function runAction(action) {
         win.closeRequested();
-        actionDelay.pendingAction = action;
-        actionDelay.restart();
-    }
-
-    Timer {
-        id: actionDelay
-        interval: 180
-        property var pendingAction: null
-        onTriggered: {
-            if (pendingAction)
-                pendingAction();
-            pendingAction = null;
-        }
+        ScreenCatcherService.runAfterClose(action);
     }
 
     Component.onCompleted: rootFocus.forceActiveFocus()
@@ -121,6 +116,12 @@ PanelWindow {
                     if (ScreenCatcherService.isRecording)
                         ScreenCatcherService.stopRecording();
                     break;
+                case Qt.Key_C:
+                    ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
+                    break;
+                case Qt.Key_L:
+                    ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
+                    break;
                 default:
                     return;
                 }
@@ -145,23 +146,32 @@ PanelWindow {
                     onClicked: mouse => mouse.accepted = true
                 }
 
-                ColumnLayout {
+                Column {
+                    id: cardContent
                     anchors.fill: parent
                     anchors.margins: Theme.spacingL
                     spacing: Theme.spacingM
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.spacingM
+                    Item {
+                        id: header
+                        width: parent.width
+                        height: 40
 
                         DankIcon {
+                            id: headerIcon
                             name: "screenshot_monitor"
                             size: 26
                             color: Theme.primary
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
                         }
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
+                        Column {
+                            anchors.left: headerIcon.right
+                            anchors.leftMargin: Theme.spacingM
+                            anchors.right: closeButton.left
+                            anchors.rightMargin: Theme.spacingM
+                            anchors.verticalCenter: parent.verticalCenter
                             spacing: 1
 
                             StyledText {
@@ -179,20 +189,25 @@ PanelWindow {
                         }
 
                         DankActionButton {
+                            id: closeButton
                             iconName: "close"
                             iconSize: 20
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
                             onClicked: win.closeRequested()
                         }
                     }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                    Row {
+                        id: columns
+                        width: parent.width
+                        height: parent.height - header.height - parent.spacing
                         spacing: Theme.spacingL
 
                         Column {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
+                            id: leftColumn
+                            width: (columns.width - divider.width - columns.spacing * 2) / 2
+                            height: parent.height
                             spacing: Theme.spacingS
 
                             StyledText {
@@ -229,17 +244,46 @@ PanelWindow {
                                 label: "Screenshot to Text"
                                 onActivated: win.runAction(() => ScreenCatcherService.screenshotToText())
                             }
+
+                            StyledText {
+                                width: parent.width
+                                topPadding: Theme.spacingM
+                                text: "Save"
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Font.Bold
+                                color: Theme.surfaceVariantText
+                            }
+
+                            ToggleRow {
+                                width: parent.width
+                                height: 32
+                                letter: "C"
+                                label: "Save to Clipboard"
+                                checked: ScreenCatcherService.copyToClipboard
+                                onActivated: ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard)
+                            }
+
+                            ToggleRow {
+                                width: parent.width
+                                height: 32
+                                letter: "L"
+                                label: "Save to Downloads"
+                                checked: ScreenCatcherService.saveToDownloads
+                                onActivated: ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads)
+                            }
                         }
 
                         Rectangle {
-                            Layout.preferredWidth: 1
-                            Layout.fillHeight: true
+                            id: divider
+                            width: 1
+                            height: parent.height
                             color: Theme.outline
                         }
 
                         Column {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
+                            id: rightColumn
+                            width: (columns.width - divider.width - columns.spacing * 2) / 2
+                            height: parent.height
                             spacing: Theme.spacingS
 
                             StyledText {

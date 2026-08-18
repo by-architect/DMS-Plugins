@@ -86,6 +86,8 @@ Once the panel is open, press a letter — no need to click:
 | `S` | Screenshot Selected | |
 | `F` | Screenshot Fullscreen | |
 | `T` | Screenshot to Text (OCR) | |
+| `C` | Toggle Save to Clipboard | doesn't close the panel |
+| `L` | Toggle Save to Downloads | doesn't close the panel |
 | `M` | Toggle Microphone | doesn't close the panel |
 | `Y` | Toggle System Audio | doesn't close the panel |
 | `R` | Record Fullscreen | only while not already recording |
@@ -98,7 +100,13 @@ Every letter has a visible badge next to its row/toggle, so it's discoverable
 without memorizing this table. Clicking works identically to pressing the
 letter.
 
-Screenshot/record actions close the panel first and wait ~180ms before
+**Save to Clipboard** and **Save to Downloads** both apply to every
+screenshot and recording (GIFs included) — Downloads is an *additional* copy
+alongside the configured Screenshot/Recording folder, not a replacement for
+it. Both are also available as persisted settings, so you can set a default
+without opening the panel.
+
+Screenshot/record actions close the panel first and wait ~100ms before
 capturing, so the panel itself never ends up in the screenshot or recording.
 Clicking outside the card (on the dimmed backdrop) also closes it.
 
@@ -123,6 +131,8 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `recordGif` | Start Record Selected as GIF |
 | `micToggle` | Toggle microphone capture on/off |
 | `sysAudioToggle` | Toggle system-audio capture on/off |
+| `clipboardToggle` | Toggle Save to Clipboard on/off |
+| `downloadsToggle` | Toggle Save to Downloads on/off |
 | `stop` | **The stop command** — stops whatever recording is running, or no-ops if nothing is |
 
 `stop` is the one worth binding on its own: it's a global "kill whatever's
@@ -177,7 +187,8 @@ process needs to stay alive and be signaled, so it's the one long-lived
 |---|---|---|
 | Screenshot folder | `~/Pictures/Screenshots` | |
 | Recording folder | `~/Videos/Recordings` | |
-| Copy to clipboard | on | Screenshots, OCR text, and finished GIFs |
+| Copy to clipboard | on | Screenshots, OCR text, and recordings. Also panel toggle `C` |
+| Save to Downloads | off | Extra copy into your Downloads folder. Also panel toggle `L` |
 | Desktop notifications | on | One per finished action |
 | OCR language | `eng` | Tesseract language code |
 | GIF frame rate | 12 fps | |
@@ -185,8 +196,9 @@ process needs to stay alive and be signaled, so it's the one long-lived
 | Microphone device | auto | PipeWire/Pulse source name override |
 | System audio device | auto | PipeWire/Pulse monitor source name override |
 
-Mic/System Audio on-off state lives in the panel itself (not the settings
-page), since it's something you're likely to flip per-recording.
+Mic/System Audio on-off state lives in the panel only (not the settings
+page), since it's something you're likely to flip per-recording. Copy to
+Clipboard and Save to Downloads live in both places.
 
 ## Requirements
 

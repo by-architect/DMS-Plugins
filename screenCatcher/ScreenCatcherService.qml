@@ -30,6 +30,7 @@ Singleton {
     property string sysAudioDevice: ""
     property bool micOn: false
     property bool sysAudioOn: false
+    property bool saveToDownloads: false
 
     function _loadSettings() {
         screenshotDir = PluginService.loadPluginData(pluginId, "screenshotDir", "~/Pictures/Screenshots");
@@ -43,6 +44,7 @@ Singleton {
         sysAudioDevice = PluginService.loadPluginData(pluginId, "sysAudioDevice", "");
         micOn = PluginService.loadPluginData(pluginId, "micOn", false);
         sysAudioOn = PluginService.loadPluginData(pluginId, "sysAudioOn", false);
+        saveToDownloads = PluginService.loadPluginData(pluginId, "saveToDownloads", false);
     }
 
     Component.onCompleted: _loadSettings()
@@ -65,6 +67,16 @@ Singleton {
         PluginService.savePluginData(pluginId, "sysAudioOn", value);
     }
 
+    function setCopyToClipboard(value) {
+        root.copyToClipboard = value;
+        PluginService.savePluginData(pluginId, "copyToClipboard", value);
+    }
+
+    function setSaveToDownloads(value) {
+        root.saveToDownloads = value;
+        PluginService.savePluginData(pluginId, "saveToDownloads", value);
+    }
+
     function _dir(path) {
         return Paths.expandTilde(path);
     }
@@ -73,14 +85,37 @@ Singleton {
         return v ? "1" : "0";
     }
 
+    // The panel closes itself immediately when an action is triggered (so it
+    // doesn't end up in the screenshot/recording), which destroys its QML tree
+    // right away since it's LazyLoader-backed. A Timer living inside that
+    // about-to-be-destroyed window never gets the chance to fire, so the delay
+    // has to live here instead, in the singleton, which outlives the panel.
+    property var _pendingAction: null
+
+    function runAfterClose(action) {
+        _pendingAction = action;
+        closeDelay.restart();
+    }
+
+    Timer {
+        id: closeDelay
+        interval: 100
+        repeat: false
+        onTriggered: {
+            if (root._pendingAction)
+                root._pendingAction();
+            root._pendingAction = null;
+        }
+    }
+
     // -------------------------------------------------------- screenshots
 
     function takeScreenshotFullscreen() {
-        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode));
+        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
     }
 
     function takeScreenshotSelected() {
-        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode));
+        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads)], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
     }
 
     function screenshotToText() {
@@ -93,7 +128,7 @@ Singleton {
             }
             if (stdout.trim() === "EMPTY")
                 ToastService.showInfo("Screenshot to text", "No text recognized");
-        });
+        }, 0);
     }
 
     function _handleShotResult(label, stdout, exitCode) {
@@ -141,7 +176,7 @@ Singleton {
         root.isSelecting = mode !== "full";
         root.recordingMode = mode;
 
-        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete)];
+        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyToClipboard), _bool(saveToDownloads)];
         recStderr.text = "";
         recProcess.running = true;
     }
