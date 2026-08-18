@@ -1,67 +1,142 @@
 # Screen Catcher
 
-A DankMaterialShell bar plugin for screenshots and screen recording. Click the
-bar icon to open a two-column popup: screenshots on the left, audio toggles and
-recording on the right.
+A DankMaterialShell plugin for screenshots and screen recording, driven from a
+centered keyboard-first panel rather than a bar dropdown. Open it with a
+shortcut, hit a letter, done. A small bar icon shows recording status and
+gives you a stop button, but it's not where the actions live.
 
 ```
-┌───────────────────┬───────────────────┐
-│ Screenshot         │ Audio              │
-│  Screenshot Selected│  [ ] Microphone   │
-│  Screenshot Fullscreen│ [ ] System Audio│
-│  Screenshot to Text │ Record             │
-│                    │  Record Fullscreen │
-│                    │  Record Selected   │
-│                    │  Record Selected as GIF │
-└───────────────────┴───────────────────┘
+                 ┌──────────────────────────────────────────┐
+                 │  Screen Catcher              Esc closes ⨯│
+                 │                                            │
+                 │  Screenshot          │  Audio               │
+                 │   [S] Selected        │   [M] Microphone  ○  │
+                 │   [F] Fullscreen      │   [Y] System Audio ○ │
+                 │   [T] To Text         │  Record              │
+                 │                       │   [R] Fullscreen     │
+                 │                       │   [D] Selected       │
+                 │                       │   [G] Selected (GIF) │
+                 └──────────────────────────────────────────┘
+        (half the screen's width and height, centered, dimmed backdrop)
 ```
 
-While recording, the bar icon turns into a live status: a red dot, elapsed
-time, and an inline stop button — no need to reopen the popup. The popup
-itself also swaps its record actions for a big "Stop Recording" button while
-one is running.
+## Packages used
+
+| Tool | For | Required? |
+|---|---|---|
+| `grim` | screenshots | required |
+| `slurp` | region selection | required |
+| `wf-recorder` | screen recording | required |
+| `ffmpeg` | GIF conversion (palette-based) | optional — GIF falls back to raw mp4 |
+| `tesseract` | OCR for Screenshot to Text | optional — that one action fails gracefully |
+| `wl-clipboard` (`wl-copy`) | copying screenshots/text/GIFs | optional — skips clipboard copy |
+| `notify-send` (libnotify) | desktop notifications | optional — skips notifications |
+| `jq` | parsing `pw-dump` JSON | needed only for mic+system-audio mixing |
+| `pw-dump`, `pw-loopback` (PipeWire) | default audio device lookup + mic/system-audio mixing | needed only for audio capture |
+
+No PulseAudio/`pactl` — the audio device lookup and the mic+system-audio mix
+(a `pw-loopback` sink plus two taps feeding into it) both use native PipeWire
+tooling instead, since a PipeWire-only system may not have the PulseAudio
+client installed. `wf-recorder` itself still connects over the pulse protocol
+(via `pipewire-pulse`) for actual capture, so device names — including the
+`<sink>.monitor` convention — are the same regardless of which tool found
+them.
 
 ## Install
 
-Symlink it into the DMS plugin directory and rescan:
+Symlink the `screenCatcher` directory itself (not its parent) into the DMS
+plugin directory, then rescan:
 
 ```sh
-ln -s "$PWD/plugins/screenCatcher" ~/.config/DankMaterialShell/plugins/screenCatcher
-dms ipc call plugin-scan scan
+ln -s "$PWD/screenCatcher" ~/.config/DankMaterialShell/plugins/screenCatcher
 ```
 
-Then enable **Screen Catcher** under Settings → Plugins and add it to your
-DankBar.
+If the `dms` CLI isn't on your PATH, trigger the rescan straight through the
+running quickshell instance instead:
 
-## Features
+```sh
+SHELL_PATH=$(quickshell list --all | grep -oE '/[^ ]*/shell\.qml' | head -1)
+quickshell -p "$SHELL_PATH" ipc call plugin-scan scan
+```
 
-- **Screenshot Selected** — drag a region (via `slurp`), saved as PNG and
-  copied to the clipboard.
-- **Screenshot Fullscreen** — captures the whole output.
-- **Screenshot to Text** — select a region, OCR it with `tesseract`, and copy
-  the recognized text to the clipboard.
-- **Record Fullscreen / Record Selected** — `wf-recorder` to MP4, with
-  optional microphone and/or system audio.
-- **Record Selected as GIF** — same as Record Selected, but the finished
-  recording is converted to an optimized GIF (palette-based, via `ffmpeg`) and
-  copied to the clipboard.
-- **Mic / System Audio toggles** — persisted on/off switches that apply to
-  every recording started afterward. With both on, the plugin mixes them into
-  one virtual source via `pw-loopback` (a bare loopback sink plus two taps
-  feeding into it) so `wf-recorder`, which only accepts a single `-a` device,
-  still captures both.
+Then enable **Screen Catcher** under Settings → Plugins. The bar icon is
+optional (Settings → Appearance → DankBar Layout, if you want the recording
+status readout); the panel works over IPC/keybinds with or without it.
 
-Every action closes the popup first and waits ~180ms before capturing, so the
-popup itself never ends up in the screenshot or recording.
+## Opening the panel
+
+The panel isn't a bar dropdown — it's a centered, half-screen overlay,
+opened however you like:
+
+```sh
+quickshell -p <shell-path> ipc call screenCatcher toggle   # also: open, close, status
+```
+
+To bind this to a real keyboard shortcut: **Settings → Keybinds → Add →
+Spawn**, and paste the command above (swap `toggle` for whichever action —
+see the table below). This goes through DMS's own keybind manager, so no
+compositor config editing needed.
+
+## Letter shortcuts
+
+Once the panel is open, press a letter — no need to click:
+
+| Key | Action | Notes |
+|---|---|---|
+| `S` | Screenshot Selected | |
+| `F` | Screenshot Fullscreen | |
+| `T` | Screenshot to Text (OCR) | |
+| `M` | Toggle Microphone | doesn't close the panel |
+| `Y` | Toggle System Audio | doesn't close the panel |
+| `R` | Record Fullscreen | only while not already recording |
+| `D` | Record Selected | only while not already recording |
+| `G` | Record Selected as GIF | only while not already recording |
+| `X` | Stop Recording | only while recording |
+| `Esc` | Close panel | recording (if any) keeps running in the background |
+
+Every letter has a visible badge next to its row/toggle, so it's discoverable
+without memorizing this table. Clicking works identically to pressing the
+letter.
+
+Screenshot/record actions close the panel first and wait ~180ms before
+capturing, so the panel itself never ends up in the screenshot or recording.
+Clicking outside the card (on the dimmed backdrop) also closes it.
+
+## Every action has its own shortcut command
+
+All of these work independently of the panel being open — bind any subset of
+them directly under **Settings → Keybinds → Add → Spawn**:
+
+```sh
+quickshell -p <shell-path> ipc call screenCatcher <action>
+```
+
+| `<action>` | Effect |
+|---|---|
+| `open` / `close` / `toggle` | Show/hide the panel |
+| `status` | Reports panel open/closed + recording state (for scripting) |
+| `shotSelected` | Screenshot Selected — works even with the panel closed |
+| `shotFullscreen` | Screenshot Fullscreen |
+| `shotText` | Screenshot to Text |
+| `recordFullscreen` | Start Record Fullscreen |
+| `recordSelected` | Start Record Selected |
+| `recordGif` | Start Record Selected as GIF |
+| `micToggle` | Toggle microphone capture on/off |
+| `sysAudioToggle` | Toggle system-audio capture on/off |
+| `stop` | **The stop command** — stops whatever recording is running, or no-ops if nothing is |
+
+`stop` is the one worth binding on its own: it's a global "kill whatever's
+recording" hotkey that doesn't require the panel to be open at all.
 
 ## Stopping a recording
 
-Three ways, all equivalent:
+Any of these, all equivalent:
 
-- Click the stop icon inline in the bar pill while it's recording.
-- Open the popup and click "Stop Recording".
-- The bar pill's red dot + elapsed timer is always visible while recording, so
-  you never lose track of an active capture.
+- Press `X` in the panel.
+- Click the inline stop button in the bar pill (if you added it), whether or
+  not the panel is open.
+- `quickshell -p <shell-path> ipc call screenCatcher stop`, e.g. bound to its
+  own shortcut.
 
 Stopping sends `SIGINT` to `wf-recorder` (via the wrapper script), which lets
 it finalize the output file properly rather than leaving a corrupt video.
@@ -70,14 +145,29 @@ it finalize the output file properly rather than leaving a corrupt video.
 
 All the actual work — `grim`, `slurp`, `wf-recorder`, `ffmpeg`, `tesseract`,
 PipeWire audio orchestration (`pw-dump`, `pw-loopback`) — lives in
-`bin/screen-catcher.sh`, not in QML. QML
-starts it as a `Quickshell.Io.Process`, and for recordings keeps a handle to
-it so it can call `.signal(2)` (SIGINT) to stop gracefully. The script reports
-progress back over stdout (`STARTED <path>`, `SAVED <path>`, `CANCELLED`,
-...), which `ScreenCatcherService.qml` (a singleton, so all bar instances and
-the popup share one recording state) parses line-by-line to drive the UI.
+`bin/screen-catcher.sh`, not in QML. `ScreenCatcherService.qml` (a singleton)
+starts it as a `Quickshell.Io.Process` and, for recordings, keeps a handle to
+it so it can call `.signal(2)` (SIGINT) to stop gracefully. The script
+reports progress back over stdout (`STARTED <path>`, `SAVED <path>`,
+`CANCELLED`, ...), which the singleton parses line-by-line to drive the UI —
+being a singleton means the panel, the bar pill, and every IPC call all read
+and drive the exact same recording state.
 
-Screenshot/OCR calls are one-shots (`Proc.runCommand`); only the recording
+The plugin is a **composite** (`daemon` + `widget`):
+
+- `ScreenCatcherDaemon.qml` — instantiated once. Owns the panel's open/closed
+  state (`PluginGlobalVar`) and the `screenCatcher` IPC target with every
+  action above.
+- `ScreenCatcherPanelWindow.qml` — the actual layer-shell surface, created by
+  a `LazyLoader` only while open (a `PanelWindow` declared inline never
+  becomes a real layer surface). Fullscreen + dimmed backdrop for Esc/letter
+  capture and click-outside-to-close, with a centered card sized to half the
+  window's width/height for the actual content.
+- `ScreenCatcherBarWidget.qml` — optional bar pill, status-only (no dropdown
+  of its own): idle icon, or a red dot + elapsed timer + stop button while
+  recording. Clicking it opens the panel.
+
+Screenshot/OCR calls are one-shot (`Proc.runCommand`); only the recording
 process needs to stay alive and be signaled, so it's the one long-lived
 `Process` in the plugin.
 
@@ -95,15 +185,11 @@ process needs to stay alive and be signaled, so it's the one long-lived
 | Microphone device | auto | PipeWire/Pulse source name override |
 | System audio device | auto | PipeWire/Pulse monitor source name override |
 
-Mic/System Audio on-off state lives in the popup itself (not the settings
+Mic/System Audio on-off state lives in the panel itself (not the settings
 page), since it's something you're likely to flip per-recording.
 
 ## Requirements
 
 `grim`, `slurp`, and `wf-recorder` are required (checked by a startup check
-before the plugin activates). Optional: `tesseract` for Screenshot to Text,
-`ffmpeg` for GIF conversion, `wl-clipboard` for clipboard copy, and PipeWire's
-own `pw-dump`/`pw-loopback` (plus `jq`) for audio device auto-detection and
-mic+system-audio mixing — no PulseAudio/`pactl` install needed even on a
-pure-PipeWire system. Missing optional tools degrade gracefully with a
-notification rather than blocking the plugin.
+before the plugin activates). See the packages table above for the full list
+and what degrades gracefully vs. what's load-bearing.
