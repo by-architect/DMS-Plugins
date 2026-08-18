@@ -47,8 +47,9 @@ DankBar.
   copied to the clipboard.
 - **Mic / System Audio toggles** — persisted on/off switches that apply to
   every recording started afterward. With both on, the plugin mixes them into
-  one virtual source via `pactl` (a null-sink + two loopbacks) so
-  `wf-recorder`, which only accepts a single `-a` device, still captures both.
+  one virtual source via `pw-loopback` (a bare loopback sink plus two taps
+  feeding into it) so `wf-recorder`, which only accepts a single `-a` device,
+  still captures both.
 
 Every action closes the popup first and waits ~180ms before capturing, so the
 popup itself never ends up in the screenshot or recording.
@@ -68,7 +69,8 @@ it finalize the output file properly rather than leaving a corrupt video.
 ## How it works
 
 All the actual work — `grim`, `slurp`, `wf-recorder`, `ffmpeg`, `tesseract`,
-`pactl` orchestration — lives in `bin/screen-catcher.sh`, not in QML. QML
+PipeWire audio orchestration (`pw-dump`, `pw-loopback`) — lives in
+`bin/screen-catcher.sh`, not in QML. QML
 starts it as a `Quickshell.Io.Process`, and for recordings keeps a handle to
 it so it can call `.signal(2)` (SIGINT) to stop gracefully. The script reports
 progress back over stdout (`STARTED <path>`, `SAVED <path>`, `CANCELLED`,
@@ -100,7 +102,8 @@ page), since it's something you're likely to flip per-recording.
 
 `grim`, `slurp`, and `wf-recorder` are required (checked by a startup check
 before the plugin activates). Optional: `tesseract` for Screenshot to Text,
-`ffmpeg` for GIF conversion, `wl-clipboard` for clipboard copy, and
-`pactl` (pipewire-pulse) for audio device auto-detection and mic+system-audio
-mixing. Missing optional tools degrade gracefully with a notification rather
-than blocking the plugin.
+`ffmpeg` for GIF conversion, `wl-clipboard` for clipboard copy, and PipeWire's
+own `pw-dump`/`pw-loopback` (plus `jq`) for audio device auto-detection and
+mic+system-audio mixing — no PulseAudio/`pactl` install needed even on a
+pure-PipeWire system. Missing optional tools degrade gracefully with a
+notification rather than blocking the plugin.

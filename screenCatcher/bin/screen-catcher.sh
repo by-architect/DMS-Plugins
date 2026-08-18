@@ -2,9 +2,15 @@
 # screen-catcher.sh — capture / OCR / record helper for the Screen Catcher DMS plugin.
 #
 # Kept outside QML because the actual work (grim/slurp/wf-recorder/ffmpeg/tesseract/
-# pactl orchestration) is much easier to get right and to test in bash than by
-# building shell command arrays in JS. QML only ever starts this script and, for
-# recordings, holds a handle to send SIGINT to it for a graceful stop.
+# PipeWire audio orchestration) is much easier to get right and to test in bash
+# than by building shell command arrays in JS. QML only ever starts this script
+# and, for recordings, holds a handle to send SIGINT to it for a graceful stop.
+#
+# Audio device discovery/mixing uses native PipeWire tools (pw-dump, pw-loopback)
+# rather than pactl, since a PipeWire-only system may not have the PulseAudio
+# client installed. wf-recorder itself still talks pulse-protocol to
+# pipewire-pulse for capture, so device names (including the "<sink>.monitor"
+# convention) are the same regardless of which tool discovered them.
 #
 # Contract with the QML side:
 #   - stdout line "STARTED <path>"  -> recording has actually begun, <path> is final output
@@ -44,34 +50,57 @@ copy_mime() {
     wl-copy --type "$1" <"$2" 2>/dev/null
 }
 
-default_source() { pactl get-default-source 2>/dev/null; }
-default_sink() { pactl get-default-sink 2>/dev/null; }
+# default_source/default_sink read the PipeWire session's default-node
+# metadata directly (pw-dump + jq), which is the same information `pactl
+# get-default-source/-sink` would report — just without needing pactl
+# installed. Node names printed here are exactly what pipewire-pulse exposes
+# over the pulse protocol, which is what wf-recorder's -a device expects.
+default_source() {
+    require pw-dump && require jq || return 1
+    pw-dump 2>/dev/null | jq -r '.[] | select(.type=="PipeWire:Interface:Metadata" and .props["metadata.name"]=="default") | .metadata[]? | select(.key=="default.audio.source") | (.value | fromjson).name' 2>/dev/null | head -1
+}
 
-mix_ids=""
+default_sink() {
+    require pw-dump && require jq || return 1
+    pw-dump 2>/dev/null | jq -r '.[] | select(.type=="PipeWire:Interface:Metadata" and .props["metadata.name"]=="default") | .metadata[]? | select(.key=="default.audio.sink") | (.value | fromjson).name' 2>/dev/null | head -1
+}
+
+mix_pids=""
 
 setup_mix_audio() {
-    # Combines mic input + system audio monitor into one virtual monitor source,
-    # since wf-recorder only accepts a single -a device. Prints the device name
-    # to capture, or nothing on failure.
-    require pactl || return 1
-    local src sink id0 id1
+    # Combines mic input + system audio monitor into one virtual source,
+    # since wf-recorder only accepts a single -a device. Three pw-loopback
+    # taps: a bare mixing sink, plus one feed from the mic and one tapping the
+    # default sink's monitor (stream.capture.sink=true is what makes
+    # pw-loopback link to a sink's monitor ports instead of expecting a
+    # source). Prints the device name to capture, or nothing on failure.
+    require pw-loopback || return 1
+    local src sink
     src=$(default_source)
     sink=$(default_sink)
     [ -n "$src" ] && [ -n "$sink" ] || return 1
-    id0=$(pactl load-module module-null-sink sink_name=screen_catcher_mix sink_properties=device.description=ScreenCatcherMix 2>/dev/null) || return 1
-    id1=$(pactl load-module module-loopback source="$src" sink=screen_catcher_mix 2>/dev/null)
-    id2=$(pactl load-module module-loopback source="${sink}.monitor" sink=screen_catcher_mix 2>/dev/null)
-    mix_ids="$id0 ${id1:-} ${id2:-}"
+
+    pw-loopback -n screen_catcher_mix >/dev/null 2>&1 &
+    mix_pids="$!"
+    sleep 0.3
+
+    pw-loopback -n screen_catcher_mix_mic -C "$src" -P screen_catcher_mix >/dev/null 2>&1 &
+    mix_pids="$mix_pids $!"
+
+    pw-loopback -n screen_catcher_mix_sys -C "$sink" -i '{ stream.capture.sink=true }' -P screen_catcher_mix >/dev/null 2>&1 &
+    mix_pids="$mix_pids $!"
+
+    sleep 0.3
     echo "screen_catcher_mix.monitor"
 }
 
 teardown_mix_audio() {
-    [ -n "$mix_ids" ] || return 0
-    local id
-    for id in $mix_ids; do
-        [ -n "$id" ] && pactl unload-module "$id" 2>/dev/null
+    [ -n "$mix_pids" ] || return 0
+    local pid
+    for pid in $mix_pids; do
+        kill "$pid" 2>/dev/null
     done
-    mix_ids=""
+    mix_pids=""
 }
 
 case "$cmd" in
