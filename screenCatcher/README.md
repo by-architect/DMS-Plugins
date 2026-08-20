@@ -39,7 +39,7 @@ not where the actions live.
 | `notify-send` (libnotify) | desktop notifications | optional — skips notifications |
 | `jq` | parsing `pw-dump`/`hyprctl` JSON | needed for mic+system-audio mixing and multi-monitor output detection |
 | `pw-dump`, `pw-loopback` (PipeWire) | default audio device lookup + mic/system-audio mixing | needed only for audio capture |
-| `hyprctl` (Hyprland) | detecting the focused monitor for fullscreen recording | Hyprland only — see below |
+| `hyprctl` (Hyprland) | detecting the focused monitor for fullscreen screenshots and recording | Hyprland only — see below |
 
 No PulseAudio/`pactl` — the audio device lookup and the mic+system-audio mix
 (a `pw-loopback` sink plus two taps feeding into it) both use native PipeWire
@@ -49,14 +49,22 @@ client installed. `wf-recorder` itself still connects over the pulse protocol
 `<sink>.monitor` convention — are the same regardless of which tool found
 them.
 
+**Multi-monitor "fullscreen" means the screen you are on**, for both
+screenshots and recording. `grim` with no `-o` captures the whole compositor
+layout — every monitor stitched into one image — which is not what fullscreen
+means to anyone with a second screen, so the focused output is passed
+explicitly.
+
 **Multi-monitor fullscreen recording** needs to know which output to record.
 `wf-recorder` prompts *interactively* for a choice when more than one output
 exists and none is given, which just hangs forever with no terminal attached
 — this was a real, confirmed bug ("record fullscreen not working"). Fixed by
 detecting the focused output via `hyprctl monitors -j` (Hyprland) or
 `niri msg --json focused-output` (Niri, best-effort — no Niri session was
-available to test against) and passing it explicitly. On neither compositor,
-it falls back to whatever `wf-recorder -L` lists first rather than hanging.
+available to test against) and passing it explicitly — the same lookup both
+actions use. On neither compositor, it falls back to whatever `wf-recorder -L`
+lists first rather than hanging (and screenshots fall back to grim's
+capture-everything behaviour).
 Single-monitor systems are unaffected either way. "Record Selected" was never
 affected, since `wf-recorder` derives the output from the selected region.
 
@@ -158,9 +166,12 @@ segment-splitting and ffmpeg concat pass that only existed because
 `wf-recorder` has no pause of its own. A recording now runs as a single
 `wf-recorder` process from start to stop.
 
-Screenshot/record actions close the panel first and wait ~100ms before
+Screenshot/record actions close the panel first and wait 350ms before
 capturing, so the panel itself never ends up in the screenshot or recording.
-Clicking outside the card (on the dimmed backdrop) also closes it.
+Destroying the window is not the same as the compositor having repainted
+without it — at the 100ms this used to wait, the panel was still in the
+captured image. Clicking outside the card (on the dimmed backdrop) also
+closes it.
 
 ## Every action has its own shortcut command
 
@@ -314,7 +325,10 @@ The plugin is a **composite** (`daemon` + `widget`):
   of its own): idle icon, or a pulsing red dot + elapsed timer while
   recording, plus an inline stop button on horizontal bars only (see
   *Stopping a recording* for why the vertical pill has none). Clicking it
-  opens the panel.
+  opens the panel. On a vertical bar the pill's height *is* its inner
+  padding, so it carries an explicit vertical pad and never sits shorter than
+  the bar is thick — otherwise the icon ends up flush against the widgets
+  above and below it.
 
 Screenshot/OCR calls are one-shot (`Proc.runCommand`); only the recording
 process needs to stay alive and be signaled, so it's the one long-lived

@@ -96,6 +96,12 @@ Singleton {
     // right away since it's LazyLoader-backed. A Timer living inside that
     // about-to-be-destroyed window never gets the chance to fire, so the delay
     // has to live here instead, in the singleton, which outlives the panel.
+    //
+    // Destroying the window is not the same as the compositor having
+    // repainted without it: at 100ms the panel was still in the captured
+    // image. 350ms leaves room for the layer surface to actually go away and
+    // the frame underneath to be composited, and is still short enough not to
+    // feel like a wait.
     property var _pendingAction: null
 
     function runAfterClose(action) {
@@ -105,7 +111,7 @@ Singleton {
 
     Timer {
         id: closeDelay
-        interval: 100
+        interval: 350
         repeat: false
         onTriggered: {
             if (root._pendingAction)

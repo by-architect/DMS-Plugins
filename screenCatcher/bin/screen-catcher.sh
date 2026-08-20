@@ -133,6 +133,9 @@ default_meta() {
 default_source() { default_meta "default.audio.source"; }
 default_sink() { default_meta "default.audio.sink"; }
 
+# Names the output the user is looking at, used both for grim's -o (fullscreen
+# screenshot of *this* screen, not of all of them) and for wf-recorder's -o.
+#
 # wf-recorder prompts *interactively* for which output to record ("Please
 # select an output from the list...") whenever more than one output exists
 # and -o is omitted — fatal for a backgrounded process with no terminal, it
@@ -276,6 +279,14 @@ shot-full | shot-select)
         require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot failed" "slurp is not installed"; exit 1; }
         select_region || { echo "CANCELLED"; exit 2; }
         geo_args=(-g "$REGION")
+    else
+        # Without -o, grim captures the whole compositor layout — i.e. every
+        # monitor stitched into one image, which is not what "fullscreen"
+        # means to anyone with a second screen. Capture the focused output
+        # only, falling back to grim's everything behaviour when no
+        # compositor tool could name it.
+        out=$(detect_output)
+        [ -n "$out" ] && geo_args=(-o "$out")
     fi
 
     ext="$format"
