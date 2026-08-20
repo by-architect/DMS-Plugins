@@ -104,8 +104,14 @@ PluginComponent {
     // keeps it.
     verticalBarPill: Component {
         StyledRect {
+            // On a vertical bar the pill's *height* is its inner padding: the
+            // icon otherwise sits flush against the widgets above and below it.
+            // Never shorter than the bar is thick, so the idle pill reads as a
+            // square button rather than a squeezed sliver.
+            readonly property real verticalPadding: Theme.spacingL
+
             width: parent.widgetThickness
-            height: vPillContent.implicitHeight + Theme.spacingM * 2
+            height: Math.max(parent.widgetThickness, vPillContent.implicitHeight + verticalPadding * 2)
             radius: Theme.cornerRadius
             color: ScreenCatcherService.isRecording ? Theme.withAlpha(Theme.error, 0.16) : "transparent"
 
