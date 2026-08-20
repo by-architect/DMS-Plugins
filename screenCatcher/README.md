@@ -166,12 +166,29 @@ segment-splitting and ffmpeg concat pass that only existed because
 `wf-recorder` has no pause of its own. A recording now runs as a single
 `wf-recorder` process from start to stop.
 
-Screenshot/record actions close the panel first and wait 350ms before
-capturing, so the panel itself never ends up in the screenshot or recording.
-Destroying the window is not the same as the compositor having repainted
-without it — at the 100ms this used to wait, the panel was still in the
-captured image. Clicking outside the card (on the dimmed backdrop) also
-closes it.
+Screenshot/record actions close the panel first and wait before capturing, so
+the panel itself never ends up in the screenshot or recording. Destroying the
+window is not the same as it being off the screen — the compositor animates
+the layer surface out, and `grim` happily captures that fade. Measured on
+Hyprland 0.55 with its default layer animation, comparing the panel's screen
+region against a clean reference frame:
+
+| after close | 50ms | 150ms | 250ms | 350ms | 450ms | 650ms | 800ms |
+|---|---|---|---|---|---|---|---|
+| PSNR vs. clean | 20 dB | 26 dB | 32 dB | 36 dB | 48 dB | 63 dB | identical |
+
+The fade runs about 700ms there, so both the 100ms and the 350ms this used to
+wait landed mid-fade with the panel plainly visible in the shot. The default
+is now **900ms**, which cleared it with margin. Since the animation belongs to
+the compositor, the wait is a setting (*Delay before capturing*, 100–2000ms) —
+and on Hyprland, adding
+
+```
+layerrule = noanim, dms:screen-catcher
+```
+
+to your config removes the animation entirely, after which ~150ms is plenty.
+Clicking outside the card (on the dimmed backdrop) also closes the panel.
 
 ## Every action has its own shortcut command
 
@@ -345,6 +362,7 @@ process needs to stay alive and be signaled, so it's the one long-lived
 | Recordings: copy to clipboard | off | mp4/mkv/gif onto the clipboard. Also panel toggle `B` |
 | Recordings: keep the file | on | Off = clipboard only. Also panel toggle `V` |
 | Desktop notifications | on | One per finished action. Also panel toggle `N` |
+| Delay before capturing | 900 ms | Waits out the panel's close animation — see *Letter shortcuts* |
 | Default screenshot format | PNG | Also panel chips `1`/`2` |
 | Default recording format | MP4 | Also panel chips `3`/`4` |
 | OCR language | `eng` | Tesseract language code |

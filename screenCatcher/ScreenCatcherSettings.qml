@@ -65,6 +65,17 @@ PluginSettings {
         defaultValue: true
     }
 
+    SliderSetting {
+        settingKey: "captureDelayMs"
+        label: "Delay before capturing"
+        description: "How long to wait after the panel closes before the screenshot/recording starts, so the panel's close animation isn't caught in the shot. Raise it if the panel still shows up; lower it if your compositor doesn't animate layer surfaces out (on Hyprland, `layerrule = noanim, dms:screen-catcher` removes the animation entirely)."
+        defaultValue: 900
+        minimum: 100
+        maximum: 2000
+        unit: "ms"
+        leftIcon: "timer"
+    }
+
     SelectionSetting {
         settingKey: "imageFormat"
         label: "Default screenshot format"
