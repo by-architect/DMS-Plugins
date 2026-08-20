@@ -93,22 +93,11 @@ PluginComponent {
             return "OK";
         }
 
-        // wf-recorder has no pause/resume of its own — the script implements
-        // it by stopping/restarting wf-recorder across segments and joining
-        // them on stop. See ScreenCatcherService.qml for why these use
-        // different signals than stop.
-        function pause(): string {
-            if (!ScreenCatcherService.isRecording)
-                return "NOT_RECORDING";
-            ScreenCatcherService.pauseRecording();
-            return "PAUSING";
-        }
-
-        function resume(): string {
-            if (!ScreenCatcherService.isRecording)
-                return "NOT_RECORDING";
-            ScreenCatcherService.resumeRecording();
-            return "RESUMING";
+        // GIF is its own action rather than a format you switch to and forget
+        // to switch back from — it always records a selected region.
+        function recordSelectedGif(): string {
+            ScreenCatcherService.recordSelectedGif();
+            return "OK";
         }
 
         function micToggle(): string {
@@ -126,9 +115,19 @@ PluginComponent {
             return ScreenCatcherService.copyToClipboard ? "CLIPBOARD_ON" : "CLIPBOARD_OFF";
         }
 
-        function downloadsToggle(): string {
-            ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
-            return ScreenCatcherService.saveToDownloads ? "DOWNLOADS_ON" : "DOWNLOADS_OFF";
+        function picturesToggle(): string {
+            ScreenCatcherService.setSaveToPictures(!ScreenCatcherService.saveToPictures);
+            return ScreenCatcherService.saveToPictures ? "PICTURES_ON" : "PICTURES_OFF";
+        }
+
+        function videoClipboardToggle(): string {
+            ScreenCatcherService.setCopyVideoToClipboard(!ScreenCatcherService.copyVideoToClipboard);
+            return ScreenCatcherService.copyVideoToClipboard ? "VIDEO_CLIPBOARD_ON" : "VIDEO_CLIPBOARD_OFF";
+        }
+
+        function videosToggle(): string {
+            ScreenCatcherService.setSaveToVideos(!ScreenCatcherService.saveToVideos);
+            return ScreenCatcherService.saveToVideos ? "VIDEOS_ON" : "VIDEOS_OFF";
         }
 
         function notifyToggle(): string {
@@ -143,6 +142,7 @@ PluginComponent {
             return "OK";
         }
 
+        // mp4/mkv only — GIF has its own action.
         function setRecordFormat(format: string): string {
             ScreenCatcherService.setRecordFormat(format);
             return "OK";

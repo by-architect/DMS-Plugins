@@ -97,8 +97,8 @@ PanelWindow {
                 case Qt.Key_C:
                     ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
                     break;
-                case Qt.Key_L:
-                    ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads);
+                case Qt.Key_P:
+                    ScreenCatcherService.setSaveToPictures(!ScreenCatcherService.saveToPictures);
                     break;
                 case Qt.Key_N:
                     ScreenCatcherService.setNotifyOnComplete(!ScreenCatcherService.notifyOnComplete);
@@ -109,6 +109,12 @@ PanelWindow {
                 case Qt.Key_Y:
                     ScreenCatcherService.setSysAudioOn(!ScreenCatcherService.sysAudioOn);
                     break;
+                case Qt.Key_B:
+                    ScreenCatcherService.setCopyVideoToClipboard(!ScreenCatcherService.copyVideoToClipboard);
+                    break;
+                case Qt.Key_V:
+                    ScreenCatcherService.setSaveToVideos(!ScreenCatcherService.saveToVideos);
+                    break;
                 case Qt.Key_R:
                     if (!ScreenCatcherService.isRecording)
                         win.runAction(() => ScreenCatcherService.startRecording("full"));
@@ -117,13 +123,9 @@ PanelWindow {
                     if (!ScreenCatcherService.isRecording)
                         win.runAction(() => ScreenCatcherService.startRecording("select"));
                     break;
-                case Qt.Key_P:
-                    if (ScreenCatcherService.isRecording) {
-                        if (ScreenCatcherService.isPaused)
-                            ScreenCatcherService.resumeRecording();
-                        else
-                            ScreenCatcherService.pauseRecording();
-                    }
+                case Qt.Key_G:
+                    if (!ScreenCatcherService.isRecording)
+                        win.runAction(() => ScreenCatcherService.recordSelectedGif());
                     break;
                 case Qt.Key_X:
                     if (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting)
@@ -144,10 +146,6 @@ PanelWindow {
                 case Qt.Key_4:
                     if (!ScreenCatcherService.isRecording)
                         ScreenCatcherService.setRecordFormat("mkv");
-                    break;
-                case Qt.Key_5:
-                    if (!ScreenCatcherService.isRecording)
-                        ScreenCatcherService.setRecordFormat("gif");
                     break;
                 default:
                     return;
@@ -209,7 +207,7 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ((ScreenCatcherService.isPaused ? "Paused " : "Recording ") + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — P to pause/resume, X to stop") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes")
+                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting) ? Theme.error : Theme.surfaceVariantText
                             }
@@ -299,7 +297,7 @@ PanelWindow {
                             StyledText {
                                 width: parent.width
                                 topPadding: Theme.spacingM
-                                text: "Save"
+                                text: "Save screenshots"
                                 font.pixelSize: Theme.fontSizeSmall
                                 font.weight: Font.Bold
                                 color: Theme.surfaceVariantText
@@ -317,10 +315,10 @@ PanelWindow {
                             ToggleRow {
                                 width: parent.width
                                 height: 32
-                                letter: "L"
-                                label: "Save to Downloads"
-                                checked: ScreenCatcherService.saveToDownloads
-                                onActivated: ScreenCatcherService.setSaveToDownloads(!ScreenCatcherService.saveToDownloads)
+                                letter: "P"
+                                label: "Save to Pictures"
+                                checked: ScreenCatcherService.saveToPictures
+                                onActivated: ScreenCatcherService.setSaveToPictures(!ScreenCatcherService.saveToPictures)
                             }
 
                             ToggleRow {
@@ -402,6 +400,19 @@ PanelWindow {
                                 onActivated: win.runAction(() => ScreenCatcherService.startRecording("select"))
                             }
 
+                            // Its own action rather than a third format chip:
+                            // a GIF chip left selected turns the next ordinary
+                            // recording into a GIF by surprise.
+                            ActionRow {
+                                width: parent.width
+                                height: 40
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
+                                letter: "G"
+                                icon: "gif_box"
+                                label: "Record Selected as GIF"
+                                onActivated: win.runAction(() => ScreenCatcherService.recordSelectedGif())
+                            }
+
                             Row {
                                 width: parent.width
                                 height: 28
@@ -409,7 +420,7 @@ PanelWindow {
                                 visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
 
                                 FormatChip {
-                                    width: (parent.width - parent.spacing * 2) / 3
+                                    width: (parent.width - parent.spacing) / 2
                                     height: parent.height
                                     chipKey: "3"
                                     label: "MP4"
@@ -418,32 +429,43 @@ PanelWindow {
                                 }
 
                                 FormatChip {
-                                    width: (parent.width - parent.spacing * 2) / 3
+                                    width: (parent.width - parent.spacing) / 2
                                     height: parent.height
                                     chipKey: "4"
                                     label: "MKV"
                                     selected: ScreenCatcherService.recordFormat === "mkv"
                                     onActivated: ScreenCatcherService.setRecordFormat("mkv")
                                 }
-
-                                FormatChip {
-                                    width: (parent.width - parent.spacing * 2) / 3
-                                    height: parent.height
-                                    chipKey: "5"
-                                    label: "GIF"
-                                    selected: ScreenCatcherService.recordFormat === "gif"
-                                    onActivated: ScreenCatcherService.setRecordFormat("gif")
-                                }
                             }
 
-                            ActionRow {
+                            StyledText {
                                 width: parent.width
-                                height: 40
-                                visible: ScreenCatcherService.isRecording
-                                letter: "P"
-                                icon: ScreenCatcherService.isPaused ? "play_arrow" : "pause"
-                                label: ScreenCatcherService.isPaused ? "Resume Recording" : "Pause Recording"
-                                onActivated: ScreenCatcherService.isPaused ? ScreenCatcherService.resumeRecording() : ScreenCatcherService.pauseRecording()
+                                topPadding: Theme.spacingM
+                                text: "Save recordings"
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Font.Bold
+                                color: Theme.surfaceVariantText
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
+                            }
+
+                            ToggleRow {
+                                width: parent.width
+                                height: 32
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
+                                letter: "B"
+                                label: "Save to Clipboard"
+                                checked: ScreenCatcherService.copyVideoToClipboard
+                                onActivated: ScreenCatcherService.setCopyVideoToClipboard(!ScreenCatcherService.copyVideoToClipboard)
+                            }
+
+                            ToggleRow {
+                                width: parent.width
+                                height: 32
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
+                                letter: "V"
+                                label: "Save to Videos"
+                                checked: ScreenCatcherService.saveToVideos
+                                onActivated: ScreenCatcherService.setSaveToVideos(!ScreenCatcherService.saveToVideos)
                             }
 
                             // Visible during the selection/startup phase as well,

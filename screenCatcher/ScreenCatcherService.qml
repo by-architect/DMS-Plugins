@@ -9,7 +9,7 @@ import qs.Services
 
 // Owns every side effect for the plugin: settings, the actual screenshot/OCR
 // one-shots, and the single long-lived recording process. Being a singleton
-// means every bar instance (multi-monitor) and the popout all see the exact
+// means every bar instance (multi-monitor) and the panel all see the exact
 // same recording state and share the exact same `recProcess` — there is only
 // ever one recording at a time, so that's exactly the shape we want.
 Singleton {
@@ -19,18 +19,23 @@ Singleton {
     readonly property string scriptPath: Paths.strip(Qt.resolvedUrl("./bin/screen-catcher.sh"))
 
     // ---------------------------------------------------------- settings
+    // Screenshots and recordings each have their own clipboard + keep-a-file
+    // pair, since wanting a screenshot on the clipboard is routine while
+    // wanting a whole video on it is not (and the reverse for keeping files).
     property string screenshotDir: "~/Pictures/Screenshots"
     property string recordingDir: "~/Videos/Recordings"
     property bool copyToClipboard: true
+    property bool saveToPictures: true
+    property bool copyVideoToClipboard: false
+    property bool saveToVideos: true
     property bool notifyOnComplete: true
     property string ocrLang: "eng"
-    property int gifFps: 12
-    property int gifScale: 480
+    property int gifFps: 20
+    property int gifScale: 1920
     property string micDevice: ""
     property string sysAudioDevice: ""
     property bool micOn: false
     property bool sysAudioOn: false
-    property bool saveToDownloads: false
     property string imageFormat: "png"
     property string recordFormat: "mp4"
 
@@ -38,15 +43,17 @@ Singleton {
         screenshotDir = PluginService.loadPluginData(pluginId, "screenshotDir", "~/Pictures/Screenshots");
         recordingDir = PluginService.loadPluginData(pluginId, "recordingDir", "~/Videos/Recordings");
         copyToClipboard = PluginService.loadPluginData(pluginId, "copyToClipboard", true);
+        saveToPictures = PluginService.loadPluginData(pluginId, "saveToPictures", true);
+        copyVideoToClipboard = PluginService.loadPluginData(pluginId, "copyVideoToClipboard", false);
+        saveToVideos = PluginService.loadPluginData(pluginId, "saveToVideos", true);
         notifyOnComplete = PluginService.loadPluginData(pluginId, "notifyOnComplete", true);
         ocrLang = PluginService.loadPluginData(pluginId, "ocrLang", "eng");
-        gifFps = PluginService.loadPluginData(pluginId, "gifFps", 12);
-        gifScale = PluginService.loadPluginData(pluginId, "gifScale", 480);
+        gifFps = PluginService.loadPluginData(pluginId, "gifFps", 20);
+        gifScale = PluginService.loadPluginData(pluginId, "gifScale", 1920);
         micDevice = PluginService.loadPluginData(pluginId, "micDevice", "");
         sysAudioDevice = PluginService.loadPluginData(pluginId, "sysAudioDevice", "");
         micOn = PluginService.loadPluginData(pluginId, "micOn", false);
         sysAudioOn = PluginService.loadPluginData(pluginId, "sysAudioOn", false);
-        saveToDownloads = PluginService.loadPluginData(pluginId, "saveToDownloads", false);
         imageFormat = PluginService.loadPluginData(pluginId, "imageFormat", "png");
         recordFormat = PluginService.loadPluginData(pluginId, "recordFormat", "mp4");
     }
@@ -61,40 +68,20 @@ Singleton {
         }
     }
 
-    function setMicOn(value) {
-        root.micOn = value;
-        PluginService.savePluginData(pluginId, "micOn", value);
+    function _set(key, value) {
+        root[key] = value;
+        PluginService.savePluginData(pluginId, key, value);
     }
 
-    function setSysAudioOn(value) {
-        root.sysAudioOn = value;
-        PluginService.savePluginData(pluginId, "sysAudioOn", value);
-    }
-
-    function setCopyToClipboard(value) {
-        root.copyToClipboard = value;
-        PluginService.savePluginData(pluginId, "copyToClipboard", value);
-    }
-
-    function setSaveToDownloads(value) {
-        root.saveToDownloads = value;
-        PluginService.savePluginData(pluginId, "saveToDownloads", value);
-    }
-
-    function setNotifyOnComplete(value) {
-        root.notifyOnComplete = value;
-        PluginService.savePluginData(pluginId, "notifyOnComplete", value);
-    }
-
-    function setImageFormat(value) {
-        root.imageFormat = value;
-        PluginService.savePluginData(pluginId, "imageFormat", value);
-    }
-
-    function setRecordFormat(value) {
-        root.recordFormat = value;
-        PluginService.savePluginData(pluginId, "recordFormat", value);
-    }
+    function setMicOn(value) { _set("micOn", value); }
+    function setSysAudioOn(value) { _set("sysAudioOn", value); }
+    function setCopyToClipboard(value) { _set("copyToClipboard", value); }
+    function setSaveToPictures(value) { _set("saveToPictures", value); }
+    function setCopyVideoToClipboard(value) { _set("copyVideoToClipboard", value); }
+    function setSaveToVideos(value) { _set("saveToVideos", value); }
+    function setNotifyOnComplete(value) { _set("notifyOnComplete", value); }
+    function setImageFormat(value) { _set("imageFormat", value); }
+    function setRecordFormat(value) { _set("recordFormat", value); }
 
     function _dir(path) {
         return Paths.expandTilde(path);
@@ -127,6 +114,24 @@ Singleton {
         }
     }
 
+    // ------------------------------------------------------------- toasts
+    //
+    // Success is reported once, when the file is actually finished — never on
+    // start, and never mid-recording. The script prints "SAVED <path>" when it
+    // kept a file and "COPIED <name>" when the capture only went to the
+    // clipboard, which is all the UI needs to say something accurate.
+    function _reportResult(label, stdout) {
+        const lines = (stdout || "").trim().split("\n");
+        const last = lines[lines.length - 1] || "";
+        if (last.indexOf("SAVED ") === 0) {
+            const path = last.substring(6);
+            ToastService.showInfo(label + " saved", path.split("/").pop());
+            return;
+        }
+        if (last.indexOf("COPIED ") === 0)
+            ToastService.showInfo(label + " copied to clipboard", last.substring(7));
+    }
+
     // -------------------------------------------------------- screenshots
 
     // slurp/tesseract are interactive/human-paced — the shared Proc helper's
@@ -136,11 +141,11 @@ Singleton {
     // paths disable the timeout entirely; fullscreen doesn't need slurp so it
     // keeps the default.
     function takeScreenshotFullscreen() {
-        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
+        Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToPictures), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
     }
 
     function takeScreenshotSelected() {
-        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToDownloads), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0, Proc.noTimeout);
+        Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToPictures), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0, Proc.noTimeout);
     }
 
     function screenshotToText() {
@@ -151,31 +156,35 @@ Singleton {
                 ToastService.showError("Screenshot to text failed", stdout.trim());
                 return;
             }
-            if (stdout.trim() === "EMPTY")
+            if (stdout.trim() === "EMPTY") {
                 ToastService.showInfo("Screenshot to text", "No text recognized");
+                return;
+            }
+            if (root.copyToClipboard)
+                ToastService.showInfo("Text copied to clipboard");
         }, 0, Proc.noTimeout);
     }
 
     function _handleShotResult(label, stdout, exitCode) {
         if (exitCode === 2)
             return; // cancelled, stay quiet
-        if (exitCode !== 0)
+        if (exitCode !== 0) {
             ToastService.showError(label + " failed", stdout.trim());
+            return;
+        }
+        root._reportResult(label, stdout);
     }
 
     // ---------------------------------------------------------- recording
 
-    // Derived, never assigned: a plain flag here got stuck at true whenever the
-    // recording script died in a way that didn't reach onExited, and because
-    // startRecording() refuses to start while it's set, every later recording
-    // silently did nothing at all (confirmed: "record fullscreen" returned OK
-    // over IPC while spawning no process whatsoever). Deriving it from the
-    // process makes a stale value impossible. True from launch until the
-    // script reports STARTED — i.e. while slurp is up, or while audio/output
-    // setup runs for a fullscreen recording.
+    // Derived, never assigned: a plain flag here got stuck at true whenever
+    // startRecording() threw before launching anything, and because the start
+    // guard refused to run while it was set, every later recording silently
+    // did nothing at all. Deriving it from the process makes a stale value
+    // impossible. True from launch until the script reports STARTED — i.e.
+    // while slurp is up, or while audio/output setup runs.
     readonly property bool isSelecting: recProcess.running && !root.isRecording
     property bool isRecording: false
-    property bool isPaused: false
     property string recordingMode: ""
     property string recordingFormat: ""
     property string recordingOutputPath: ""
@@ -199,62 +208,55 @@ Singleton {
     Timer {
         interval: 1000
         repeat: true
-        running: root.isRecording && !root.isPaused
+        running: root.isRecording
         onTriggered: root.elapsedSeconds = Math.floor((Date.now() - root.recordingStartedAt) / 1000)
     }
 
-    function startRecording(mode) {
+    // `format` overrides the format chips, which is how "Record Selected as
+    // GIF" stays a distinct action instead of a mode you have to remember to
+    // switch back off afterwards.
+    function startRecording(mode, format) {
         // Guards on the process itself rather than on any state flag, so a
         // half-finished previous attempt can never wedge this permanently.
         if (root.isRecording || recProcess.running)
             return;
 
+        const fmt = format || recordFormat;
         root.recordingMode = mode;
-        root.recordingFormat = recordFormat;
+        root.recordingFormat = fmt;
 
-        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, recordFormat, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyToClipboard), _bool(saveToDownloads)];
-        // No clearing of recStderr here: StdioCollector.text is a read-only
-        // property, so assigning to it threw a TypeError that aborted this
-        // function one line before `running = true` — which is the whole reason
-        // "record fullscreen"/"record selected" did nothing at all, silently,
-        // while still reporting OK over IPC. The collector resets itself when
-        // the next process stream starts, so nothing needs clearing anyway.
+        // No clearing of a stderr collector here: StdioCollector.text is a
+        // read-only property, so assigning to it throws a TypeError that
+        // aborts this function before `running = true` — which is the whole
+        // reason recording used to do nothing at all, silently, while still
+        // reporting OK over IPC. The collector resets itself when the next
+        // process stream starts, so nothing needs clearing anyway.
+        recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, fmt, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyVideoToClipboard), _bool(saveToVideos)];
         recProcess.running = true;
     }
 
-    // Stopping/pausing/resuming all target the *wrapper script*, not
-    // wf-recorder directly — the script owns the actual wf-recorder child and
-    // reacts to these by starting/stopping/finalizing it. TERM (not INT) is
-    // used deliberately: a background-started script inheriting bash's
-    // "ignore SIGINT for async jobs" disposition can end up completely unable
-    // to trap SIGINT for its own lifetime (confirmed by testing — the same
-    // trap that worked fine for TERM/USR1/USR2 never fired for INT). TERM
-    // isn't subject to that special case and was verified to make
-    // wf-recorder itself finalize cleanly too, so it's used end to end.
+    function recordSelectedGif() {
+        startRecording("select", "gif");
+    }
+
+    // Stopping targets the *wrapper script*, not wf-recorder directly — the
+    // script owns the wf-recorder child and reacts by stopping and finalizing
+    // it. TERM (not INT) is used deliberately: a background-started script
+    // inheriting bash's "ignore SIGINT for async jobs" disposition can end up
+    // completely unable to trap SIGINT for its own lifetime (confirmed by
+    // testing — the same trap that worked fine for TERM never fired for INT).
+    //
     // Also valid while the recording is still being set up (slurp on screen,
-    // nothing recorded yet): the script kills its slurp on SIGTERM and exits
-    // as cancelled, which beats leaving an invisible selection overlay behind.
+    // nothing recorded yet): the script kills its slurp and exits as
+    // cancelled, which beats leaving an invisible selection overlay behind.
     function stopRecording() {
         if (!recProcess.running)
             return;
         recProcess.signal(15); // SIGTERM
     }
 
-    function pauseRecording() {
-        if (!root.isRecording || root.isPaused)
-            return;
-        recProcess.signal(10); // SIGUSR1
-    }
-
-    function resumeRecording() {
-        if (!root.isRecording || !root.isPaused)
-            return;
-        recProcess.signal(12); // SIGUSR2
-    }
-
     function _resetRecordingState() {
         root.isRecording = false;
-        root.isPaused = false;
         root.recordingMode = "";
         root.recordingFormat = "";
         root.recordingOutputPath = "";
@@ -265,20 +267,24 @@ Singleton {
     Process {
         id: recProcess
 
+        property string finishedLabel: ""
+        property string finishedOutput: ""
+
         stdout: SplitParser {
             splitMarker: "\n"
             onRead: line => {
                 if (line.indexOf("STARTED ") === 0) {
                     root.recordingOutputPath = line.substring(8);
                     root.isRecording = true;
-                    root.isPaused = false;
                     root.recordingStartedAt = Date.now();
                     root.elapsedSeconds = 0;
-                    ToastService.showInfo("Recording started", "Stop it from the bar icon, or reopen the panel and press X");
-                } else if (line === "PAUSED") {
-                    root.isPaused = true;
-                } else if (line === "RESUMED") {
-                    root.isPaused = false;
+                } else if (line.indexOf("SAVED ") === 0 || line.indexOf("COPIED ") === 0) {
+                    // Held until the process actually exits: the GIF palette
+                    // pass runs after wf-recorder is done, and a toast that
+                    // lands while the bar still shows a recording in progress
+                    // reads as a lie.
+                    recProcess.finishedLabel = root.recordingFormat === "gif" ? "GIF" : "Recording";
+                    recProcess.finishedOutput = line;
                 } else if (line === "CANCELLED") {
                     ToastService.showInfo("Recording cancelled");
                 }
@@ -290,8 +296,13 @@ Singleton {
         }
 
         onExited: (exitCode, exitStatus) => {
-            if (exitCode !== 0 && exitCode !== 2)
+            if (exitCode !== 0 && exitCode !== 2) {
                 ToastService.showError("Recording failed", recStderr.text.trim() || ("exit code " + exitCode));
+            } else if (recProcess.finishedOutput) {
+                root._reportResult(recProcess.finishedLabel, recProcess.finishedOutput);
+            }
+            recProcess.finishedLabel = "";
+            recProcess.finishedOutput = "";
             root._resetRecordingState();
         }
     }

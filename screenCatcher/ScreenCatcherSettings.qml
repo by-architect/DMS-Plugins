@@ -32,16 +32,30 @@ PluginSettings {
 
     ToggleSetting {
         settingKey: "copyToClipboard"
-        label: "Copy to clipboard"
-        description: "Copy screenshots, OCR text, and recordings to the clipboard when finished. Also toggleable from the panel (C)."
+        label: "Screenshots: copy to clipboard"
+        description: "Put screenshots and OCR text on the clipboard when finished. Also toggleable from the panel (C)."
         defaultValue: true
     }
 
     ToggleSetting {
-        settingKey: "saveToDownloads"
-        label: "Save to Downloads"
-        description: "Also copy every screenshot/recording into your Downloads folder. Also toggleable from the panel (L)."
+        settingKey: "saveToPictures"
+        label: "Screenshots: keep the file"
+        description: "Save screenshots into the screenshot folder above. Turn it off to capture straight to the clipboard without leaving a file behind. Also toggleable from the panel (P)."
+        defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "copyVideoToClipboard"
+        label: "Recordings: copy to clipboard"
+        description: "Put the finished recording (mp4/mkv/gif) on the clipboard so it can be pasted straight into a chat. Also toggleable from the panel (B)."
         defaultValue: false
+    }
+
+    ToggleSetting {
+        settingKey: "saveToVideos"
+        label: "Recordings: keep the file"
+        description: "Save recordings into the recording folder above. Also toggleable from the panel (V). With both recording toggles off the file is kept anyway, rather than thrown away."
+        defaultValue: true
     }
 
     ToggleSetting {
@@ -71,7 +85,7 @@ PluginSettings {
     SelectionSetting {
         settingKey: "recordFormat"
         label: "Default recording format"
-        description: "MP4/MKV record natively; GIF captures normally then converts (requires ffmpeg). Also switchable from the panel's format chips (3/4/5)."
+        description: "Used by Record Fullscreen and Record Selected. Also switchable from the panel's format chips (3/4). GIF is not a format here — it has its own panel action, 'Record Selected as GIF' (G)."
         defaultValue: "mp4"
         options: [
             {
@@ -81,10 +95,6 @@ PluginSettings {
             {
                 label: "MKV",
                 value: "mkv"
-            },
-            {
-                label: "GIF",
-                value: "gif"
             }
         ]
     }
@@ -100,8 +110,8 @@ PluginSettings {
     SliderSetting {
         settingKey: "gifFps"
         label: "GIF frame rate"
-        description: "Frames per second when recording with the GIF format chip selected (requires ffmpeg)."
-        defaultValue: 12
+        description: "Frames per second for 'Record Selected as GIF' (requires ffmpeg)."
+        defaultValue: 20
         minimum: 5
         maximum: 30
         unit: "fps"
@@ -111,10 +121,10 @@ PluginSettings {
     SliderSetting {
         settingKey: "gifScale"
         label: "GIF width"
-        description: "Output width in pixels; height scales to match."
-        defaultValue: 480
-        minimum: 240
-        maximum: 960
+        description: "Maximum output width in pixels; height scales to match, and a selection narrower than this is never upscaled. Bigger means a much bigger file and a noticeably longer conversion."
+        defaultValue: 1920
+        minimum: 480
+        maximum: 3840
         unit: "px"
         leftIcon: "aspect_ratio"
     }
