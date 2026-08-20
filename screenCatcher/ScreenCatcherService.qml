@@ -29,6 +29,7 @@ Singleton {
     property bool copyVideoToClipboard: false
     property bool saveToVideos: true
     property bool notifyOnComplete: true
+    property int captureDelayMs: 900
     property string ocrLang: "eng"
     property int gifFps: 20
     property int gifScale: 1920
@@ -47,6 +48,7 @@ Singleton {
         copyVideoToClipboard = PluginService.loadPluginData(pluginId, "copyVideoToClipboard", false);
         saveToVideos = PluginService.loadPluginData(pluginId, "saveToVideos", true);
         notifyOnComplete = PluginService.loadPluginData(pluginId, "notifyOnComplete", true);
+        captureDelayMs = PluginService.loadPluginData(pluginId, "captureDelayMs", 900);
         ocrLang = PluginService.loadPluginData(pluginId, "ocrLang", "eng");
         gifFps = PluginService.loadPluginData(pluginId, "gifFps", 20);
         gifScale = PluginService.loadPluginData(pluginId, "gifScale", 1920);
@@ -97,11 +99,21 @@ Singleton {
     // about-to-be-destroyed window never gets the chance to fire, so the delay
     // has to live here instead, in the singleton, which outlives the panel.
     //
-    // Destroying the window is not the same as the compositor having
-    // repainted without it: at 100ms the panel was still in the captured
-    // image. 350ms leaves room for the layer surface to actually go away and
-    // the frame underneath to be composited, and is still short enough not to
-    // feel like a wait.
+    // Destroying the window is not the same as it being off the screen: the
+    // compositor animates the layer surface out, and grim happily captures
+    // that fade. Measured on Hyprland 0.55 with its default layer animation,
+    // comparing the panel's screen region against a clean reference frame:
+    //
+    //   50ms 20dB · 150ms 26dB · 250ms 32dB · 350ms 36dB · 450ms 48dB
+    //   650ms 63dB · 800ms pixel-identical
+    //
+    // — i.e. the fade runs about 700ms, and the 100ms and 350ms this waited
+    // before both landed mid-fade with the panel plainly visible in the shot.
+    // 900ms clears it with margin (verified pixel-identical three times over).
+    // The fade is the compositor's, so its length is not ours to know: the
+    // delay is a setting, and adding `layerrule = noanim, dms:screen-catcher`
+    // to a Hyprland config removes the animation entirely and lets it go back
+    // down to ~150ms.
     property var _pendingAction: null
 
     function runAfterClose(action) {
@@ -111,7 +123,7 @@ Singleton {
 
     Timer {
         id: closeDelay
-        interval: 350
+        interval: root.captureDelayMs
         repeat: false
         onTriggered: {
             if (root._pendingAction)
