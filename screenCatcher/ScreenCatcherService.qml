@@ -165,7 +165,15 @@ Singleton {
 
     // ---------------------------------------------------------- recording
 
-    property bool isSelecting: false
+    // Derived, never assigned: a plain flag here got stuck at true whenever the
+    // recording script died in a way that didn't reach onExited, and because
+    // startRecording() refuses to start while it's set, every later recording
+    // silently did nothing at all (confirmed: "record fullscreen" returned OK
+    // over IPC while spawning no process whatsoever). Deriving it from the
+    // process makes a stale value impossible. True from launch until the
+    // script reports STARTED — i.e. while slurp is up, or while audio/output
+    // setup runs for a fullscreen recording.
+    readonly property bool isSelecting: recProcess.running && !root.isRecording
     property bool isRecording: false
     property bool isPaused: false
     property string recordingMode: ""
@@ -196,15 +204,21 @@ Singleton {
     }
 
     function startRecording(mode) {
-        if (root.isRecording || root.isSelecting)
+        // Guards on the process itself rather than on any state flag, so a
+        // half-finished previous attempt can never wedge this permanently.
+        if (root.isRecording || recProcess.running)
             return;
 
-        root.isSelecting = mode !== "full";
         root.recordingMode = mode;
         root.recordingFormat = recordFormat;
 
         recProcess.command = ["bash", scriptPath, "rec-start", _dir(recordingDir), mode, recordFormat, _bool(micOn), _bool(sysAudioOn), String(gifFps), String(gifScale), micDevice, sysAudioDevice, _bool(notifyOnComplete), _bool(copyToClipboard), _bool(saveToDownloads)];
-        recStderr.text = "";
+        // No clearing of recStderr here: StdioCollector.text is a read-only
+        // property, so assigning to it threw a TypeError that aborted this
+        // function one line before `running = true` — which is the whole reason
+        // "record fullscreen"/"record selected" did nothing at all, silently,
+        // while still reporting OK over IPC. The collector resets itself when
+        // the next process stream starts, so nothing needs clearing anyway.
         recProcess.running = true;
     }
 
@@ -217,8 +231,11 @@ Singleton {
     // trap that worked fine for TERM/USR1/USR2 never fired for INT). TERM
     // isn't subject to that special case and was verified to make
     // wf-recorder itself finalize cleanly too, so it's used end to end.
+    // Also valid while the recording is still being set up (slurp on screen,
+    // nothing recorded yet): the script kills its slurp on SIGTERM and exits
+    // as cancelled, which beats leaving an invisible selection overlay behind.
     function stopRecording() {
-        if (!root.isRecording)
+        if (!recProcess.running)
             return;
         recProcess.signal(15); // SIGTERM
     }
@@ -236,7 +253,6 @@ Singleton {
     }
 
     function _resetRecordingState() {
-        root.isSelecting = false;
         root.isRecording = false;
         root.isPaused = false;
         root.recordingMode = "";
@@ -254,11 +270,11 @@ Singleton {
             onRead: line => {
                 if (line.indexOf("STARTED ") === 0) {
                     root.recordingOutputPath = line.substring(8);
-                    root.isSelecting = false;
                     root.isRecording = true;
                     root.isPaused = false;
                     root.recordingStartedAt = Date.now();
                     root.elapsedSeconds = 0;
+                    ToastService.showInfo("Recording started", "Stop it from the bar icon, or reopen the panel and press X");
                 } else if (line === "PAUSED") {
                     root.isPaused = true;
                 } else if (line === "RESUMED") {

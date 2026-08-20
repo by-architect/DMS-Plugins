@@ -28,6 +28,17 @@
 
 set -uo pipefail
 
+# slurp reads a list of predefined rectangles from *stdin* whenever stdin is
+# not a TTY (see slurp(1)) and only shows its selection overlay once that read
+# hits EOF. Quickshell's Process hands the script a pipe that is never closed,
+# so every slurp started from the shell sat in read() forever: no overlay, no
+# error, no exit — which is exactly what "screenshot selected", "screenshot to
+# text" and "record selected" looked like from the outside (confirmed: those
+# slurp processes were blocked in anon_pipe_read with no layer surface mapped).
+# Detaching stdin here makes slurp see EOF immediately and fall through to
+# normal interactive selection.
+exec </dev/null
+
 cmd="${1:-}"
 shift || true
 
@@ -47,6 +58,38 @@ require() {
 }
 
 timestamp() { date +%Y%m%d_%H%M%S; }
+
+slurp_pid=""
+REGION=""
+
+# Interactive region selection. Sets $REGION and returns slurp's exit status
+# (non-zero = the user cancelled). Deliberately not called through $(...):
+# a command substitution runs in a subshell, so the trap below would live in
+# that subshell where a stop signal sent to the script never reaches it, and
+# bash defers signal handling until the substitution finishes anyway.
+#
+# The extra </dev/null on top of the global one keeps the helper correct when
+# the script is run by hand from a pipeline.
+#
+# slurp runs in the background so a stop/cancel signal arriving while the user
+# is still dragging can take the selection overlay down with it: an orphaned
+# slurp keeps grabbing the pointer while being effectively invisible, which is
+# a miserable state to leave behind.
+select_region() {
+    local tmp rc
+    tmp=$(mktemp)
+    slurp </dev/null >"$tmp" 2>/dev/null &
+    slurp_pid=$!
+    trap 'kill "$slurp_pid" 2>/dev/null' INT TERM
+    wait "$slurp_pid"
+    rc=$?
+    trap - INT TERM
+    slurp_pid=""
+    REGION=$(cat "$tmp")
+    rm -f "$tmp"
+    [ -n "$REGION" ] || return 1
+    return $rc
+}
 
 copy_mime() {
     # copy_mime <mime> <file>
@@ -200,8 +243,8 @@ shot-select)
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot failed" "grim is not installed"; exit 1; }
     require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot failed" "slurp is not installed"; exit 1; }
 
-    geometry=$(slurp) || { echo "CANCELLED"; exit 2; }
-    [ -n "$geometry" ] || { echo "CANCELLED"; exit 2; }
+    select_region || { echo "CANCELLED"; exit 2; }
+    geometry="$REGION"
 
     mkdir -p "$outdir"
     ext="$format"
@@ -230,8 +273,8 @@ shot-ocr)
     require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot to text failed" "slurp is not installed"; exit 1; }
     require tesseract || { echo "ERROR tesseract-not-found"; notify "Screenshot to text failed" "tesseract is not installed"; exit 1; }
 
-    geometry=$(slurp) || { echo "CANCELLED"; exit 2; }
-    [ -n "$geometry" ] || { echo "CANCELLED"; exit 2; }
+    select_region || { echo "CANCELLED"; exit 2; }
+    geometry="$REGION"
 
     tmpfile=$(mktemp --suffix=.png)
     trap 'rm -f "$tmpfile"' EXIT
@@ -273,8 +316,8 @@ rec-start)
     output_args=()
     if [ "$mode" = "select" ]; then
         require slurp || { echo "ERROR slurp-not-found"; notify "Recording failed" "slurp is not installed"; exit 1; }
-        geometry=$(slurp) || { echo "CANCELLED"; exit 2; }
-        [ -n "$geometry" ] || { echo "CANCELLED"; exit 2; }
+        select_region || { echo "CANCELLED"; exit 2; }
+        geometry="$REGION"
     else
         out=$(detect_output)
         [ -n "$out" ] && output_args=(-o "$out")
