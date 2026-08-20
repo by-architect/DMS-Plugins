@@ -33,13 +33,13 @@ PluginComponent {
                 DankIcon {
                     id: recIcon
                     anchors.verticalCenter: parent.verticalCenter
-                    name: ScreenCatcherService.isRecording ? (ScreenCatcherService.isPaused ? "pause" : "fiber_manual_record") : "screenshot_monitor"
+                    name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
                     color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
                     size: root.iconSize
                     filled: ScreenCatcherService.isRecording
 
                     SequentialAnimation on opacity {
-                        running: ScreenCatcherService.isRecording && !ScreenCatcherService.isPaused
+                        running: ScreenCatcherService.isRecording
                         loops: Animation.Infinite
                         onRunningChanged: if (!running) recIcon.opacity = 1
                         NumberAnimation {
@@ -58,7 +58,7 @@ PluginComponent {
                 StyledText {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: ScreenCatcherService.isRecording
-                    text: ScreenCatcherService.isPaused ? "Paused" : ScreenCatcherService.elapsedLabel
+                    text: ScreenCatcherService.elapsedLabel
                     color: Theme.error
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.Medium
@@ -96,6 +96,12 @@ PluginComponent {
         }
     }
 
+    // The vertical pill deliberately carries no stop button: icon + timer +
+    // a round stop button stacked vertically came out taller than the bar's
+    // own thickness, so the pill grew past its slot and overlapped the widget
+    // above it. Clicking the pill opens the panel, where X stops the
+    // recording; the horizontal pill has the room for an inline stop and
+    // keeps it.
     verticalBarPill: Component {
         StyledRect {
             width: parent.widgetThickness
@@ -111,13 +117,13 @@ PluginComponent {
                 DankIcon {
                     id: vRecIcon
                     anchors.horizontalCenter: parent.horizontalCenter
-                    name: ScreenCatcherService.isRecording ? (ScreenCatcherService.isPaused ? "pause" : "fiber_manual_record") : "screenshot_monitor"
+                    name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
                     color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
                     size: root.iconSize
                     filled: ScreenCatcherService.isRecording
 
                     SequentialAnimation on opacity {
-                        running: ScreenCatcherService.isRecording && !ScreenCatcherService.isPaused
+                        running: ScreenCatcherService.isRecording
                         loops: Animation.Infinite
                         onRunningChanged: if (!running) vRecIcon.opacity = 1
                         NumberAnimation {
@@ -136,39 +142,10 @@ PluginComponent {
                 StyledText {
                     anchors.horizontalCenter: parent.horizontalCenter
                     visible: ScreenCatcherService.isRecording
-                    text: ScreenCatcherService.isPaused ? "Paused" : ScreenCatcherService.elapsedLabel
+                    text: ScreenCatcherService.elapsedLabel
                     color: Theme.error
                     font.pixelSize: Theme.fontSizeSmall
                     horizontalAlignment: Text.AlignHCenter
-                }
-
-                Rectangle {
-                    id: vStopButton
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    visible: ScreenCatcherService.isRecording
-                    width: root.iconSize + 4
-                    height: width
-                    radius: width / 2
-                    color: vStopArea.containsMouse ? Theme.errorHover : "transparent"
-
-                    DankIcon {
-                        anchors.centerIn: parent
-                        name: "stop_circle"
-                        color: Theme.error
-                        size: root.iconSize - 4
-                        filled: true
-                    }
-
-                    MouseArea {
-                        id: vStopArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: mouse => {
-                            ScreenCatcherService.stopRecording();
-                            mouse.accepted = true;
-                        }
-                    }
                 }
             }
         }

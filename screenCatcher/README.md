@@ -3,24 +3,26 @@
 A DankMaterialShell plugin for screenshots and screen recording, driven from a
 centered keyboard-first panel rather than a bar dropdown. Open it with a
 shortcut, hit a letter, done. A small bar icon shows recording status (with a
-pulsing red dot) and gives you a stop button, but it's not where the actions
-live.
+pulsing red dot) and, on a horizontal bar, an inline stop button — but it's
+not where the actions live.
 
 ```
-                 ┌──────────────────────────────────────────┐
-                 │  Screen Catcher              Esc closes ⨯│
-                 │                                            │
-                 │  Screenshot          │  Audio               │
-                 │   [S] Selected        │   [M] Microphone  ○  │
-                 │   [F] Fullscreen      │   [Y] System Audio ○ │
-                 │   [T] To Text         │  Record              │
-                 │   [1] PNG  [2] JPEG   │   [R] Fullscreen     │
-                 │  Save                 │   [D] Selected       │
-                 │   [C] Clipboard   ○   │   [3]MP4 [4]MKV [5]GIF│
-                 │   [L] Downloads   ○   │  (while recording:)  │
-                 │   [N] Notifications ○ │   [P] Pause/Resume   │
-                 │                       │   [X] Stop           │
-                 └──────────────────────────────────────────┘
+        ┌────────────────────────────────────────────────────────┐
+        │  Screen Catcher                             Esc closes ⨯│
+        │                                                          │
+        │  Screenshot              │  Audio                        │
+        │   [S] Selected           │   [M] Microphone           ○  │
+        │   [F] Fullscreen         │   [Y] System Audio         ○  │
+        │   [T] To Text            │  Record                       │
+        │   [1] PNG   [2] JPEG     │   [R] Fullscreen              │
+        │  Save screenshots        │   [D] Selected                │
+        │   [C] Save to Clipboard ○│   [G] Selected as GIF         │
+        │   [P] Save to Pictures  ○│   [3] MP4   [4] MKV           │
+        │   [N] Notifications     ○│  Save recordings              │
+        │                          │   [B] Save to Clipboard    ○  │
+        │                          │   [V] Save to Videos       ○  │
+        │                          │  (while recording:) [X] Stop  │
+        └────────────────────────────────────────────────────────┘
         (half the screen's width and height, centered, dimmed backdrop)
 ```
 
@@ -31,14 +33,13 @@ live.
 | `grim` | screenshots | required |
 | `slurp` | region selection | required |
 | `wf-recorder` | screen recording | required |
-| `ffmpeg` | GIF conversion, joining paused segments | optional — degrades gracefully (see below) |
+| `ffmpeg` | GIF conversion | required for *Record Selected as GIF* only |
 | `tesseract` | OCR for Screenshot to Text | optional — that one action fails gracefully |
-| `wl-clipboard` (`wl-copy`) | copying screenshots/text/GIFs | optional — skips clipboard copy |
+| `wl-clipboard` (`wl-copy`) | copying screenshots/text/recordings to the clipboard | optional — skips clipboard copy |
 | `notify-send` (libnotify) | desktop notifications | optional — skips notifications |
 | `jq` | parsing `pw-dump`/`hyprctl` JSON | needed for mic+system-audio mixing and multi-monitor output detection |
 | `pw-dump`, `pw-loopback` (PipeWire) | default audio device lookup + mic/system-audio mixing | needed only for audio capture |
 | `hyprctl` (Hyprland) | detecting the focused monitor for fullscreen recording | Hyprland only — see below |
-| `xdg-user-dir` | resolving a localized/custom Downloads folder | optional — falls back to `~/Downloads` |
 
 No PulseAudio/`pactl` — the audio device lookup and the mic+system-audio mix
 (a `pw-loopback` sink plus two taps feeding into it) both use native PipeWire
@@ -104,35 +105,58 @@ Once the panel is open, press a letter or number — no need to click:
 | `F` | Screenshot Fullscreen | |
 | `T` | Screenshot to Text (OCR) | |
 | `1` / `2` | Image format: PNG / JPEG | doesn't close the panel |
-| `C` | Toggle Save to Clipboard | doesn't close the panel |
-| `L` | Toggle Save to Downloads | doesn't close the panel |
+| `C` | Screenshots: toggle Save to Clipboard | doesn't close the panel |
+| `P` | Screenshots: toggle Save to Pictures | doesn't close the panel |
 | `N` | Toggle Desktop Notifications | doesn't close the panel |
 | `M` | Toggle Microphone | doesn't close the panel |
 | `Y` | Toggle System Audio | doesn't close the panel |
 | `R` | Record Fullscreen | only while not already recording |
 | `D` | Record Selected | only while not already recording |
-| `3` / `4` / `5` | Record format: MP4 / MKV / GIF | only while not already recording |
-| `P` | Pause / Resume Recording | only while recording — same key both ways |
-| `X` | Stop Recording | only while recording |
+| `G` | Record Selected as GIF | only while not already recording |
+| `3` / `4` | Record format: MP4 / MKV | only while not already recording |
+| `B` | Recordings: toggle Save to Clipboard | doesn't close the panel |
+| `V` | Recordings: toggle Save to Videos | doesn't close the panel |
+| `X` | Stop Recording | also cancels one still waiting on a selection |
 | `Esc` | Close panel | recording (if any) keeps running in the background |
 
 Every letter has a visible badge next to its row/toggle/chip, so it's
 discoverable without memorizing this table. Clicking works identically to
 pressing the key.
 
-**Save to Clipboard** and **Save to Downloads** both apply to every
-screenshot and recording — Downloads is an *additional* copy alongside the
-configured Screenshot/Recording folder, not a replacement for it. Both are
-also available as persisted settings, so you can set a default without
-opening the panel.
+**Where captures go** is two independent choices per kind, because wanting a
+screenshot on the clipboard is routine while wanting a whole video on it is
+not (and the reverse for keeping files):
 
-**Format chips** replace what used to be a separate "Record Selected as GIF"
-action — GIF is now just one of three format choices (MP4/MKV/GIF) that apply
-to *either* Record Fullscreen or Record Selected. MP4 and MKV record natively
-(wf-recorder muxes straight to whichever extension you give it); GIF records
-normally and gets palette-converted afterward, since wf-recorder has no
-real-time GIF encoder worth using. Screenshots get the same treatment with
-PNG/JPEG.
+| | Clipboard | Keep the file |
+|---|---|---|
+| Screenshots + OCR text | `C` (on by default) | `P` → the screenshot folder (on by default) |
+| Recordings (mp4/mkv/gif) | `B` (off by default) | `V` → the recording folder (on by default) |
+
+With "keep the file" off, the capture is written to a scratch directory,
+put on the clipboard, and the scratch directory is deleted — nothing is left
+behind on disk. Turning *both* off for the same kind would mean capturing into
+the void, so the file is kept in that case; silently discarding what you just
+captured is never the helpful reading of two toggles being off.
+
+**GIF is its own action** (`G`, Record Selected as GIF), not a format chip. A
+GIF chip left selected quietly turns the next ordinary recording into a GIF,
+which is exactly the kind of surprise a mode you have to remember to switch
+back off produces. MP4 and MKV record natively (wf-recorder muxes straight to
+whichever extension it's given); GIF records to mp4 first and gets
+palette-converted afterwards, since wf-recorder has no real-time GIF encoder
+worth using. Screenshots get the same chip treatment with PNG/JPEG.
+
+**GIF quality** defaults to 1920px wide at 20 fps, converted with a per-clip
+256-colour palette built from the frames that actually change
+(`palettegen=stats_mode=diff` + `paletteuse=dither=sierra2_4a`), scaled with
+lanczos, and never upscaled past the source. Both the width and the frame rate
+are settings. Be aware that a long full-width GIF takes real time to convert
+and gets large fast — that is the trade for the quality.
+
+**No pause/resume.** It was removed on request, and with it the
+segment-splitting and ffmpeg concat pass that only existed because
+`wf-recorder` has no pause of its own. A recording now runs as a single
+`wf-recorder` process from start to stop.
 
 Screenshot/record actions close the panel first and wait ~100ms before
 capturing, so the panel itself never ends up in the screenshot or recording.
@@ -156,32 +180,20 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `shotText` | Screenshot to Text |
 | `recordFullscreen` | Start Record Fullscreen (uses the current format chip) |
 | `recordSelected` | Start Record Selected (uses the current format chip) |
-| `pause` | Pause the running recording |
-| `resume` | Resume a paused recording |
+| `recordSelectedGif` | Start Record Selected as GIF (ignores the format chip) |
 | `stop` | **The stop command** — stops whatever recording is running (or cancels one still waiting on a selection), or no-ops if nothing is |
 | `micToggle` | Toggle microphone capture on/off |
 | `sysAudioToggle` | Toggle system-audio capture on/off |
-| `clipboardToggle` | Toggle Save to Clipboard on/off |
-| `downloadsToggle` | Toggle Save to Downloads on/off |
+| `clipboardToggle` | Screenshots: toggle Save to Clipboard |
+| `picturesToggle` | Screenshots: toggle Save to Pictures (keep the file) |
+| `videoClipboardToggle` | Recordings: toggle Save to Clipboard |
+| `videosToggle` | Recordings: toggle Save to Videos (keep the file) |
 | `notifyToggle` | Toggle desktop notifications on/off |
 | `setImageFormat <png\|jpeg>` | Set the screenshot format, e.g. `ipc call screenCatcher setImageFormat jpeg` |
-| `setRecordFormat <mp4\|mkv\|gif>` | Set the recording format |
+| `setRecordFormat <mp4\|mkv>` | Set the recording format (GIF is its own action, not a format) |
 
 `stop` is the one worth binding on its own: it's a global "kill whatever's
 recording" hotkey that doesn't require the panel to be open at all.
-
-## Pausing a recording
-
-`wf-recorder` has no pause/resume of its own — confirmed by testing: sending
-it a second signal just terminates it the same way stopping does. Pause/resume
-is implemented in the wrapper script instead: pausing stops `wf-recorder` and
-finalizes that "segment"; resuming starts a fresh segment continuing from
-where you left off. When the recording is finally stopped, every segment gets
-joined into one file with `ffmpeg`'s concat demuxer (a lossless stream copy,
-since all segments share identical encoder settings — no quality loss, and
-fast since nothing gets re-encoded). Without `ffmpeg`, pause/resume still
-works, but only the last segment is kept if you paused (a notification says
-so) — install `ffmpeg` for gapless multi-segment recordings.
 
 ## Stopping a recording
 
@@ -190,8 +202,11 @@ Any of these, all equivalent:
 - Press `X` in the panel. (The same row is there while a recording is still
   being set up, labelled *Cancel Recording*, so a selection you no longer want
   can be called off without leaving slurp on screen.)
-- Click the inline stop button in the bar pill (if you added it), whether or
-  not the panel is open.
+- Click the inline stop button in the bar pill, on a horizontal bar. A
+  *vertical* bar pill deliberately has no stop button: icon + timer + a round
+  stop button stacked vertically came out taller than the bar's own thickness,
+  so the pill grew past its slot and overlapped the widget above it. There,
+  click the pill to open the panel and press `X`.
 - `quickshell -p <shell-path> ipc call screenCatcher stop`, e.g. bound to its
   own shortcut.
 
@@ -205,12 +220,20 @@ All the actual work — `grim`, `slurp`, `wf-recorder`, `ffmpeg`, `tesseract`,
 PipeWire audio orchestration (`pw-dump`, `pw-loopback`), output detection
 (`hyprctl`) — lives in `bin/screen-catcher.sh`, not in QML.
 `ScreenCatcherService.qml` (a singleton) starts it as a `Quickshell.Io.Process`
-and, for recordings, keeps a handle to it so it can send signals: `SIGTERM` to
-stop, `SIGUSR1` to pause, `SIGUSR2` to resume. The script reports progress
-back over stdout (`STARTED <path>`, `PAUSED`, `RESUMED`, `SAVED <path>`,
-`CANCELLED`, ...), which the singleton parses line-by-line to drive the UI —
-being a singleton means the panel, the bar pill, and every IPC call all read
-and drive the exact same recording state.
+and, for recordings, keeps a handle to it so it can send `SIGTERM` to stop.
+The script reports progress back over stdout (`STARTED <path>`,
+`SAVED <path>`, `COPIED <name>`, `CANCELLED`, `TEXT <text>`, `EMPTY`), which
+the singleton parses line-by-line to drive the UI — being a singleton means
+the panel, the bar pill, and every IPC call all read and drive the exact same
+recording state.
+
+**Toasts report finished work, never work starting.** Nothing is shown when a
+recording begins (the bar pill is already saying so, in place, for as long as
+it runs); the toast comes when the file is actually finished — "Recording
+saved", "GIF saved", "Screenshot copied to clipboard", and so on. For GIFs
+that is deliberately *after* the palette conversion, not when `wf-recorder`
+stops, so the toast never claims a file exists while ffmpeg is still writing
+it.
 
 **Why `SIGTERM` and not `SIGINT` for stopping**: confirmed by testing that a
 script invoked as a backgrounded async job can end up with `SIGINT` and
@@ -248,6 +271,16 @@ and runs slurp in the background so a stop/cancel signal can take the overlay
 down with it — an orphaned slurp keeps grabbing the pointer while being
 effectively invisible.
 
+**System audio needed a `pw-dump` shape fix.** The default sink/source lookup
+piped the PipeWire `default` metadata through `jq`'s `fromjson`, but pw-dump
+emits that metadata value as an already-decoded JSON *object*, not as a JSON
+string — so jq failed with "only strings can be parsed", both lookups came
+back empty, and turning System Audio on silently recorded video only (the
+script's own "could not find the default output" notification is easy to miss
+when notifications are off). Both shapes are handled now, and a recording made
+with System Audio on was confirmed to come out with a real AAC audio stream in
+it.
+
 **`StdioCollector.text` is read-only, and assigning to it killed recording.**
 `startRecording()` used to clear the stderr collector (`recStderr.text = ""`)
 one line before `recProcess.running = true`. That assignment throws
@@ -278,9 +311,10 @@ The plugin is a **composite** (`daemon` + `widget`):
   implicit-width-from-children computation fights the Layout's fill
   assignment).
 - `ScreenCatcherBarWidget.qml` — optional bar pill, status-only (no dropdown
-  of its own): idle icon, or a pulsing red dot + elapsed timer + stop button
-  while recording (the icon switches to a static pause glyph, and the pulse
-  stops, while paused). Clicking it opens the panel.
+  of its own): idle icon, or a pulsing red dot + elapsed timer while
+  recording, plus an inline stop button on horizontal bars only (see
+  *Stopping a recording* for why the vertical pill has none). Clicking it
+  opens the panel.
 
 Screenshot/OCR calls are one-shot (`Proc.runCommand`); only the recording
 process needs to stay alive and be signaled, so it's the one long-lived
@@ -292,14 +326,16 @@ process needs to stay alive and be signaled, so it's the one long-lived
 |---|---|---|
 | Screenshot folder | `~/Pictures/Screenshots` | |
 | Recording folder | `~/Videos/Recordings` | |
-| Copy to clipboard | on | Screenshots, OCR text, and recordings. Also panel toggle `C` |
-| Save to Downloads | off | Extra copy into your Downloads folder. Also panel toggle `L` |
+| Screenshots: copy to clipboard | on | Screenshots and OCR text. Also panel toggle `C` |
+| Screenshots: keep the file | on | Off = clipboard only, no file left behind. Also panel toggle `P` |
+| Recordings: copy to clipboard | off | mp4/mkv/gif onto the clipboard. Also panel toggle `B` |
+| Recordings: keep the file | on | Off = clipboard only. Also panel toggle `V` |
 | Desktop notifications | on | One per finished action. Also panel toggle `N` |
 | Default screenshot format | PNG | Also panel chips `1`/`2` |
-| Default recording format | MP4 | Also panel chips `3`/`4`/`5` |
+| Default recording format | MP4 | Also panel chips `3`/`4` |
 | OCR language | `eng` | Tesseract language code |
-| GIF frame rate | 12 fps | Applies when the GIF format chip is selected |
-| GIF width | 480 px | Height scales to match |
+| GIF frame rate | 20 fps | Applies to *Record Selected as GIF* |
+| GIF width | 1920 px | Max width; height scales to match, never upscaled past the source |
 | Microphone device | auto | PipeWire/Pulse source name override |
 | System audio device | auto | PipeWire/Pulse monitor source name override |
 
