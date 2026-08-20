@@ -24,7 +24,13 @@ const maxUploadBytes = 100 << 20
 // uploadTimeout bounds a single send; large videos are slow but not unbounded.
 const uploadTimeout = 5 * time.Minute
 
-// mediaHandle is what a later fetchMedia needs to download an attachment.
+// mediaHandle is a recent message kept for later use: downloading its
+// attachment, or quoting it in a reply.
+//
+// The whole proto is kept rather than just the media parts, because a reply has
+// to carry the message it answers -- and for a photo that means the original
+// ImageMessage, not a caption. Bounded, since this is a cache and storage is
+// the host's job.
 type mediaHandle struct {
 	msg  *waE2E.Message
 	mime string
@@ -53,6 +59,7 @@ func (b *bridge) convertLive(info types.MessageInfo, wa *waE2E.Message) *message
 	if msg.Kind == "" {
 		return nil
 	}
+	b.remember(msg.ID, wa, msg.MediaMime)
 	return msg
 }
 
@@ -88,6 +95,7 @@ func (b *bridge) convertWebMessage(chat types.JID, web *waWeb.WebMessageInfo) *m
 	if msg.Kind == "" {
 		return nil
 	}
+	b.remember(msg.ID, web.GetMessage(), msg.MediaMime)
 	return msg
 }
 
@@ -242,14 +250,22 @@ func (b *bridge) attachThumbnail(msg *messageObj, thumb []byte) {
 // brings the host back here when the user opens the attachment.
 func (b *bridge) rememberMedia(msg *messageObj, wa *waE2E.Message, mime string) {
 	msg.MediaRef = msg.ID
+	b.remember(msg.ID, wa, mime)
+}
+
+// remember caches a message proto against its id.
+func (b *bridge) remember(id string, wa *waE2E.Message, mime string) {
+	if id == "" || wa == nil {
+		return
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if _, exists := b.pendingMedia[msg.ID]; !exists {
-		b.mediaOrder = append(b.mediaOrder, msg.ID)
+	if _, exists := b.pendingMedia[id]; !exists {
+		b.mediaOrder = append(b.mediaOrder, id)
 	}
-	b.pendingMedia[msg.ID] = mediaHandle{msg: proto.Clone(wa).(*waE2E.Message), mime: mime}
+	b.pendingMedia[id] = mediaHandle{msg: proto.Clone(wa).(*waE2E.Message), mime: mime}
 
 	// Bounded: this is a cache, not storage. Storage is the host's job.
 	for len(b.mediaOrder) > mediaCacheSize {
@@ -257,6 +273,17 @@ func (b *bridge) rememberMedia(msg *messageObj, wa *waE2E.Message, mime string) 
 		b.mediaOrder = b.mediaOrder[1:]
 		delete(b.pendingMedia, oldest)
 	}
+}
+
+// quotedProto is the original message for a reply, if it is still cached.
+func (b *bridge) quotedProto(id string) *waE2E.Message {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if handle, ok := b.pendingMedia[id]; ok {
+		return handle.msg
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- auto-download
@@ -459,7 +486,12 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 	defer cancel()
 
 	if len(params.Attachments) > 0 {
-		b.sendAttachments(sendCtx, c, client, to, params.Attachments, params.Text)
+		b.sendAttachments(sendCtx, c, client, to, params.Attachments, params.Text, quotedContext{
+			id:     params.ReplyTo,
+			text:   params.ReplyToText,
+			sender: params.ReplyToSender,
+			fromMe: params.ReplyToFromMe,
+		})
 		return
 	}
 
@@ -468,13 +500,12 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 		return
 	}
 
-	quoted := quotedContext{
+	msg := b.buildTextMessage(params.Text, quotedContext{
 		id:     params.ReplyTo,
 		text:   params.ReplyToText,
 		sender: params.ReplyToSender,
 		fromMe: params.ReplyToFromMe,
-	}
-	msg := b.buildTextMessage(params.Text, quoted, to)
+	}, to)
 	resp, err := client.SendMessage(sendCtx, to, msg)
 	if err != nil {
 		fail(c.ID, "send_failed", "%v", err)
@@ -519,20 +550,28 @@ func (b *bridge) buildTextMessage(text string, quoted quotedContext, chat types.
 		participant = chat.String()
 	}
 
+	// The original message where it is still cached. A photo quoted as a bare
+	// caption arrives as a reply to nothing, which is what a text-only quote
+	// produced for anything that was not text.
+	quotedMessage := b.quotedProto(quoted.id)
+	if quotedMessage == nil {
+		quotedMessage = &waE2E.Message{Conversation: proto.String(quoted.text)}
+	}
+
 	return &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text: proto.String(text),
 			ContextInfo: &waE2E.ContextInfo{
 				StanzaID:      proto.String(quoted.id),
 				Participant:   proto.String(participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String(quoted.text)},
+				QuotedMessage: quotedMessage,
 			},
 		},
 	}
 }
 
 // sendAttachments uploads and sends each file, with the caption on the first.
-func (b *bridge) sendAttachments(ctx context.Context, c call, client *whatsmeow.Client, to types.JID, paths []string, caption string) {
+func (b *bridge) sendAttachments(ctx context.Context, c call, client *whatsmeow.Client, to types.JID, paths []string, caption string, quoted quotedContext) {
 	var lastID string
 
 	for i, path := range paths {
@@ -564,6 +603,9 @@ func (b *bridge) sendAttachments(ctx context.Context, c call, client *whatsmeow.
 		}
 
 		msg := buildAttachmentMessage(kind, uploaded, data, mime, filepath.Base(path), text)
+		if i == 0 && quoted.id != "" {
+			b.attachQuote(msg, quoted, to)
+		}
 		resp, err := client.SendMessage(ctx, to, msg)
 		if err != nil {
 			fail(c.ID, "send_failed", "%v", err)
@@ -573,6 +615,42 @@ func (b *bridge) sendAttachments(ctx context.Context, c call, client *whatsmeow.
 	}
 
 	ok(c.ID, map[string]any{"messageId": lastID})
+}
+
+// attachQuote gives an attachment message the reply context a text message
+// gets, so replying with a photo quotes what it answers.
+func (b *bridge) attachQuote(msg *waE2E.Message, quoted quotedContext, chat types.JID) {
+	participant := quoted.sender
+	if quoted.fromMe {
+		if self := b.selfJID(); !self.IsEmpty() {
+			participant = self.ToNonAD().String()
+		}
+	}
+	if participant == "" {
+		participant = chat.String()
+	}
+
+	quotedMessage := b.quotedProto(quoted.id)
+	if quotedMessage == nil {
+		quotedMessage = &waE2E.Message{Conversation: proto.String(quoted.text)}
+	}
+
+	info := &waE2E.ContextInfo{
+		StanzaID:      proto.String(quoted.id),
+		Participant:   proto.String(participant),
+		QuotedMessage: quotedMessage,
+	}
+
+	switch {
+	case msg.ImageMessage != nil:
+		msg.ImageMessage.ContextInfo = info
+	case msg.VideoMessage != nil:
+		msg.VideoMessage.ContextInfo = info
+	case msg.AudioMessage != nil:
+		msg.AudioMessage.ContextInfo = info
+	case msg.DocumentMessage != nil:
+		msg.DocumentMessage.ContextInfo = info
+	}
 }
 
 func buildAttachmentMessage(kind string, up whatsmeow.UploadResponse, data []byte, mime, fileName, caption string) *waE2E.Message {
