@@ -150,7 +150,7 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `<action>` | Effect |
 |---|---|
 | `open` / `close` / `toggle` | Show/hide the panel |
-| `status` | Reports panel open/closed + recording state (for scripting) |
+| `status` | Reports panel open/closed + recording state (`idle`, `starting`, `recording:<mode>:<elapsed>`) |
 | `shotSelected` | Screenshot Selected — works even with the panel closed |
 | `shotFullscreen` | Screenshot Fullscreen |
 | `shotText` | Screenshot to Text |
@@ -158,7 +158,7 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `recordSelected` | Start Record Selected (uses the current format chip) |
 | `pause` | Pause the running recording |
 | `resume` | Resume a paused recording |
-| `stop` | **The stop command** — stops whatever recording is running, or no-ops if nothing is |
+| `stop` | **The stop command** — stops whatever recording is running (or cancels one still waiting on a selection), or no-ops if nothing is |
 | `micToggle` | Toggle microphone capture on/off |
 | `sysAudioToggle` | Toggle system-audio capture on/off |
 | `clipboardToggle` | Toggle Save to Clipboard on/off |
@@ -187,7 +187,9 @@ so) — install `ffmpeg` for gapless multi-segment recordings.
 
 Any of these, all equivalent:
 
-- Press `X` in the panel.
+- Press `X` in the panel. (The same row is there while a recording is still
+  being set up, labelled *Cancel Recording*, so a selection you no longer want
+  can be called off without leaving slurp on screen.)
 - Click the inline stop button in the bar pill (if you added it), whether or
   not the panel is open.
 - `quickshell -p <shell-path> ipc call screenCatcher stop`, e.g. bound to its
@@ -231,6 +233,34 @@ slurp surface actually disappeared — this was the "gives error, waits a lot,
 then slurp opens" bug. Screenshot Selected and Screenshot to Text both pass
 `Proc.noTimeout` now; Screenshot Fullscreen keeps the default since it never
 touches slurp.
+
+**`slurp` must be given a detached stdin.** Per `slurp(1)`, when stdin is not
+a TTY, slurp first reads a list of predefined rectangles from it — and it only
+maps its selection overlay once that read hits EOF. Quickshell hands a spawned
+process a pipe that is never closed, so every slurp started from the shell sat
+in `read()` forever: no overlay, no error, no exit, no notification. That is
+the whole reason Screenshot Selected, Screenshot to Text and Record Selected
+looked like they simply did nothing (confirmed: the stranded slurp processes
+were parked in `anon_pipe_read` with no layer surface mapped, while the same
+binary run from a terminal worked fine). The script does `exec </dev/null` up
+front and runs slurp through `select_region()`, which redirects stdin again
+and runs slurp in the background so a stop/cancel signal can take the overlay
+down with it — an orphaned slurp keeps grabbing the pointer while being
+effectively invisible.
+
+**`StdioCollector.text` is read-only, and assigning to it killed recording.**
+`startRecording()` used to clear the stderr collector (`recStderr.text = ""`)
+one line before `recProcess.running = true`. That assignment throws
+`TypeError: Cannot assign to read-only property "text"`, which aborts the rest
+of the function — so the recording process was never started, for either mode,
+while the IPC call still cheerfully returned `OK` and the only trace was a
+`WARN` in the shell log. Worse, on the selection path the throw happened
+*after* `isSelecting` had been set, and the old guard refused to start
+anything while that flag was set, so one failed Record Selected silently
+disabled every later recording for the rest of the session. The collector
+resets itself when the next process stream starts, so nothing needed clearing
+in the first place; `isSelecting` is now derived from the process rather than
+assigned, which makes a stuck value impossible.
 
 The plugin is a **composite** (`daemon` + `widget`):
 

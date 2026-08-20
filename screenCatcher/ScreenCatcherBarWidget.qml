@@ -99,12 +99,12 @@ PluginComponent {
     verticalBarPill: Component {
         StyledRect {
             width: parent.widgetThickness
-            height: pillContent.implicitHeight + Theme.spacingM * 2
+            height: vPillContent.implicitHeight + Theme.spacingM * 2
             radius: Theme.cornerRadius
             color: ScreenCatcherService.isRecording ? Theme.withAlpha(Theme.error, 0.16) : "transparent"
 
             Column {
-                id: pillContent
+                id: vPillContent
                 anchors.centerIn: parent
                 spacing: Theme.spacingXS
 

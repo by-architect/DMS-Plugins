@@ -54,7 +54,7 @@ PluginComponent {
 
         function status(): string {
             const panel = openVar.value === true ? "open" : "closed";
-            const rec = ScreenCatcherService.isRecording ? ("recording:" + ScreenCatcherService.recordingMode + ":" + ScreenCatcherService.elapsedLabel) : "idle";
+            const rec = ScreenCatcherService.isRecording ? ("recording:" + ScreenCatcherService.recordingMode + ":" + ScreenCatcherService.elapsedLabel) : (ScreenCatcherService.isSelecting ? "starting" : "idle");
             return panel + "\t" + rec;
         }
 
@@ -62,7 +62,7 @@ PluginComponent {
         // never opened this session — it only cares whether a recording is
         // actually running.
         function stop(): string {
-            if (!ScreenCatcherService.isRecording)
+            if (!ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting)
                 return "NOT_RECORDING";
             ScreenCatcherService.stopRecording();
             return "STOPPING";

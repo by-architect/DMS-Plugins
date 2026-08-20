@@ -126,7 +126,7 @@ PanelWindow {
                     }
                     break;
                 case Qt.Key_X:
-                    if (ScreenCatcherService.isRecording)
+                    if (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting)
                         ScreenCatcherService.stopRecording();
                     break;
                 case Qt.Key_1:
@@ -209,9 +209,9 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ((ScreenCatcherService.isPaused ? "Paused " : "Recording ") + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — P to pause/resume, X to stop") : "Press a letter, or click — Esc closes"
+                                text: ScreenCatcherService.isRecording ? ((ScreenCatcherService.isPaused ? "Paused " : "Recording ") + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — P to pause/resume, X to stop") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes")
                                 font.pixelSize: Theme.fontSizeSmall
-                                color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceVariantText
+                                color: (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting) ? Theme.error : Theme.surfaceVariantText
                             }
                         }
 
@@ -379,13 +379,13 @@ PanelWindow {
                                 font.pixelSize: Theme.fontSizeSmall
                                 font.weight: Font.Bold
                                 color: Theme.surfaceVariantText
-                                visible: !ScreenCatcherService.isRecording
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
                             }
 
                             ActionRow {
                                 width: parent.width
                                 height: 40
-                                visible: !ScreenCatcherService.isRecording
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
                                 letter: "R"
                                 icon: "screen_record"
                                 label: "Record Fullscreen"
@@ -395,7 +395,7 @@ PanelWindow {
                             ActionRow {
                                 width: parent.width
                                 height: 40
-                                visible: !ScreenCatcherService.isRecording
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
                                 letter: "D"
                                 icon: "crop_free"
                                 label: "Record Selected"
@@ -406,7 +406,7 @@ PanelWindow {
                                 width: parent.width
                                 height: 28
                                 spacing: Theme.spacingXS
-                                visible: !ScreenCatcherService.isRecording
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
 
                                 FormatChip {
                                     width: (parent.width - parent.spacing * 2) / 3
@@ -446,14 +446,17 @@ PanelWindow {
                                 onActivated: ScreenCatcherService.isPaused ? ScreenCatcherService.resumeRecording() : ScreenCatcherService.pauseRecording()
                             }
 
+                            // Visible during the selection/startup phase as well,
+                            // so a recording that is waiting on slurp can always be
+                            // called off from the panel it was started from.
                             ActionRow {
                                 width: parent.width
                                 height: 44
-                                visible: ScreenCatcherService.isRecording
+                                visible: ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting
                                 danger: true
                                 letter: "X"
                                 icon: "stop_circle"
-                                label: "Stop Recording · " + ScreenCatcherService.elapsedLabel
+                                label: ScreenCatcherService.isRecording ? ("Stop Recording · " + ScreenCatcherService.elapsedLabel) : "Cancel Recording"
                                 onActivated: ScreenCatcherService.stopRecording()
                             }
                         }
