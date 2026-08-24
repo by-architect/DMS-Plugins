@@ -3,6 +3,8 @@
 A fullscreen 3×3 system panel for Phoenix / DankMaterialShell, focused on
 answering "who has touched this machine, and is it healthy?".
 
+![The System Panel: login history, inbound SSH, tailscale, boot health, local sessions, privilege escalation, system overview, failed units and listening ports](docs/panel.png)
+
 ## Tiles
 
 | | | |
