@@ -98,7 +98,7 @@ configurable in that plugin's settings.
 Right-click (or the action panel) on any result shows its full action list;
 `Enter` runs the first one.
 
-![The DMS launcher — every trigger below goes into that search field](commandRunner/docs/launcher.png)
+<img width="1472" height="1021" alt="image" src="https://github.com/user-attachments/assets/81023e25-573a-44da-a3ea-2e68268f7988" />
 
 ## commandRunner — `run <name>`
 
