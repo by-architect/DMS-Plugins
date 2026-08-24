@@ -54,7 +54,7 @@ PluginComponent {
 
         function status(): string {
             const panel = openVar.value === true ? "open" : "closed";
-            const rec = ScreenCatcherService.isRecording ? ("recording:" + ScreenCatcherService.recordingMode + ":" + ScreenCatcherService.elapsedLabel) : (ScreenCatcherService.isSelecting ? "starting" : "idle");
+            const rec = ScreenCatcherService.isStopping ? ("saving:" + ScreenCatcherService.recordingFormat) : (ScreenCatcherService.isRecording ? ("recording:" + ScreenCatcherService.recordingMode + ":" + ScreenCatcherService.elapsedLabel) : (ScreenCatcherService.isSelecting ? "starting" : "idle"));
             return panel + "\t" + rec;
         }
 
@@ -64,6 +64,11 @@ PluginComponent {
         function stop(): string {
             if (!ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting)
                 return "NOT_RECORDING";
+            // Stopping twice is a no-op, not a second signal: the script is
+            // finalizing the file by then, and killing it there loses the
+            // recording outright.
+            if (ScreenCatcherService.isStopping)
+                return "ALREADY_STOPPING";
             ScreenCatcherService.stopRecording();
             return "STOPPING";
         }

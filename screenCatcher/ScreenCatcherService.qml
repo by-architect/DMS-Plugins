@@ -138,6 +138,32 @@ Singleton {
     // start, and never mid-recording. The script prints "SAVED <path>" when it
     // kept a file and "COPIED <name>" when the capture only went to the
     // clipboard, which is all the UI needs to say something accurate.
+    // wf-recorder/ffmpeg print an enormous x264 banner to stderr on every
+    // single run, so pasting stderr into a toast produced a screen-height wall
+    // of codec options with the actual problem nowhere in sight. The script's
+    // own "ERROR <token>" line is what carries the meaning; stderr is only a
+    // last resort, and then only its final line.
+    readonly property var _errorMessages: ({
+            "empty-output": "The recording produced no output — it may have been stopped before it really started.",
+            "wf-recorder-not-found": "wf-recorder is not installed.",
+            "ffmpeg-not-found": "ffmpeg is needed to convert a recording into a GIF.",
+            "slurp-not-found": "slurp is not installed.",
+            "grim-not-found": "grim is not installed.",
+            "grim-failed": "grim could not capture the screen.",
+            "tesseract-not-found": "tesseract is not installed.",
+            "clipboard-failed": "Could not copy to the clipboard — is wl-clipboard installed?"
+        })
+
+    function _errorDetail(token, stderrText) {
+        if (token && root._errorMessages[token])
+            return root._errorMessages[token];
+        if (token)
+            return token;
+        const lines = (stderrText || "").trim().split("\n").filter(l => l.trim().length > 0);
+        const last = lines.length ? lines[lines.length - 1].trim() : "";
+        return last.length > 160 ? last.substring(0, 160) + "…" : last;
+    }
+
     function _reportResult(label, stdout) {
         const lines = (stdout || "").trim().split("\n");
         const last = lines[lines.length - 1] || "";
@@ -171,7 +197,7 @@ Singleton {
             if (exitCode === 2)
                 return; // cancelled, stay quiet
             if (exitCode !== 0) {
-                ToastService.showError("Screenshot to text failed", stdout.trim());
+                ToastService.showError("Screenshot to text failed", root._errorDetail(root._tokenFrom(stdout), stdout));
                 return;
             }
             if (stdout.trim() === "EMPTY") {
@@ -187,10 +213,19 @@ Singleton {
         if (exitCode === 2)
             return; // cancelled, stay quiet
         if (exitCode !== 0) {
-            ToastService.showError(label + " failed", stdout.trim());
+            ToastService.showError(label + " failed", root._errorDetail(root._tokenFrom(stdout), stdout));
             return;
         }
         root._reportResult(label, stdout);
+    }
+
+    function _tokenFrom(stdout) {
+        const lines = (stdout || "").trim().split("\n");
+        for (let i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].indexOf("ERROR ") === 0)
+                return lines[i].substring(6).trim();
+        }
+        return "";
     }
 
     // ---------------------------------------------------------- recording
@@ -203,6 +238,12 @@ Singleton {
     // while slurp is up, or while audio/output setup runs.
     readonly property bool isSelecting: recProcess.running && !root.isRecording
     property bool isRecording: false
+    // True from the moment stop is requested until the script exits. Stopping
+    // is not instant — the container has to be muxed, a GIF has its palette
+    // pass, a clipboard copy has to be read in — and with nothing on screen
+    // saying so, the natural response to "nothing happened" is to hit stop
+    // again, which is exactly how a recording used to get destroyed.
+    property bool isStopping: false
     property string recordingMode: ""
     property string recordingFormat: ""
     property string recordingOutputPath: ""
@@ -226,7 +267,7 @@ Singleton {
     Timer {
         interval: 1000
         repeat: true
-        running: root.isRecording
+        running: root.isRecording && !root.isStopping
         onTriggered: root.elapsedSeconds = Math.floor((Date.now() - root.recordingStartedAt) / 1000)
     }
 
@@ -240,6 +281,7 @@ Singleton {
             return;
 
         const fmt = format || recordFormat;
+        root.isStopping = false;
         root.recordingMode = mode;
         root.recordingFormat = fmt;
 
@@ -268,13 +310,15 @@ Singleton {
     // nothing recorded yet): the script kills its slurp and exits as
     // cancelled, which beats leaving an invisible selection overlay behind.
     function stopRecording() {
-        if (!recProcess.running)
+        if (!recProcess.running || root.isStopping)
             return;
+        root.isStopping = true;
         recProcess.signal(15); // SIGTERM
     }
 
     function _resetRecordingState() {
         root.isRecording = false;
+        root.isStopping = false;
         root.recordingMode = "";
         root.recordingFormat = "";
         root.recordingOutputPath = "";
@@ -287,6 +331,7 @@ Singleton {
 
         property string finishedLabel: ""
         property string finishedOutput: ""
+        property string errorToken: ""
 
         stdout: SplitParser {
             splitMarker: "\n"
@@ -303,6 +348,8 @@ Singleton {
                     // reads as a lie.
                     recProcess.finishedLabel = root.recordingFormat === "gif" ? "GIF" : "Recording";
                     recProcess.finishedOutput = line;
+                } else if (line.indexOf("ERROR ") === 0) {
+                    recProcess.errorToken = line.substring(6).trim();
                 } else if (line === "CANCELLED") {
                     ToastService.showInfo("Recording cancelled");
                 }
@@ -315,12 +362,14 @@ Singleton {
 
         onExited: (exitCode, exitStatus) => {
             if (exitCode !== 0 && exitCode !== 2) {
-                ToastService.showError("Recording failed", recStderr.text.trim() || ("exit code " + exitCode));
+                const detail = root._errorDetail(recProcess.errorToken, recStderr.text);
+                ToastService.showError("Recording failed", detail || ("exit code " + exitCode));
             } else if (recProcess.finishedOutput) {
                 root._reportResult(recProcess.finishedLabel, recProcess.finishedOutput);
             }
             recProcess.finishedLabel = "";
             recProcess.finishedOutput = "";
+            recProcess.errorToken = "";
             root._resetRecordingState();
         }
     }

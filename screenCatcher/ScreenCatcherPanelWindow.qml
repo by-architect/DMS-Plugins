@@ -207,7 +207,7 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes")
+                                text: ScreenCatcherService.isStopping ? ("Saving the recording — " + ScreenCatcherService.recordingLabel + (ScreenCatcherService.recordingFormat === "gif" ? " · converting, this takes a moment" : "")) : (ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes"))
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting) ? Theme.error : Theme.surfaceVariantText
                             }
@@ -475,10 +475,13 @@ PanelWindow {
                                 width: parent.width
                                 height: 44
                                 visible: ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting
-                                danger: true
-                                letter: "X"
-                                icon: "stop_circle"
-                                label: ScreenCatcherService.isRecording ? ("Stop Recording · " + ScreenCatcherService.elapsedLabel) : "Cancel Recording"
+                                danger: !ScreenCatcherService.isStopping
+                                // Not a button once stopping has begun: it is
+                                // reporting that the file is being written.
+                                interactive: !ScreenCatcherService.isStopping
+                                letter: ScreenCatcherService.isStopping ? "…" : "X"
+                                icon: ScreenCatcherService.isStopping ? "save" : "stop_circle"
+                                label: ScreenCatcherService.isStopping ? "Saving…" : (ScreenCatcherService.isRecording ? ("Stop Recording · " + ScreenCatcherService.elapsedLabel) : "Cancel Recording")
                                 onActivated: ScreenCatcherService.stopRecording()
                             }
                         }

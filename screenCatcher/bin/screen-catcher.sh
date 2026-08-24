@@ -414,7 +414,16 @@ rec-start)
     while kill -0 "$child_pid" 2>/dev/null; do
         wait "$child_pid" 2>/dev/null
     done
-    trap - INT TERM
+
+    # Ignore further stop signals rather than restoring the default action.
+    # Everything below is finalization — muxing, the GIF palette pass, the
+    # clipboard copy — and a second stop landing here used to kill the script
+    # outright: no SAVED line, an orphaned wf-recorder still writing the file,
+    # and QML reporting "exit 143" with wf-recorder's entire x264 banner as
+    # the error. A second stop is not a request to lose the recording; it
+    # means the user could not tell that stopping had already worked, which
+    # the "Saving…" state in the UI now answers.
+    trap "" INT TERM
 
     teardown_mix_audio
 

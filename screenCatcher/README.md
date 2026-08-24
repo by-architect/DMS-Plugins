@@ -202,14 +202,14 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `<action>` | Effect |
 |---|---|
 | `open` / `close` / `toggle` | Show/hide the panel |
-| `status` | Reports panel open/closed + recording state (`idle`, `starting`, `recording:<mode>:<elapsed>`) |
+| `status` | Reports panel open/closed + recording state (`idle`, `starting`, `recording:<mode>:<elapsed>`, `saving:<format>`) |
 | `shotSelected` | Screenshot Selected — works even with the panel closed |
 | `shotFullscreen` | Screenshot Fullscreen |
 | `shotText` | Screenshot to Text |
 | `recordFullscreen` | Start Record Fullscreen (uses the current format chip) |
 | `recordSelected` | Start Record Selected (uses the current format chip) |
 | `recordSelectedGif` | Start Record Selected as GIF (ignores the format chip) |
-| `stop` | **The stop command** — stops whatever recording is running (or cancels one still waiting on a selection), or no-ops if nothing is |
+| `stop` | **The stop command** — stops whatever recording is running (or cancels one still waiting on a selection), or no-ops if nothing is. Stopping again while it is saving returns `ALREADY_STOPPING` and does nothing |
 | `micToggle` | Toggle microphone capture on/off |
 | `sysAudioToggle` | Toggle system-audio capture on/off |
 | `clipboardToggle` | Screenshots: toggle Save to Clipboard |
@@ -241,6 +241,29 @@ Any of these, all equivalent:
 Stopping sends `SIGTERM` to the wrapper script (not `SIGINT` — see below),
 which lets it finalize the output file properly rather than leaving a corrupt
 video.
+
+**Stopping is not instant, and the UI now says so.** After the recorder stops
+there is still work to do: muxing the container, the palette pass for a GIF
+(which can take a while on a big one), the clipboard copy. The bar pill and
+the panel switch to a **Saving…** state for that whole stretch — the timer
+freezes, the pulse stops, and the stop button stops being a button.
+
+That state exists because of a real way to lose a recording: with nothing on
+screen acknowledging the first stop, pressing stop again was the natural
+thing to do, and a second `SIGTERM` arriving during finalization killed the
+script outright — no `SAVED`, an orphaned `wf-recorder` still writing, a GIF
+that never got converted, and a "Recording failed" toast carrying
+`wf-recorder`'s entire x264 banner as its message. Confirmed and then fixed
+from both ends: the script now ignores stop signals once it is finalizing
+(`trap "" INT TERM` rather than restoring the default action), and the UI
+refuses to send a second one at all.
+
+**Failure toasts say what went wrong, not what the encoder was configured
+like.** `wf-recorder` and `ffmpeg` print a screen-height codec banner to
+stderr on every successful run, so using stderr as the error message produced
+an unreadable wall of x264 options. The script's own `ERROR <token>` line is
+what carries the meaning and gets mapped to a sentence; stderr is a last
+resort, and then only its final line, truncated.
 
 ## How it works
 

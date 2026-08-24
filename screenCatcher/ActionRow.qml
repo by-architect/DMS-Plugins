@@ -12,11 +12,16 @@ StyledRect {
     property string icon: ""
     property string label: ""
     property bool danger: false
+    // Rows that are showing state rather than offering an action (the
+    // "Saving…" row while a recording finalizes) set this: no hover, no
+    // pointer cursor, no click.
+    property bool interactive: true
 
     signal activated
 
     radius: Theme.cornerRadius
-    color: danger ? Theme.withAlpha(Theme.error, mouseArea.containsMouse ? 0.24 : 0.16) : (mouseArea.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh)
+    opacity: interactive ? 1 : 0.7
+    color: danger ? Theme.withAlpha(Theme.error, (mouseArea.containsMouse && interactive) ? 0.24 : 0.16) : ((mouseArea.containsMouse && interactive) ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh)
 
     Row {
         anchors.left: parent.left
@@ -60,7 +65,8 @@ StyledRect {
     MouseArea {
         id: mouseArea
         anchors.fill: parent
-        hoverEnabled: true
+        enabled: root.interactive
+        hoverEnabled: root.interactive
         cursorShape: Qt.PointingHandCursor
         onClicked: root.activated()
     }

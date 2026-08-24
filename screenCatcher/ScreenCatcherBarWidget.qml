@@ -33,13 +33,13 @@ PluginComponent {
                 DankIcon {
                     id: recIcon
                     anchors.verticalCenter: parent.verticalCenter
-                    name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
+                    name: ScreenCatcherService.isStopping ? "save" : (ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor")
                     color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
                     size: root.iconSize
                     filled: ScreenCatcherService.isRecording
 
                     SequentialAnimation on opacity {
-                        running: ScreenCatcherService.isRecording
+                        running: ScreenCatcherService.isRecording && !ScreenCatcherService.isStopping
                         loops: Animation.Infinite
                         onRunningChanged: if (!running) recIcon.opacity = 1
                         NumberAnimation {
@@ -58,7 +58,7 @@ PluginComponent {
                 StyledText {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: ScreenCatcherService.isRecording
-                    text: ScreenCatcherService.elapsedLabel
+                    text: ScreenCatcherService.isStopping ? "Saving…" : ScreenCatcherService.elapsedLabel
                     color: Theme.error
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.Medium
@@ -67,7 +67,7 @@ PluginComponent {
                 Rectangle {
                     id: stopButton
                     anchors.verticalCenter: parent.verticalCenter
-                    visible: ScreenCatcherService.isRecording
+                    visible: ScreenCatcherService.isRecording && !ScreenCatcherService.isStopping
                     width: root.iconSize + 8
                     height: width
                     radius: width / 2
@@ -123,13 +123,13 @@ PluginComponent {
                 DankIcon {
                     id: vRecIcon
                     anchors.horizontalCenter: parent.horizontalCenter
-                    name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
+                    name: ScreenCatcherService.isStopping ? "save" : (ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor")
                     color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
                     size: root.iconSize
                     filled: ScreenCatcherService.isRecording
 
                     SequentialAnimation on opacity {
-                        running: ScreenCatcherService.isRecording
+                        running: ScreenCatcherService.isRecording && !ScreenCatcherService.isStopping
                         loops: Animation.Infinite
                         onRunningChanged: if (!running) vRecIcon.opacity = 1
                         NumberAnimation {
@@ -148,7 +148,7 @@ PluginComponent {
                 StyledText {
                     anchors.horizontalCenter: parent.horizontalCenter
                     visible: ScreenCatcherService.isRecording
-                    text: ScreenCatcherService.elapsedLabel
+                    text: ScreenCatcherService.isStopping ? "…" : ScreenCatcherService.elapsedLabel
                     color: Theme.error
                     font.pixelSize: Theme.fontSizeSmall
                     horizontalAlignment: Text.AlignHCenter
