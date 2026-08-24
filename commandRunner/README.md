@@ -8,6 +8,8 @@ run lock       →  runs "Lock screen" if that's what you named it
 run            →  lists every configured command
 ```
 
+![The DMS launcher — `run ` goes into that search field](docs/launcher.png)
+
 ## Install
 
 Symlink it into the DMS plugin directory:
@@ -29,6 +31,8 @@ Settings → Plugins → Command Runner → Commands. Each entry has:
 | Name | Yes | What you'll search for after the trigger |
 | Command | Yes | Runs via `sh -c`, so pipes, redirects and quoting all work |
 | Icon | No | `material:<name>`, `unicode:<char>`, or a desktop icon theme name. Defaults to `material:terminal` |
+
+![Settings → Plugins → Command Runner: the trigger, the add row, and the configured commands](docs/settings.png)
 
 Example — a screenshot-to-clipboard command needs the shell for its pipe:
 
