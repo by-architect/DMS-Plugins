@@ -1,0 +1,21 @@
+{
+    "id": "signalChat",
+    "name": "Signal",
+    "description": "Connects DMS to Signal as a linked device. Chats, groups, attachments, replies and read receipts appear in the DMS chat window.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "chat",
+    "capabilities": ["chat", "messaging"],
+    "icon": "chat",
+    "bridge": ["./bin/signal-chat-bridge"],
+    "warning": "Signal does not keep message history on its servers, so a newly linked device starts empty and fills up as messages arrive. Conversations from before you linked will not appear.",
+    "settings": "./SignalChatSettings.qml",
+    "startupCheck": "./SignalChatStartupCheck.qml",
+    "dependencies": ["go", "signal-cli"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "network",
+        "process"
+    ]
+}
