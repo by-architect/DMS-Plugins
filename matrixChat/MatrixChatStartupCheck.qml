@@ -1,13 +1,16 @@
 import QtQuick
 import qs.Common
 
-// Gates activation on the two things this provider cannot work without: a built
-// bridge, and a session to resume.
+// Gates activation on the bridge binary existing.
 //
-// The session check matters more here than for other providers. Matrix has no
-// QR code to scan, so signing in happens in a terminal via ./login.sh. Without
-// this the plugin would enable, sit at "needsLogin" with a sign-in panel that
-// has nothing to show, and give no hint that the answer is a shell script.
+// The bridge is Go and has to be compiled for the machine it runs on, so it is
+// not shipped prebuilt. Without this the plugin would enable, the backend would
+// fail to spawn a missing executable, and the user would see nothing but a
+// provider stuck at "disconnected".
+//
+// Deliberately does not check for a session: signing in happens in the
+// provider's own card in Settings, so enabling without one is the normal first
+// step rather than a misconfiguration.
 QtObject {
     function check(done) {
         const dir = PluginService.getPluginPath("matrixChat");
@@ -22,27 +25,13 @@ QtObject {
         const bridge = dir + "/bin/matrix-chat-bridge";
 
         Proc.runCommand("matrixChat.bridgeCheck", ["test", "-x", bridge], (stdout, exitCode) => {
-            if (exitCode !== 0) {
-                done({
-                    "title": "Matrix bridge is not built",
-                    "details": "Run ./build.sh in " + dir + " to compile it (needs Go), then enable this plugin again."
-                });
+            if (exitCode === 0) {
+                done(null);
                 return;
             }
-
-            // Checked second so the message names whichever step is actually
-            // outstanding, rather than always blaming the build.
-            const session = "${XDG_DATA_HOME:-$HOME/.local/share}/dms-matrix/session.json";
-
-            Proc.runCommand("matrixChat.sessionCheck", ["sh", "-c", "test -f " + session], (out, code) => {
-                if (code === 0) {
-                    done(null);
-                    return;
-                }
-                done({
-                    "title": "Not signed in to Matrix",
-                    "details": "Run ./login.sh in " + dir + " to sign in. It asks for your homeserver, user id and password, keeps only the resulting token, and never stores the password."
-                });
+            done({
+                "title": "Matrix bridge is not built",
+                "details": "Run ./build.sh in " + dir + " to compile it (needs Go), then enable this plugin again."
             });
         });
     }

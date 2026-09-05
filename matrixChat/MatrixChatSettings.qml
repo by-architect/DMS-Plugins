@@ -150,7 +150,7 @@ PluginSettings {
 
     StyledText {
         width: parent ? parent.width : 0
-        text: "Matrix has no QR code to scan, so the Sign in button above cannot do it. Run ./login.sh in this plugin's directory instead — it asks for your homeserver, user id and password, keeps only the access token it gets back, and never stores the password."
+        text: "Matrix has no QR code to scan, so the sign-in panel asks for your homeserver, user id and password instead. What you type is exchanged for an access token and then discarded — only the token is kept, and never in this settings file."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap

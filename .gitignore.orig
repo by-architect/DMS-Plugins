@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-=======
 # Compiled plugin bridges. These are built per machine by the plugin's
 # build.sh, not shipped: a Go binary is ~25 MB and architecture specific.
 bin/
@@ -7,5 +5,10 @@ bin/
 # `go build` inside a bridge's src/ drops a module-named binary next to the
 # sources; build.sh writes to bin/ instead.
 whatsappChat/src/whatsappchatbridge
->>>>>>> df96063 (#0 Add the WhatsApp chat plugin)
+<<<<<<< HEAD
+=======
+signalChat/src/signalchatbridge
+matrixChat/src/matrixchatbridge
+
+>>>>>>> 2690cbb (#0 Sign in to Matrix from the Chats settings page)
 commit-changes.md
