@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,10 +121,10 @@ func (b *bridge) connect() {
 		return
 	}
 	if !sess.valid() {
-		// Nothing to resume. Matrix has no scannable code to offer, so the way
-		// in is the login helper; say so rather than leaving a silent panel.
-		logf("info", "no Matrix session yet -- run ./login.sh in the plugin directory to sign in")
+		// Nothing to resume. Matrix has no scannable code, so the sign-in panel
+		// asks for credentials instead.
 		emitState("needsLogin")
+		b.emitLoginForm()
 		return
 	}
 
@@ -275,9 +276,9 @@ func isAuthError(err error) bool {
 
 // handleLogin is the Sign in button.
 //
-// Matrix has no QR flow to offer here: signing in means a password or an SSO
-// round trip, and neither belongs in the shell's settings file. So this resumes
-// an existing session if there is one, and otherwise points at the helper.
+// Matrix has no QR to scan, so this asks for credentials instead: the host
+// renders the form, sends the answers back with authSubmit, and stores none of
+// them.
 func (b *bridge) handleLogin(ctx context.Context, c call) {
 	ok(c.ID, nil)
 
@@ -292,10 +293,93 @@ func (b *bridge) handleLogin(ctx context.Context, c call) {
 		return
 	}
 
-	logf("warn", "no Matrix session. Run ./login.sh in the plugin directory to sign in; "+
-		"it asks for your homeserver, user id and password, exchanges them for a token, "+
-		"and never stores the password.")
 	emitState("needsLogin")
+	b.emitLoginForm()
+}
+
+// emitLoginForm asks the host to collect what a Matrix login needs.
+//
+// The homeserver is pre-filled with the common default so most people only type
+// two things. Nothing here is remembered between attempts: a failed password is
+// not worth keeping, and keeping it is exactly what this design avoids.
+func (b *bridge) emitLoginForm() {
+	emitEvent("auth", map[string]any{
+		"method": "form",
+		"title":  "Sign in to your Matrix homeserver.",
+		"fields": []map[string]any{
+			{
+				"key":      "homeserver",
+				"label":    "Homeserver",
+				"type":     "url",
+				"value":    "https://matrix.org",
+				"required": true,
+			},
+			{
+				"key":         "user",
+				"label":       "User ID",
+				"type":        "text",
+				"placeholder": "@you:example.org",
+				"required":    true,
+			},
+			{
+				"key":      "password",
+				"label":    "Password",
+				"type":     "password",
+				"required": true,
+			},
+		},
+	})
+}
+
+// handleAuthSubmit signs in with what the user typed.
+//
+// The credentials arrive, are exchanged for an access token, and go no further:
+// only the token is written, and the password is not logged even on failure.
+func (b *bridge) handleAuthSubmit(ctx context.Context, c call) {
+	var params struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := json.Unmarshal(c.Params, &params); err != nil {
+		fail(c.ID, "bad_params", "could not read the sign-in details")
+		return
+	}
+
+	homeserver := strings.TrimSpace(params.Values["homeserver"])
+	user := strings.TrimSpace(params.Values["user"])
+	password := params.Values["password"]
+
+	if homeserver == "" || user == "" || password == "" {
+		fail(c.ID, "bad_params", "homeserver, user id and password are all required")
+		return
+	}
+	if !strings.Contains(homeserver, "://") {
+		// A bare hostname is what people type.
+		homeserver = "https://" + homeserver
+	}
+
+	sess, err := signIn(ctx, homeserver, user, password)
+	if err != nil {
+		// The homeserver's own words are the useful ones -- "Invalid password"
+		// rather than "login failed" -- and this message is what the user sees.
+		fail(c.ID, "login_failed", "%s", loginErrorMessage(err))
+		return
+	}
+
+	// A new device means new encryption keys, so any store from a previous
+	// session is stale and would only produce undecryptable messages.
+	_ = clearSession()
+	if err := saveSession(sess); err != nil {
+		fail(c.ID, "login_failed", "signed in, but could not save the session: %v", err)
+		return
+	}
+
+	ok(c.ID, nil)
+	logf("info", "signed in as %s", sess.UserID)
+
+	if err := b.startClient(sess); err != nil {
+		logf("error", "%v", err)
+		emitState("disconnected")
+	}
 }
 
 func (b *bridge) handleLogout(ctx context.Context, c call) {

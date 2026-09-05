@@ -5,5 +5,7 @@ bin/
 # `go build` inside a bridge's src/ drops a module-named binary next to the
 # sources; build.sh writes to bin/ instead.
 whatsappChat/src/whatsappchatbridge
+signalChat/src/signalchatbridge
+matrixChat/src/matrixchatbridge
 
 commit-changes.md
