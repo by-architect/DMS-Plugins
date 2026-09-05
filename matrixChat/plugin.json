@@ -1,0 +1,21 @@
+{
+    "id": "matrixChat",
+    "name": "Matrix",
+    "description": "Connects DMS to a Matrix homeserver such as Synapse. Rooms, direct messages, attachments, replies and read receipts appear in the DMS chat window, with end-to-end encryption.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "chat",
+    "capabilities": ["chat", "messaging"],
+    "icon": "hub",
+    "bridge": ["./bin/matrix-chat-bridge"],
+    "warning": "Signing in creates a new device, which cannot read messages sent before it existed. To read encrypted history, verify this device from a client already signed in to your account.",
+    "settings": "./MatrixChatSettings.qml",
+    "startupCheck": "./MatrixChatStartupCheck.qml",
+    "dependencies": ["go"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "network",
+        "process"
+    ]
+}
