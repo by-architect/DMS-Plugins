@@ -30,27 +30,30 @@ implementation, so encryption needs no libolm and no C toolchain.
 git clone <this repo> ~/.config/DankMaterialShell/plugins/matrixChat
 cd ~/.config/DankMaterialShell/plugins/matrixChat
 ./build.sh
-./login.sh
 ```
 
-Then enable **Matrix** under **Settings → Chats**.
+Then enable **Matrix** under **Settings → Chats** and sign in there: the
+provider's card asks for your homeserver, user id and password, in the same place
+WhatsApp shows a QR code.
 
-The plugin refuses to enable until both steps are done, and says which one is
-outstanding rather than sitting silently at "disconnected".
+The plugin refuses to enable until the bridge is built, and says so rather than
+sitting silently at "disconnected".
 
-## Why signing in is a script
+## How signing in works
 
-Matrix has no QR code to scan. Signing in means a password, and a password has no
-business being in `plugin_settings.json` — that file is ordinary config, readable
-by anything that can read your home directory.
+Matrix has no QR code to scan, so instead of a code the card shows a short form.
+The bridge declares the fields it needs and DMS renders them — the shell knows
+nothing about homeservers.
 
-So `./login.sh` asks in a terminal, exchanges the password for an access token
-immediately, and stores **only the token**, in a file readable by you alone. The
-password is never written anywhere.
+**What you type is never stored.** The values go through the socket to the
+bridge, which exchanges them for an access token and drops them. Only the token
+is written, in a file readable by you alone. The password is not saved, not
+logged, and not put in `plugin_settings.json` — which is ordinary config,
+readable by anything that can read your home directory, and no place for a
+credential.
 
-This is also why the **Sign in** button in Settings cannot do it: there is
-nothing for it to show. Pressing it resumes an existing session, and otherwise
-points you back here.
+`./login.sh` does exactly the same thing from a terminal, if you would rather
+sign in before enabling the plugin, or are working on the bridge outside DMS.
 
 ## Encrypted history, and the one thing to know
 
@@ -132,15 +135,17 @@ is otherwise invisible.
 
 | Symptom | Usually |
 |---|---|
-| Will not enable | The bridge is not built, or you have not run `./login.sh` — the message says which |
-| Stuck at "needsLogin" | No session, or the token was revoked. Run `./login.sh` again |
+| Will not enable | The bridge is not built — run `./build.sh` |
+| Stuck at "needsLogin" | No session, or the token was revoked. Sign in again from the provider's card |
+| Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
 | Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
 | Messages say they cannot be decrypted | This device is not verified yet — verify it from Element |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
 | Attachment will not open | `dms chat tail` shows the download error; encrypted media needs the room's keys |
 
 If the homeserver revokes the token, the bridge stops rather than retrying
-forever, clears the session and reports `needsLogin`. Run `./login.sh` again.
+forever, clears the session and reports `needsLogin`, which puts the sign-in form
+back in the provider's card.
 
 ## Environment
 

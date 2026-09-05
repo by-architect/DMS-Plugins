@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"golang.org/x/term"
-	"maunium.net/go/mautrix"
 )
 
 // The interactive sign-in helper, run from a terminal rather than from the
@@ -63,48 +62,10 @@ func runLogin() {
 	fmt.Println()
 	fmt.Println("Signing in...")
 
-	client, err := mautrix.NewClient(homeserver, "", "")
+	sess, err := signIn(context.Background(), homeserver, user, password)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: sign-in failed: %s\n", loginErrorMessage(err))
 		os.Exit(1)
-	}
-
-	resp, err := client.Login(context.Background(), &mautrix.ReqLogin{
-		Type: mautrix.AuthTypePassword,
-		Identifier: mautrix.UserIdentifier{
-			Type: mautrix.IdentifierTypeUser,
-			User: user,
-		},
-		Password:                 password,
-		InitialDeviceDisplayName: "DankMaterialShell",
-		// Follow the homeserver's own advice about where its API lives; the URL
-		// people know is often not the one the client should talk to.
-		StoreHomeserverURL: true,
-		StoreCredentials:   true,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: sign-in failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	pickleKey, err := newPickleKey()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// The homeserver may have redirected us elsewhere via .well-known.
-	hsURL := homeserver
-	if client.HomeserverURL != nil {
-		hsURL = client.HomeserverURL.String()
-	}
-
-	sess := &session{
-		HomeserverURL: hsURL,
-		UserID:        string(resp.UserID),
-		DeviceID:      string(resp.DeviceID),
-		AccessToken:   resp.AccessToken,
-		PickleKey:     pickleKey,
 	}
 
 	// A new device means new encryption keys, so any store from a previous
@@ -118,8 +79,8 @@ func runLogin() {
 
 	path, _ := sessionPath()
 	fmt.Println()
-	fmt.Printf("Signed in as %s\n", resp.UserID)
-	fmt.Printf("Device:  %s\n", resp.DeviceID)
+	fmt.Printf("Signed in as %s\n", sess.UserID)
+	fmt.Printf("Device:  %s\n", sess.DeviceID)
 	fmt.Printf("Session: %s\n", path)
 	fmt.Println()
 	fmt.Println("Now enable Matrix under Settings -> Chats.")
