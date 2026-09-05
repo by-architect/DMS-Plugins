@@ -190,8 +190,8 @@ is otherwise invisible.
 | Will not enable | The bridge is not built — run `./build.sh` |
 | Stuck at "needsLogin" | No session, or the token was revoked. Sign in again from the provider's card |
 | Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
-| Rooms are named after their id | The name cache was lost; delete `rooms.json` and restart to rebuild it from the server |
-| Messages say they cannot be decrypted | This device is not verified yet — enter your recovery key under Settings → Chats → Matrix |
+| Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
+| Messages say they cannot be decrypted | This device is not verified yet — verify it from Element |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
 | Attachment will not open | `dms chat tail` shows the download error; encrypted media needs the room's keys |
 
