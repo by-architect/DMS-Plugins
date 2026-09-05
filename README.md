@@ -19,6 +19,7 @@ the DMS chat system.
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
 | [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
+| [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
 
 Every plugin has its own README with the full detail — the sections below are
 summaries of what each one is for and what it needs.
@@ -60,8 +61,9 @@ SHELL_PATH=$(quickshell list --all | grep -oE '/[^ ]*/shell\.qml' | head -1)
 quickshell -p "$SHELL_PATH" ipc call plugin-scan scan
 ```
 
-**whatsappChat and signalChat need one extra step** — their bridges are
-compiled, see their sections below.
+**whatsappChat, signalChat and matrixChat need one extra step** — their
+bridges are compiled, see their sections below. matrixChat needs a second:
+`./login.sh`, because Matrix has no QR code to scan.
 
 A plugin with unmet dependencies refuses to activate and says which binary is
 missing, rather than enabling and failing quietly later.
@@ -314,20 +316,26 @@ program that translates its service into newline-delimited JSON. The DMS
 backend owns the message store, unread counts, the attachment cache,
 notifications and search, so a bridge only has to speak its protocol.
 
-**whatsappChat** and **signalChat** are two such providers. **chatRunner** is
-not a provider at all — it's the launcher that lists whatever providers you
-have installed.
+**whatsappChat**, **signalChat** and **matrixChat** are three such providers.
+**chatRunner** is not a provider at all — it's the launcher that lists whatever
+providers you have installed.
 
 ```
-                                            ┌── whatsappChat bridge ──▶ WhatsApp
-    chatRunner ──┐                          │
-                 ├──▶   DMS chat backend  ◀─┤
-    chat window ─┘    (store, notifications, │
-                       search)              └── signalChat bridge ────▶ Signal
+                                          ┌── whatsappChat bridge ──▶ WhatsApp
+    chatRunner ──┐                        │
+                 ├──▶  DMS chat backend ◀─┼── signalChat bridge ────▶ Signal
+    chat window ─┘   (store, notifications,│
+                      search)              └── matrixChat bridge ────▶ Matrix
 ```
 
-Neither bridge knows the other exists, and the shell knows neither service.
-That is the whole point of the arrangement: a third provider is a third bridge.
+No bridge knows the others exist, and the shell knows none of the three
+services. That is the whole point of the arrangement: a fourth provider is a
+fourth bridge, and nothing here changes to accommodate it.
+
+The three are deliberately different shapes, which is the useful part: WhatsApp
+speaks its own protocol through a library, Signal is reached by driving
+`signal-cli` as a child process, and Matrix is a plain HTTP API the bridge calls
+directly. All three arrive at the same contract.
 
 So chatRunner on its own shows an empty list. Install a provider first.
 
