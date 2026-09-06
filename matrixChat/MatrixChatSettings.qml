@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Common
+import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
 
@@ -57,6 +58,36 @@ PluginSettings {
             "description": "Rooms with more than one other person, as opposed to direct messages"
         }
     ]
+
+    property bool verifying: false
+    property string verifyResult: ""
+    property bool verifyFailed: false
+
+    // Verification goes to the bridge and nowhere else. The key is not written
+    // to plugin settings, which is ordinary readable config -- the bridge uses
+    // it to unlock secret storage and drops it.
+    function verify() {
+        const key = recoveryKeyField.text.trim();
+        if (key === "" || root.verifying)
+            return;
+
+        root.verifying = true;
+        root.verifyResult = "";
+
+        ChatService.authSubmit("matrixChat", {
+            "recoveryKey": key
+        }, (succeeded, error) => {
+            root.verifying = false;
+            root.verifyFailed = !succeeded;
+            if (succeeded) {
+                // Clear on success so the key is not left sitting in the field.
+                recoveryKeyField.text = "";
+                root.verifyResult = "This device is verified. Encrypted history will decrypt as it syncs.";
+            } else {
+                root.verifyResult = error || "Verification failed.";
+            }
+        });
+    }
 
     function hiddenTags() {
         return SettingsData.getPluginSetting("matrixChat", "hiddenTags", []) || [];
@@ -158,9 +189,64 @@ PluginSettings {
 
     StyledText {
         width: parent ? parent.width : 0
-        text: "Signing in creates a new device. It cannot read messages sent before it existed; to read encrypted history, verify it from a client already signed in to your account."
+        text: "Signing in creates a new device, which cannot read messages sent before it existed. Verify it below to unlock them."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+    }
+
+    // ------------------------------------------------------- verification
+
+    StyledText {
+        width: parent ? parent.width : 0
+        topPadding: Theme.spacingM
+        text: "Verify this device"
+        font.pixelSize: Theme.fontSizeMedium
+        font.weight: Font.Medium
+        color: Theme.surfaceText
+    }
+
+    StyledText {
+        width: parent ? parent.width : 0
+        text: "Matrix normally verifies a new device by asking you to confirm it on one you are already signed in to. If this is your only device there is nothing to confirm it from, so use your recovery key instead — the one Element gave you when you turned on Secure Backup. Your passphrase works here too."
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+    }
+
+    DankTextField {
+        id: recoveryKeyField
+
+        width: parent ? parent.width : 0
+        placeholderText: "EsTx xxxx xxxx xxxx …"
+        // Masked: it decrypts the whole account's history, so it deserves the
+        // same treatment as a password rather than sitting readable on screen.
+        // The reveal toggle earns its place here -- the key is 48 characters of
+        // base58 and a single mistyped one fails with no hint which.
+        // The field owns passwordVisible and writes to it on click, so it is
+        // read here rather than bound -- binding it would break on the first
+        // press, flipping the icon without revealing anything.
+        showPasswordToggle: true
+        echoMode: passwordVisible ? TextInput.Normal : TextInput.Password
+        enabled: !root.verifying
+        onAccepted: root.verify()
+    }
+
+    DankButton {
+        enabled: !root.verifying && recoveryKeyField.text.trim() !== ""
+        text: root.verifying ? "Verifying…" : "Verify with recovery key"
+        iconName: "verified_user"
+        backgroundColor: Theme.primary
+        textColor: Theme.onPrimary
+        onClicked: root.verify()
+    }
+
+    StyledText {
+        width: parent ? parent.width : 0
+        visible: root.verifyResult !== ""
+        text: root.verifyResult
+        font.pixelSize: Theme.fontSizeSmall
+        color: root.verifyFailed ? Theme.error : Theme.surfaceVariantText
         wrapMode: Text.WordWrap
     }
 }

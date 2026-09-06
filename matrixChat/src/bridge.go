@@ -32,6 +32,8 @@ type bridge struct {
 	// asked for one field at a time.
 	rooms map[id.RoomID]*roomInfo
 
+	roomStore *roomStore
+
 	settings map[string]any
 	mediaDir string
 
@@ -149,14 +151,30 @@ func (b *bridge) startClient(sess *session) error {
 	}
 	client.Store = store
 
+	// Loaded before syncing starts. The homeserver only sends full room state on
+	// a first sync, and this run almost certainly resumes from a stored
+	// position, so without the cache every room would be named after its id.
+	rooms, roomStore := loadRoomCache()
+
 	syncer := mautrix.NewDefaultSyncer()
-	client.Syncer = syncer
+	// Wrapped so room publishing happens after the response is applied rather
+	// than before it; the wrapper still satisfies ExtensibleSyncer, which the
+	// crypto helper requires.
+	client.Syncer = &publishingSyncer{DefaultSyncer: syncer, b: b}
 
 	b.mu.Lock()
 	b.client = client
 	b.sess = sess
 	b.store = store
+	b.roomStore = roomStore
+	if len(rooms) > 0 {
+		b.rooms = rooms
+	}
 	b.mu.Unlock()
+
+	if len(rooms) > 0 {
+		logf("debug", "loaded %d rooms from the local cache", len(rooms))
+	}
 
 	// End-to-end encryption. Most Matrix rooms are encrypted, so without this
 	// the majority of conversations would arrive as undecryptable blobs.
@@ -344,6 +362,16 @@ func (b *bridge) handleAuthSubmit(ctx context.Context, c call) {
 		return
 	}
 
+	// The same call carries two different things. Signing in needs a
+	// homeserver, a user and a password; verifying an already-signed-in device
+	// needs only the recovery key, and can arrive long afterwards from the
+	// plugin's settings page.
+	if recoveryKey := strings.TrimSpace(params.Values["recoveryKey"]); recoveryKey != "" {
+		raw, _ := json.Marshal(map[string]string{"recoveryKey": recoveryKey})
+		b.handleVerify(ctx, call{ID: c.ID, Method: "verify", Params: raw})
+		return
+	}
+
 	homeserver := strings.TrimSpace(params.Values["homeserver"])
 	user := strings.TrimSpace(params.Values["user"])
 	password := params.Values["password"]
@@ -440,6 +468,10 @@ func (b *bridge) shutdown() {
 		helper := b.crypto
 		db := b.db
 		b.mu.RUnlock()
+
+		// Written on the way out so a clean stop does not lose whatever the
+		// last sync learned.
+		b.persistRooms()
 
 		if helper != nil {
 			_ = helper.Close()

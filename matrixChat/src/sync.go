@@ -33,14 +33,33 @@ func (b *bridge) registerHandlers(syncer *mautrix.DefaultSyncer) {
 	syncer.OnEventType(event.EventRedaction, b.onRedaction)
 	syncer.OnEventType(event.EphemeralEventReceipt, b.onReceipt)
 
-	// The initial sync carries every room's state at once. Publishing chats
-	// during it would name each room after its id, because the member events
-	// that name it may not have been processed yet.
-	syncer.OnSync(b.onSyncResponse)
+	// Deliberately not syncer.OnSync: mautrix runs those listeners before it
+	// dispatches the response's events, so a callback there sees an empty room
+	// cache and names every room after its id. See publishingSyncer.
 }
 
-// onSyncResponse publishes the room list once the cache is populated.
-func (b *bridge) onSyncResponse(ctx context.Context, resp *mautrix.RespSync, since string) bool {
+// publishingSyncer publishes rooms once the response has actually been applied.
+//
+// mautrix's ProcessResponse calls its sync listeners first and dispatches the
+// room events afterwards. Wrapping it is the only hook that runs after the
+// m.room.name and m.room.member events have reached the cache, which is what a
+// room needs before it can be given a name.
+type publishingSyncer struct {
+	*mautrix.DefaultSyncer
+
+	b *bridge
+}
+
+func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.RespSync, since string) error {
+	if err := s.DefaultSyncer.ProcessResponse(ctx, resp, since); err != nil {
+		return err
+	}
+	s.b.afterSync(resp, since)
+	return nil
+}
+
+// afterSync publishes the room list once the cache is populated.
+func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	first := since == ""
 
 	b.mu.Lock()
@@ -51,7 +70,7 @@ func (b *bridge) onSyncResponse(ctx context.Context, resp *mautrix.RespSync, sin
 	if first || wasFirst {
 		emitState("connected")
 		go b.publishRooms()
-		return true
+		return
 	}
 
 	// An incremental sync: refresh only the rooms it mentioned, so a busy
@@ -67,7 +86,6 @@ func (b *bridge) onSyncResponse(ctx context.Context, resp *mautrix.RespSync, sin
 	if len(touched) > 0 {
 		go b.publishSome(touched)
 	}
-	return true
 }
 
 // publishRooms sends the whole room list.
@@ -85,6 +103,10 @@ func (b *bridge) publishRooms() {
 		logf("warn", "could not list joined rooms: %v", err)
 		return
 	}
+
+	// Anything the cache cannot name is looked up before publishing, so a room
+	// is never sent to the host as a raw id.
+	b.hydrate(context.Background(), client, joined.JoinedRooms)
 
 	chats := make([]chatObj, 0, len(joined.JoinedRooms))
 	for _, roomID := range joined.JoinedRooms {
@@ -105,6 +127,7 @@ func (b *bridge) publishRooms() {
 	if len(chats) > 0 {
 		logf("info", "published %d rooms", len(chats))
 	}
+	b.persistRooms()
 }
 
 func (b *bridge) publishSome(roomIDs []id.RoomID) {
