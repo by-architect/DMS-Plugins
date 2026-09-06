@@ -8,7 +8,7 @@
     "capabilities": ["chat", "messaging"],
     "icon": "hub",
     "bridge": ["./bin/matrix-chat-bridge"],
-    "warning": "Signing in creates a new device, which cannot read messages sent before it existed. To read encrypted history, verify this device from a client already signed in to your account.",
+    "warning": "Signing in creates a new device, which cannot read messages sent before it existed. To read encrypted history, verify this device with your recovery key below.",
     "settings": "./MatrixChatSettings.qml",
     "startupCheck": "./MatrixChatStartupCheck.qml",
     "dependencies": ["go"],
