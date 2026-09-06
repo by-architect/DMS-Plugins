@@ -105,6 +105,8 @@ func (b *bridge) dispatch(c call) {
 		b.handleLogin(ctx, c)
 	case "authSubmit":
 		b.handleAuthSubmit(ctx, c)
+	case "verify":
+		b.handleVerify(ctx, c)
 	case "logout":
 		b.handleLogout(ctx, c)
 	case "revoke":

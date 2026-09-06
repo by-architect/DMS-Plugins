@@ -55,20 +55,30 @@ credential.
 `./login.sh` does exactly the same thing from a terminal, if you would rather
 sign in before enabling the plugin, or are working on the bridge outside DMS.
 
-## Encrypted history, and the one thing to know
+## Encrypted history, and how to unlock it
 
 **Signing in creates a new device**, exactly as adding Element on a new phone
 does. A new device has no keys to messages sent before it existed, so encrypted
-history will show as undecryptable until you **verify this device** from a client
-already signed in to your account:
+history shows as undecryptable until the device is verified.
 
-> Element → Settings → Security & Privacy → verify this session
+Matrix normally verifies a new device by asking you to confirm it on one you are
+already signed in to. If DMS is your only signed-in client there is nothing to
+confirm it from — Element offers "start verification on the other device" and
+there is no other device.
 
-After verifying, key sharing backfills what your other devices can see.
+So use your **recovery key** instead, under **Settings → Chats → Matrix →
+Verify this device**. That is the key Element gave you when you turned on Secure
+Backup; the passphrase you chose works there too. It unlocks secret storage on
+your homeserver, which holds both the cross-signing keys that mark this device as
+genuinely yours and the backup key that decrypts your history.
+
+The key is sent to the bridge, used, and dropped. It is never written to plugin
+settings or logged.
+
+If the account has no Secure Backup, the field says so: turn it on in another
+client first, and keep the recovery key it gives you.
+
 Unencrypted rooms are readable immediately either way.
-
-This is Matrix working as designed, not a gap in the bridge. Any client would
-behave the same.
 
 ## What works
 
@@ -86,7 +96,7 @@ behave the same.
 | Direct messages named after the other person | yes |
 | Spaces | listed and taggable, but they are containers rather than conversations |
 | Invitations | shown, so you can see you have been invited |
-| History before this device existed | encrypted rooms need device verification first |
+| History before this device existed | unlock it with your recovery key, see below |
 | Backfill of older messages | not yet — the room shows what has arrived since signing in |
 | Search | local only — the DMS store indexes what it has received |
 | Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
@@ -110,6 +120,7 @@ Under **Settings → Chats → Matrix**:
 | Access token and device id | `~/.local/share/dms-matrix/session.json`, mode 0600 | matrixChat |
 | Encryption keys | `~/.local/share/dms-matrix/crypto.db` | matrixChat |
 | Sync position | `~/.local/share/dms-matrix/sync.json` | matrixChat |
+| Room names | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
 | Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |
 | Plugin settings | `~/.config/DankMaterialShell/plugin_settings.json` | DMS |
@@ -138,8 +149,8 @@ is otherwise invisible.
 | Will not enable | The bridge is not built — run `./build.sh` |
 | Stuck at "needsLogin" | No session, or the token was revoked. Sign in again from the provider's card |
 | Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
-| Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
-| Messages say they cannot be decrypted | This device is not verified yet — verify it from Element |
+| Rooms are named after their id | The name cache was lost; delete `rooms.json` and restart to rebuild it from the server |
+| Messages say they cannot be decrypted | This device is not verified yet — enter your recovery key under Settings → Chats → Matrix |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
 | Attachment will not open | `dms chat tail` shows the download error; encrypted media needs the room's keys |
 
