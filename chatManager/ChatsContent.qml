@@ -21,9 +21,11 @@ FocusScope {
     signal closeRequested
 
     // Keeps the chat subscription alive for as long as the window exists.
-    Ref {
-        service: root.chat
-    }
+    // Holding a reference is what keeps the manager streaming state while this
+    // is on screen. The shell's Ref helper only accepts a singleton, and the
+    // chat core stopped being one when it moved into a plugin.
+    Component.onCompleted: root.chatCore.refCount++
+    Component.onDestruction: root.chatCore.refCount--
 
     function takeFocus() {
         searchField.forceActiveFocus();
