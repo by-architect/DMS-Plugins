@@ -315,7 +315,7 @@ function all() {
 // Bumped whenever a shipped command changes. On a bump, an action still
 // carrying its shipped command is brought up to date; one the user has
 // rewritten is left exactly as they wrote it.
-var SEED_VERSION = 3;
+var SEED_VERSION = 4;
 
 // Seeding runs once. seededIds records every preset that has ever been written
 // into the list, so a later version can tell a genuinely new action from one
@@ -339,15 +339,26 @@ function seedIfNeeded(pluginService, pluginId) {
 
     var shipped = all();
 
-    var seededIds = pluginService.loadPluginData(pluginId, "seededIds", null);
-    if (!Array.isArray(seededIds)) {
-        // An install from before seededIds was recorded. That seeder wrote the
-        // whole set, so treat the whole set as already delivered -- otherwise
-        // anything the user had deleted would reappear on this upgrade.
-        seededIds = legacy ? shipped.map(function (preset) {
-            return preset.presetId;
-        }) : [];
-    }
+    // What counts as "already delivered". Two records cannot be trusted and are
+    // rebuilt from the list as it actually stands:
+    //
+    //   - an install from before seededIds existed, which has no record at all;
+    //   - one written by seedVersion 3, which recorded every shipped id
+    //     including ones it then failed to add, and so would withhold them
+    //     forever.
+    //
+    // Rebuilding costs one thing: a preset deleted before the repair comes back
+    // a single time. That is the better failure -- the alternative is new
+    // actions silently never arriving -- and once the record is sound it stops
+    // happening.
+    var recorded = pluginService.loadPluginData(pluginId, "seededIds", null);
+    var trustworthy = Array.isArray(recorded) && !legacy && version >= 4;
+    var seededIds = trustworthy ? recorded : current.map(function (item) {
+        return item.presetId;
+    }).filter(function (id) {
+        return !!id;
+    });
+
     var byId = {};
     for (var i = 0; i < shipped.length; i++)
         byId[shipped[i].presetId] = shipped[i];

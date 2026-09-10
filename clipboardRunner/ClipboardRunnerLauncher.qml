@@ -26,13 +26,15 @@ Item {
 
     // Passed to every command: where downloads land, and the terminal for the
     // two or three actions that genuinely need one.
+    readonly property string cacheDir: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/dms-clipboard-runner"
+
     property string downloadDir: ""
     property string terminal: "ghostty -e"
 
-    readonly property string cacheDir: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/dms-clipboard-runner"
     readonly property var ctx: ({
             "downloads": downloadDir,
-            "terminal": terminal
+            "terminal": terminal,
+            "cache": cacheDir
         })
 
     // getItems() has to answer synchronously, and the shell currently has no

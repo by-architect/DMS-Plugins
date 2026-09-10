@@ -289,7 +289,8 @@ var PLACEHOLDERS = {
     "color": 7,
     "name": 8,
     "downloads": 9,
-    "terminal": 10
+    "terminal": 10,
+    "cache": 11
 };
 
 function placeholderHint(group) {
@@ -316,7 +317,8 @@ function values(action, detail, ctx) {
         detail.color,
         actionLabel(action),
         ctx.downloads || "",
-        ctx.terminal || ""
+        ctx.terminal || "",
+        ctx.cache || ""
     ];
 }
 
@@ -342,6 +344,47 @@ function shellEscape(str) {
     return "'" + String(str === undefined || str === null ? "" : str).replace(/'/g, "'\\''") + "'";
 }
 
+// True when the thing being acted on is a clipboard image the plugin wrote out
+// itself, rather than a file that was already on disk somewhere.
+function isCached(detail, ctx) {
+    var cache = (ctx && ctx.cache) || "";
+    return cache.length > 0 && detail && detail.path && detail.path.indexOf(cache + "/") === 0;
+}
+
+// Touched before the command runs, so afterwards "what did this produce" is
+// answerable as "whatever in the cache is newer than this".
+function stampPrologue() {
+    return '__dms_stamp=$(mktemp)\n';
+}
+
+// An image that arrived as clipboard data has no home on disk, so its
+// conversions have nowhere useful to land either -- you would have to go
+// digging in the cache for them. Putting the result straight back on the
+// clipboard is what you wanted when you copied the image in the first place,
+// and it means conversions chain: convert, convert again, paste.
+//
+// Images go back as bytes, so pasting into an editor or a browser works.
+// Anything else goes back as a file URI, which is what a file manager wants.
+function copyBackEpilogue() {
+    return [
+        "",
+        'if [ "$__dms_rc" -eq 0 ]; then',
+        '    __dms_out=$(find "${11}" -maxdepth 1 -type f -newer "$__dms_stamp" ! -path "${2}" 2>/dev/null | head -n 1)',
+        '    if [ -n "$__dms_out" ]; then',
+        '        __dms_ext="${__dms_out:e:l}"',
+        '        [ "$__dms_ext" = "jpg" ] && __dms_ext="jpeg"',
+        '        case "$__dms_ext" in',
+        '            png|jpeg|gif|webp|bmp|tiff|avif)',
+        '                "${DMS_EXECUTABLE:-dms}" cl copy --type "image/$__dms_ext" < "$__dms_out" ;;',
+        '            *)',
+        '                printf \'file://%s\\r\\n\' "$__dms_out" | "${DMS_EXECUTABLE:-dms}" cl copy --type text/uri-list ;;',
+        '        esac',
+        '    fi',
+        "fi",
+        'rm -f "$__dms_stamp"'
+    ].join("\n");
+}
+
 // Everything runs detached with no terminal, so a command that takes a while
 // has no other way to tell you it finished. The action's own text is left
 // untouched -- the epilogue is appended at run time, and only when the action
@@ -349,7 +392,6 @@ function shellEscape(str) {
 function notifyEpilogue() {
     return [
         "",
-        "__dms_rc=$?",
         'if [ "$__dms_rc" -eq 0 ]; then',
         '    notify-send -a "Clipboard Runner" "${8}" "Finished"',
         "else",
@@ -374,6 +416,15 @@ function resolveCommand(action, detail, ctx) {
     if (!script.trim())
         return null;
 
+    // rc has to be captured before anything else runs, so the epilogues are
+    // assembled in one piece rather than appended independently.
+    const cached = isCached(detail, ctx);
+    if (cached)
+        script = stampPrologue() + script;
+    if (cached || action.notify !== false)
+        script += "\n__dms_rc=$?";
+    if (cached)
+        script += copyBackEpilogue();
     if (action.notify !== false)
         script += notifyEpilogue();
 

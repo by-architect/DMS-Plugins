@@ -118,6 +118,15 @@ image file it now is, so every conversion in the file group applies. The file is
 named after the clipboard entry and reused, so asking twice does not fetch it
 twice.
 
+**The result goes back on the clipboard.** When the thing being acted on came
+from the cache rather than from disk, whatever the action produced is copied
+back when it finishes — that is what you wanted when you copied the image in the
+first place, and it means conversions chain: convert, convert again, paste.
+Images go back as bytes, so pasting into an editor or a browser works; anything
+else (a pdf, say) goes back as a `file://` URI, which is what a file manager
+wants. A file that was already on disk is left alone — converting
+`~/photos/holiday.png` does not touch your clipboard.
+
 **What is this written in** reads the names inside the package and reports the
 framework: Flutter, React Native, Unity, Xamarin/.NET MAUI, Cordova/Ionic, Qt,
 Godot, Kotlin, or plain Java/Kotlin when there is no marker. `aapt` and
