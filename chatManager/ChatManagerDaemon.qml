@@ -49,7 +49,6 @@ PluginComponent {
         id: window
 
         chatCore: chatCore
-        popoutService: root.popoutService
     }
 
     // The single-conversation popout. The launcher opens this rather than the

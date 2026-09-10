@@ -31,9 +31,11 @@ FocusScope {
 
     readonly property bool showingConversation: !resolving && candidates.length === 0 && resolveError === ""
 
-    Ref {
-        service: root.chat
-    }
+    // Holding a reference is what keeps the manager streaming state while this
+    // is on screen. The shell's Ref helper only accepts a singleton, and the
+    // chat core stopped being one when it moved into a plugin.
+    Component.onCompleted: root.chatCore.refCount++
+    Component.onDestruction: root.chatCore.refCount--
 
     function takeFocus() {
         // Straight to the composer: a chat opens ready to be written in, and

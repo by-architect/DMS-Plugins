@@ -168,7 +168,7 @@ FocusScope {
     }
 
     Connections {
-        target: root.chat
+        target: root.chatCore
 
         function onActiveChatIdChanged() {
             root.replyTarget = null;
