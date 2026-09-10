@@ -23,7 +23,16 @@ Item {
     required property var link
     property var pluginData: ({})
 
-    readonly property var log: Log.scoped("ChatManager")
+    // Stock DMS has no Log singleton -- it is an addition in the forked shell
+    // this code came from -- so the plugin carries its own.
+    readonly property var log: QtObject {
+        function warn(...args) {
+            console.warn("chatManager:", args.join(" "));
+        }
+        function info(...args) {
+            console.log("chatManager:", args.join(" "));
+        }
+    }
 
     function _providerEnabledMap() {
         const map = root.pluginData ? root.pluginData.providerEnabled : undefined;
@@ -723,22 +732,19 @@ Item {
                 root.loadHistory(0);
         }
 
-        function onConnectionStateChanged() {
-            if (root.link.isConnected) {
-                root.ensureSubscription();
-            } else {
+        function onIsConnectedChanged() {
+            if (!root.link.isConnected) {
                 root.providers = [];
                 root.chats = [];
                 root.syncProgress = ({});
+                return;
             }
-        }
 
-        function onCapabilitiesReceived() {
-            if (root.available) {
-                root.ensureSubscription();
-                root.pushConfig();
-                root.refresh();
-            }
+            // The manager starts every provider stopped and knows nothing about
+            // the user's preferences, so a fresh connection has to be told both.
+            root.ensureSubscription();
+            root.pushConfig();
+            root.refresh();
         }
     }
 }
