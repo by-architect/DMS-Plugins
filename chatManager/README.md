@@ -21,7 +21,7 @@ DMS.
         ▼
  bridge process ──NDJSON stdio──▶ bin/chat-managerd        (this plugin)
                                         │
-                                        ├── history.db     shared message store
+                                        ├── stores/<provider>/history.db
                                         ├── media cache + GC
                                         └── desktop notifications
                                         │
@@ -51,13 +51,29 @@ that target itself.
 
 ## Providers
 
-A provider goes in `~/.config/DankMaterialShell/chat-providers/`, not in
-`plugins/`. It has no QML and no surface the shell can draw, so stock DMS would
-reject its manifest as invalid and say so on every scan. Keeping providers in
-their own directory avoids that entirely.
+A chat provider — Matrix, WhatsApp, Signal — is **its own plugin**, installed
+into `plugins/` like any other. That is deliberate: a provider can be added long
+after this one, without touching it.
 
-The plugins directory is still read, so an existing install where providers were
-symlinked in beside ordinary plugins keeps working.
+Each provider ships three things:
+
+| | |
+|---|---|
+| `plugin.json` | ordinary manifest, plus a `bridge` argv the manager reads |
+| a daemon surface | registers the provider with this plugin |
+| a settings surface | **its own** settings, kept in its own page |
+
+Enabling the provider's plugin is what starts its bridge; disabling it stops it.
+Its settings stay with it and are handed to the manager on change — nothing
+provider-specific is configured here.
+
+A provider's daemon is tiny: it finds this plugin through
+`pluginService.pluginDaemonInstances["chatManager"]` and calls
+`registerProvider(id, settings)`. The manager supervises the bridge process
+itself, so there is nothing for the provider to launch.
+
+The manifest needs a component of some kind — a manifest with none is rejected by
+DMS as invalid, which is what the daemon surface provides.
 
 ## Building
 
@@ -67,6 +83,23 @@ symlinked in beside ordinary plugins keeps working.
 
 Needs Go. CGO is off — the SQLite driver is pure Go — so the binary runs
 anywhere.
+
+## Where the messages live
+
+Each provider gets its own database:
+
+```
+~/.local/share/DankMaterialShell/chat/stores/<providerId>/history.db
+```
+
+One provider's conversations are never in another's file, so removing a provider
+is deleting one directory, and a query for one provider cannot see another's
+rows. Upgrading from the single `history.db` splits it automatically on first
+run; the old file is kept as `history.db.migrated` rather than deleted.
+
+Switching a provider off hides its conversations everywhere -- window, launcher,
+unread counts -- but does not delete them. Turning it back on brings the history
+back.
 
 ## Resource cost
 
