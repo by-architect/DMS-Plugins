@@ -137,7 +137,7 @@ PluginSettings {
     Repeater {
         model: root.filterTags
 
-        SettingsToggleRow {
+        DankToggle {
             required property var modelData
 
             width: parent ? parent.width : 0

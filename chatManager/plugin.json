@@ -1,0 +1,15 @@
+{
+    "id": "chatManager",
+    "name": "Chats",
+    "description": "The chat system: one window and one message store for every provider. Install a provider (Matrix, WhatsApp, Signal) alongside it and configure it here.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "chat"],
+    "icon": "chat",
+    "components": {
+        "daemon": "./ChatManagerDaemon.qml"
+    },
+    "settings": "./ChatManagerSettings.qml",
+    "permissions": ["settings_read", "settings_write", "process", "network"]
+}
