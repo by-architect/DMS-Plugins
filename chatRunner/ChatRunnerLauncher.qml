@@ -19,6 +19,16 @@ Item {
 
     property var pluginService: null
 
+    // The chat system is a plugin now, not a shell service. Its daemon holds
+    // the only connection to the manager, so everything chat-related is reached
+    // through it rather than through a ChatService singleton that stock DMS
+    // does not have.
+    readonly property var chatDaemon: {
+        const instances = root.pluginService?.pluginDaemonInstances ?? ({});
+        return instances["chatManager"] ?? null;
+    }
+    readonly property var chat: root.chatDaemon?.chat ?? null
+
     // Every known conversation, including contacts with no messages yet.
     property var _allChats: []
     property bool _loading: false
@@ -40,7 +50,7 @@ Item {
         active: false
         sourceComponent: Item {
             Ref {
-                service: ChatService
+                service: root.chat
             }
         }
     }
@@ -61,8 +71,11 @@ Item {
     function getItems(query) {
         const q = (query || "").trim();
 
-        if (!ChatService.available)
-            return root._statusItem("chat_bubble", "Chat is unavailable", "The DMS backend has no chat support, or no provider is enabled");
+        if (!root.chat)
+            return root._statusItem("chat_bubble", "Chat is unavailable", "Enable the Chats plugin to search your conversations");
+
+        if (!root.chat.available)
+            return root._statusItem("chat_bubble", "Chat is unavailable", "The chat manager is not running, or no provider is enabled");
 
         root._ensureLoaded();
 
@@ -147,7 +160,7 @@ Item {
     // isHidden defers to the provider's own filter settings, so the runner and
     // the conversation list agree about what exists.
     function isHidden(chat) {
-        return ChatService.isChatHidden(chat);
+        return root.chat ? root.chat.isChatHidden(chat) : false;
     }
 
     function _score(chat, lowerQuery, digits) {
@@ -228,7 +241,7 @@ Item {
     }
 
     function _providerName(providerId) {
-        const provider = ChatService.providerById(providerId);
+        const provider = root.chat ? root.chat.providerById(providerId) : null;
         return provider ? provider.name : providerId;
     }
 
@@ -237,6 +250,6 @@ Item {
             return;
         // The popout, not the full window: picking a row here means "read this
         // conversation", and the sidebar would just be the list you came from.
-        PopoutService.openChatPopoutFor(item.chatProvider, item.chatId);
+        root.chatDaemon?.openChatPopout(item.chatProvider, item.chatId);
     }
 }
