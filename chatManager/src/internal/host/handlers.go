@@ -210,14 +210,23 @@ func handleChats(ctx context.Context, conn *models.Conn, req models.Request, m *
 		chats []chat.Chat
 		err   error
 	)
+	// Only providers that are switched on. Their conversations stay in the
+	// store while a provider is off -- disabling a plugin must not throw away
+	// history -- but they are not shown.
+	visible := m.EnabledProviders()
+
 	switch {
 	case all:
-		chats, err = m.Store().AllChats(ctx, limit)
+		chats, err = m.Store().AllChatsIn(ctx, visible, limit)
 	default:
 		if provider, ok := models.Get[string](req, "provider"); ok && provider != "" {
+			if !m.IsEnabled(provider) {
+				models.Respond(conn, req.ID, chatsResult{Chats: []chat.Chat{}})
+				return
+			}
 			chats, err = m.Store().ChatsForProvider(ctx, provider, limit)
 		} else {
-			chats, err = m.Store().Chats(ctx, limit)
+			chats, err = m.Store().ChatsIn(ctx, visible, limit)
 		}
 	}
 	if err != nil {
@@ -280,7 +289,7 @@ func handleSearch(ctx context.Context, conn *models.Conn, req models.Request, m 
 	}
 	limit := models.GetOr(req, "limit", 50)
 
-	msgs, err := m.Store().SearchMessages(ctx, query, limit)
+	msgs, err := m.Store().SearchMessagesIn(ctx, m.EnabledProviders(), query, limit)
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
 		return

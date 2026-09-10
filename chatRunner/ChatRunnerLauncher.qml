@@ -94,8 +94,13 @@ Item {
         if (root._allChats.length > 0 && (Date.now() - root._loadedAt) < root.staleAfterMs)
             return;
 
+        if (!root.chat)
+            return;
+
         root._loading = true;
-        DMSService.sendRequest("chat.chats", {
+        // Through the plugin's own link. The chat backend is no longer mounted
+        // in the DMS daemon, so asking DMSService for it gets "unknown method".
+        root.chat.link.sendRequest("chat.chats", {
             "all": true,
             "limit": 5000
         }, response => {

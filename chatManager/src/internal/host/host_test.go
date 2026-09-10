@@ -99,7 +99,7 @@ func TestResolveBridgeContainsPathTraversal(t *testing.T) {
 func newTestManager(t *testing.T, pluginRoot string) *Manager {
 	t.Helper()
 
-	store, err := chat.OpenHistory(filepath.Join(t.TempDir(), "h.db"))
+	store, err := chat.NewMultiStore(filepath.Join(t.TempDir(), "stores"))
 	require.NoError(t, err)
 
 	media := chat.NewMedia(t.TempDir(), 0)

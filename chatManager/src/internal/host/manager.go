@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -62,7 +63,7 @@ type Config struct {
 
 // Manager owns the store, the media cache and every running bridge.
 type Manager struct {
-	store  *chat.HistoryStore
+	store  *chat.MultiStore
 	media  *chat.Media
 	notify *chat.NotifyPolicy
 
@@ -91,14 +92,24 @@ type Manager struct {
 // NewManager opens the store and discovers installed chat plugins. Bridges are
 // not started until a provider is enabled.
 func NewManager() (*Manager, error) {
-	dbPath, err := HistoryPath()
+	root, err := HistoryPath()
 	if err != nil {
 		return nil, err
 	}
 
-	store, err := chat.OpenHistory(dbPath)
+	store, err := chat.NewMultiStore(root)
 	if err != nil {
 		return nil, err
+	}
+
+	// Anyone upgrading has their conversations in the single history.db this
+	// replaced. Splitting it per provider on first run is the difference
+	// between keeping that history and appearing to have lost it.
+	shared := filepath.Join(filepath.Dir(root), "history.db")
+	if n, err := chat.MigrateSharedStore(context.Background(), shared, store); err != nil {
+		log.Warnf("could not migrate the old shared history: %v", err)
+	} else if n > 0 {
+		log.Infof("moved %d conversations into per-provider stores", n)
 	}
 
 	mediaRoot, err := MediaRoot()
@@ -213,6 +224,38 @@ func (m *Manager) ProviderPrefs(providerID string) chat.NotifyPrefs {
 }
 
 // GetConfig returns the current preferences.
+// IsEnabled reports whether a provider is currently switched on.
+//
+// A provider is switched on by its own plugin being enabled in the shell. Its
+// conversations stay in the store while it is off -- disabling a plugin should
+// not throw away history -- but they are hidden, so turning a provider off
+// removes its contacts from the window, the launcher and the unread counts.
+func (m *Manager) IsEnabled(providerID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.enabled[providerID]
+}
+
+// EnabledProviders lists the providers currently switched on.
+//
+// Queries are restricted to these rather than filtered afterwards: a provider
+// nobody can see must not take slots out of a caller's limit and push visible
+// conversations off the end of the list.
+func (m *Manager) EnabledProviders() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]string, 0, len(m.enabled))
+	for id, on := range m.enabled {
+		if on {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (m *Manager) GetConfig() Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -319,7 +362,7 @@ func (m *Manager) Close() error {
 // ---------------------------------------------------------------- accessors
 
 // Store exposes the message store to request handlers.
-func (m *Manager) Store() *chat.HistoryStore { return m.store }
+func (m *Manager) Store() *chat.MultiStore { return m.store }
 
 // Media exposes the attachment cache.
 func (m *Manager) Media() *chat.Media { return m.media }
@@ -518,7 +561,7 @@ func (m *Manager) gcLoop() {
 
 // ---------------------------------------------------------------- paths
 
-// HistoryPath is where the shared message store lives.
+// HistoryPath is the directory holding one store per provider.
 //
 // Data, not cache: message history is not regenerable, so it must survive a
 // cache wipe.
@@ -527,7 +570,7 @@ func HistoryPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "chat", "history.db"), nil
+	return filepath.Join(dir, "chat", "stores"), nil
 }
 
 // MediaRoot is where cached attachments live. Cache, not data: every file here
