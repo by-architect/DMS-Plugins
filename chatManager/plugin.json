@@ -5,11 +5,20 @@
     "version": "1.0.0",
     "author": "neo",
     "type": "composite",
-    "capabilities": ["daemon", "chat"],
+    "capabilities": [
+        "daemon",
+        "chat"
+    ],
     "icon": "chat",
     "components": {
         "daemon": "./ChatManagerDaemon.qml"
     },
     "settings": "./ChatManagerSettings.qml",
-    "permissions": ["settings_read", "settings_write", "process", "network"]
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process",
+        "network"
+    ],
+    "startupCheck": "./ChatManagerStartupCheck.qml"
 }
