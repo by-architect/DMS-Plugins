@@ -1,0 +1,18 @@
+{
+    "id": "clipboardRunner",
+    "name": "Clipboard Runner",
+    "description": "Runs your own commands against whatever is on the clipboard. Each action is filed under a content type — link, colour, file or text — and filtered by what the clipboard contains, so typing 'clip' only ever offers you the actions that fit what you just copied.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "clipboard", "command-execution"],
+    "component": "./ClipboardRunnerLauncher.qml",
+    "settings": "./ClipboardRunnerSettings.qml",
+    "trigger": "clip ",
+    "icon": "content_paste_go",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}

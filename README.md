@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Nine plugins in three shapes: **launcher** plugins that answer a trigger word
+Twelve plugins in three shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, and a **chat provider** that connects an outside messaging service to
 the DMS chat system.
@@ -10,6 +10,7 @@ the DMS chat system.
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
 | [commandRunner](commandRunner/) | launcher | `run <name>` | — |
+| [clipboardRunner](clipboardRunner/) | launcher | `clip <name>` | `yt-dlp`, `aria2`, `ffmpeg`, `imagemagick`, … |
 | [tmuxRunner](tmuxRunner/) | launcher | `tmux <name>` | `tmux`, a terminal |
 | [musicRunner](musicRunner/) | launcher | `mpd <query>` | `mpc` |
 | [nixSearch](nixSearch/) | launcher | `nix <query>` | `nix` (flakes) |
@@ -200,6 +201,38 @@ chat section below. With none, the runner says so rather than showing an empty
 list.
 
 → [chatRunner/README.md](chatRunner/README.md)
+
+## clipboardRunner — `clip <name>`
+
+Your own commands, run against whatever is on the clipboard. Every action is
+filed under one of four kinds of content, and only the actions that fit what
+you copied are offered:
+
+```
+copy https://youtube.com/watch?v=…   then  clip  →  yt-dlp, mpv, send to phone
+copy #ff0080                         then  clip  →  set accent, name this colour
+copy /home/you/holiday.mkv           then  clip  →  play, transcode, share
+copy anything else                   then  clip  →  translate, define, pastebin
+```
+
+44 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
+links, aria2c for magnets, clone / `pm create` / fork for GitHub, ffmpeg and
+imagemagick conversions for audio, video and images, libreoffice for documents,
+framework detection and `adb install` for APKs, AppImage installation, colour
+conversions, and a virus scan. They are seeded into your list as ordinary
+entries, so they are all editable.
+
+An action carries filters — `includes`, `excludes`, `is exactly`, `starts with`,
+a regex, and so on — so `includes youtube.com` under **Link** never fires for
+any other site. File actions can also be narrowed by extension.
+
+Everything runs through zsh, detached, with no terminal, and posts a
+notification when it finishes. Copying is not a trigger: nothing runs until you
+open the launcher and pick something. Clipboard text reaches the command as an
+argument rather than as part of the script, so a copied `; rm -rf ~` is a
+strange argument and not a second command.
+
+→ [clipboardRunner/README.md](clipboardRunner/README.md)
 
 ---
 
