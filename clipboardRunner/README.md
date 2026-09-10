@@ -43,7 +43,7 @@ it is almost always a file operation.
 
 ## What it ships with
 
-44 actions are written into your list the first time the plugin runs. They are
+51 actions are written into your list the first time the plugin runs. They are
 ordinary entries from that moment on — rename them, retune the filters, delete
 the ones you have no use for. The **Restore built-in actions** button in
 settings puts back any you removed, and leaves the ones you edited alone.
@@ -88,12 +88,35 @@ Every file gets **Open**, **Open the containing folder**, **Open in nvim** and
 | Video (`mp4 mkv avi mov webm flv wmv m4v mpg mpeg ts`) | ffmpeg → mp4, mkv, webm, gif; pull the audio out as mp3 |
 | Images (`png jpg jpeg webp gif bmp tiff avif heic heif`) | magick → png, jpg, webp, avif, pdf |
 | Documents (`doc docx odt ods odp xls xlsx ppt pptx rtf txt md csv`) | libreoffice → pdf |
+| Archives (`zip 7z rar tar gz tgz bz2 xz zst lz4 lzma cab arj lzh iso cpio wim deb rpm`) | extract here, extract into downloads, show what is inside |
 | Android (`apk xapk apks aab`) | what is this written in; adb install on the connected device |
 | AppImage | install it; run it once |
+| Folders | compress to zip, 7z or tar.gz beside the folder; open a terminal here |
 
 A conversion never offers itself for a file that is already in that format —
 ffmpeg would otherwise be handed the same path as input and output and truncate
 the file.
+
+Folders and files are told apart by asking the filesystem, not by guessing from
+the name. Every action in the file group carries an **applies to** setting —
+*files and folders*, *files only*, or *folders only* — and an action that names
+extensions is a statement about files, so it never offers itself for a folder.
+
+**Show what is inside** is the one action that opens a terminal on purpose: an
+archive listing is something you read, so it goes to a pager rather than a
+notification.
+
+### Copying a file rather than a path
+
+Copying a file in a file manager puts a `file://` URI on the clipboard, which
+lands in the file group like any other path.
+
+Copying an **image** — out of a browser, or from a screenshot tool — puts image
+data on the clipboard with no file behind it. Rather than skip it, the plugin
+writes it into `~/.cache/dms-clipboard-runner/` and treats the result as the
+image file it now is, so every conversion in the file group applies. The file is
+named after the clipboard entry and reused, so asking twice does not fetch it
+twice.
 
 **What is this written in** reads the names inside the package and reports the
 framework: Flutter, React Native, Unity, Xamarin/.NET MAUI, Cordova/Ionic, Qt,
@@ -207,6 +230,10 @@ says so. Status is what was on this machine when the plugin was written.
 | `ffmpeg` | `ffmpeg` | present | every audio and video conversion |
 | `magick` | `imagemagick` | present | every image conversion, image → pdf, colour swatch |
 | `unzip` | `unzip` | present | what is this written in |
+| `7z` | `p7zip` | present | compress a folder to zip/7z, extract an archive, list an archive |
+| `tar` | `gnutar` | present | compress a folder to tar.gz |
+| `less` | `less` | present | show what is inside |
+| `base64` | `coreutils` | present | writing a copied image out to a file |
 | `adb` | `android-tools` | present | adb: install on the connected device |
 | `appimage-run` | `appimage-run` | present | run an AppImage once |
 | `clamdscan` | `clamav` | present, **daemon not running** | virus scan |

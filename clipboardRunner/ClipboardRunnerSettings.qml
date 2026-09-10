@@ -56,6 +56,7 @@ PluginSettings {
             "icon": "",
             "group": group,
             "extensions": "",
+            "target": "any",
             "conditions": [],
             "command": ""
         });
@@ -330,9 +331,34 @@ PluginSettings {
                             }
                         }
 
+                        Row {
+                            width: parent.width
+                            spacing: Theme.spacingS
+                            visible: actionCard.group === "path"
+
+                            StyledText {
+                                id: targetLabel
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Applies to"
+                                font.pixelSize: Theme.fontSizeSmall - 1
+                                color: Theme.surfaceVariantText
+                            }
+
+                            DankDropdown {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Math.min(200, Math.max(0, parent.width - targetLabel.implicitWidth - Theme.spacingS))
+                                compactMode: true
+                                dropdownWidth: width
+                                popupWidth: 200
+                                currentValue: Clipboard.targetLabel(actionCard.action.target || "any")
+                                options: Clipboard.TARGETS.map(t => t.label)
+                                onValueChanged: value => root.updateActionField(actionCard.actionIndex, "target", Clipboard.targetValue(value))
+                            }
+                        }
+
                         DankTextField {
                             width: parent.width
-                            visible: actionCard.group === "path"
+                            visible: actionCard.group === "path" && (actionCard.action.target || "any") !== "dir"
                             text: actionCard.action.extensions || ""
                             font.pixelSize: Theme.fontSizeSmall
                             placeholderText: "Extensions: mp4, mkv, webm — empty means any"

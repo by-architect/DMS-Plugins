@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Common
 import qs.Services
 import "clipboard.js" as Clipboard
 import "presets.js" as Presets
@@ -27,6 +28,8 @@ Item {
     // two or three actions that genuinely need one.
     property string downloadDir: ""
     property string terminal: "ghostty -e"
+
+    readonly property string cacheDir: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/dms-clipboard-runner"
     readonly property var ctx: ({
             "downloads": downloadDir,
             "terminal": terminal
@@ -108,8 +111,8 @@ Item {
     }
 
     // clipboard.paste hands back the full current clipboard as text, unlike the
-    // history previews which stop at 100 characters. It reports an error for an
-    // image-only clipboard, which is shown as-is.
+    // history previews which stop at 100 characters. It fails for a clipboard
+    // holding an image and nothing else, which is where _readImage takes over.
     function _readClipboard() {
         if (reading)
             return;
@@ -121,23 +124,88 @@ Item {
 
         reading = true;
         DMSService.sendRequest("clipboard.paste", null, function (response) {
-            root.reading = false;
-
             if (response.error) {
-                root.detail = null;
-                root.readError = response.error;
-            } else {
-                const text = (response.result && response.result.text) || "";
-                if (text.trim().length === 0) {
-                    root.detail = null;
-                    root.readError = "Clipboard has no text on it";
-                } else {
-                    root.detail = Clipboard.describe(text);
-                    root.readError = "";
-                }
+                root._readImage();
+                return;
             }
+            const text = (response.result && response.result.text) || "";
+            if (text.trim().length === 0) {
+                root._readImage();
+                return;
+            }
+            root._settle(text);
+        });
+    }
+
+    // An image copied out of a browser or a screenshot tool is real content with
+    // no file behind it, so there is nothing for a file action to open. Writing
+    // it into the cache gives it a path, and from there it is an image file like
+    // any other -- every conversion in the file group applies to it.
+    function _readImage() {
+        DMSService.sendRequest("clipboard.getState", null, function (response) {
+            const current = response.result && response.result.current;
+            if (response.error || !current || !current.isImage) {
+                root._fail(response.error || "Clipboard has nothing this can act on");
+                return;
+            }
+
+            const file = root.cacheDir + "/clipboard-" + current.id + "." + root._extForMime(current.mimeType);
+            Proc.runCommand("clipboardRunner.materialise", ["zsh", "-c", 'mkdir -p "${1:h}" || exit 1
+if [ ! -s "$1" ]; then
+    "${DMS_EXECUTABLE:-dms}" cl get "$2" | base64 -d > "$1" || exit 1
+fi', "materialise", file, String(current.id)], function (output, exitCode) {
+                if (exitCode !== 0) {
+                    root._fail("Could not write the clipboard image out");
+                    return;
+                }
+                root._settle(file);
+            });
+        });
+    }
+
+    function _extForMime(mime) {
+        switch ((mime || "").toLowerCase()) {
+        case "image/jpeg":
+            return "jpg";
+        case "image/gif":
+            return "gif";
+        case "image/webp":
+            return "webp";
+        case "image/bmp":
+            return "bmp";
+        case "image/tiff":
+            return "tiff";
+        default:
+            return "png";
+        }
+    }
+
+    // Whether a path is a folder is not something the text can say, so it is
+    // asked of the filesystem before the list is built. Anything that is not a
+    // path skips the round trip.
+    function _settle(text) {
+        const probe = Clipboard.describe(text);
+        if (probe.type !== "path") {
+            root.reading = false;
+            root.detail = probe;
+            root.readError = "";
+            root._refreshLauncher();
+            return;
+        }
+
+        Proc.runCommand("clipboardRunner.stat", ["zsh", "-c", 'if [ -d "$1" ]; then print dir; elif [ -e "$1" ]; then print file; else print missing; fi', "stat", probe.path], function (output, exitCode) {
+            root.reading = false;
+            root.detail = Clipboard.describe(text, (output || "").trim() === "dir");
+            root.readError = "";
             root._refreshLauncher();
         });
+    }
+
+    function _fail(message) {
+        reading = false;
+        detail = null;
+        readError = message;
+        _refreshLauncher();
     }
 
     function getItems(query) {

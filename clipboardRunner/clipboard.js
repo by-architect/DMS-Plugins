@@ -81,7 +81,10 @@ function expandHex(value) {
 }
 
 // The descriptor every other function in this file takes.
-function describe(raw) {
+// isDir is not knowable from the string alone -- the launcher stats the path and
+// passes the answer in, so that a folder and a file can be told apart without
+// this file having to touch the filesystem.
+function describe(raw, isDir) {
     var text = (raw || "").toString().trim();
     var detail = {
         type: classify(text),
@@ -90,7 +93,8 @@ function describe(raw) {
         basename: "",
         dirname: "",
         ext: "",
-        color: ""
+        color: "",
+        isDir: isDir === true
     };
 
     if (detail.type === "path") {
@@ -102,7 +106,7 @@ function describe(raw) {
         detail.path = path;
         detail.basename = basename;
         detail.dirname = slash > 0 ? path.substring(0, slash) : (slash === 0 ? "/" : "");
-        detail.ext = (dot > 0 && dot < basename.length - 1) ? basename.substring(dot + 1).toLowerCase() : "";
+        detail.ext = (!detail.isDir && dot > 0 && dot < basename.length - 1) ? basename.substring(dot + 1).toLowerCase() : "";
     } else if (detail.type === "color") {
         detail.color = HEX_RE.test(text) ? expandHex(text) : text;
     }
@@ -198,6 +202,37 @@ function extensionMatches(action, detail) {
     return wanted.length === 0 || wanted.indexOf(detail.ext) !== -1;
 }
 
+var TARGETS = [
+    { value: "any", label: "files and folders" },
+    { value: "file", label: "files only" },
+    { value: "dir", label: "folders only" }
+];
+
+function targetLabel(value) {
+    for (var i = 0; i < TARGETS.length; i++) {
+        if (TARGETS[i].value === value)
+            return TARGETS[i].label;
+    }
+    return TARGETS[0].label;
+}
+
+function targetValue(label) {
+    for (var i = 0; i < TARGETS.length; i++) {
+        if (TARGETS[i].label === label)
+            return TARGETS[i].value;
+    }
+    return "any";
+}
+
+function targetMatches(action, detail) {
+    var target = (action && action.target) || "any";
+    if (target === "dir")
+        return detail.isDir === true;
+    if (target === "file")
+        return detail.isDir !== true;
+    return true;
+}
+
 function matches(action, detail) {
     if (!action || !detail)
         return false;
@@ -205,8 +240,19 @@ function matches(action, detail) {
         return false;
     if ((action.group || "text") !== detail.type)
         return false;
-    if (detail.type === "path" && !extensionMatches(action, detail))
-        return false;
+    if (detail.type === "path") {
+        if (!targetMatches(action, detail))
+            return false;
+        // An extension filter is a statement about a file. A folder has no
+        // extension, so an action that names any cannot be meant for one --
+        // otherwise "convert to mp3" would offer itself for a directory.
+        if (detail.isDir) {
+            if (String((action.extensions || "")).trim().length > 0)
+                return false;
+        } else if (!extensionMatches(action, detail)) {
+            return false;
+        }
+    }
 
     var conditions = action.conditions || [];
     for (var i = 0; i < conditions.length; i++) {

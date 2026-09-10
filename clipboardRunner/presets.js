@@ -26,6 +26,7 @@ function a(presetId, group, name, icon, command, opts) {
         icon: "material:" + icon,
         group: group,
         extensions: opts.ext || "",
+        target: opts.target || "any",
         conditions: opts.when || [],
         command: command,
         notify: opts.notify !== false
@@ -76,6 +77,19 @@ var VIDEO_EXT = "mp4, mkv, avi, mov, webm, flv, wmv, m4v, mpg, mpeg, ts";
 var IMAGE_EXT = "png, jpg, jpeg, webp, gif, bmp, tiff, tif, avif, heic, heif";
 var DOC_EXT = "doc, docx, odt, ods, odp, xls, xlsx, ppt, pptx, rtf, txt, md, csv";
 var APK_EXT = "apk, xapk, apks, aab";
+// The tail of a .tar.gz is what the ext parser sees, so the compound names are
+// covered by their last component.
+var ARCHIVE_EXT = "zip, 7z, rar, tar, gz, tgz, bz2, tbz, tbz2, xz, txz, zst, tzst, lz4, lzma, cab, arj, lzh, iso, cpio, wim, deb, rpm";
+
+// The one place a terminal is opened on purpose: listing an archive is
+// something you read, so it goes to a pager rather than a notification. 7z is
+// asked first and the output parked in a file, which keeps the terminal
+// invocation free of any nested quoting.
+var ARCHIVE_LIST = [
+    'F=$(mktemp)',
+    '{ print -r -- ${path}; print; 7z l ${path}; } > "$F" 2>&1',
+    '${terminal} less -R "$F"'
+].join("\n");
 
 // Reading an APK's framework off the names inside it. aapt and apktool are not
 // needed for this -- the giveaway is which native library got bundled, and that
@@ -213,7 +227,7 @@ function all() {
         a("file.reveal", "path", "Open the containing folder", "folder_open",
           "xdg-open ${dirname}", { notify: false }),
         a("file.nvim", "path", "Open in nvim", "code",
-          "${terminal} nvim ${path}", { notify: false }),
+          "${terminal} nvim ${path}", { target: "file", notify: false }),
         a("file.scan", "path", "Virus scan", "shield",
           'R=$(clamdscan --fdpass --no-summary ${path} 2>&1)\nnotify-send -a "Clipboard Runner" "${basename}" "$R"',
           { notify: false }),
@@ -256,6 +270,24 @@ function all() {
         a("doc.pdf", "path", "libreoffice → pdf", "picture_as_pdf",
           'soffice --headless --convert-to pdf --outdir ${dirname} ${path}', { ext: DOC_EXT }),
 
+        // Folders
+        a("dir.zip", "path", "Compress to zip", "folder_zip",
+          'cd ${dirname} && 7z a -tzip ${basename}.zip ${basename}', { target: "dir" }),
+        a("dir.7z", "path", "Compress to 7z", "folder_zip",
+          'cd ${dirname} && 7z a -t7z ${basename}.7z ${basename}', { target: "dir" }),
+        a("dir.targz", "path", "Compress to tar.gz", "folder_zip",
+          'cd ${dirname} && tar czf ${basename}.tar.gz ${basename}', { target: "dir" }),
+        a("dir.terminal", "path", "Open a terminal here", "terminal",
+          'cd ${path} && ${terminal} zsh', { target: "dir", notify: false }),
+
+        // Archives
+        a("archive.extract", "path", "Extract it here", "unarchive",
+          'cd ${dirname} && 7z x -o"${4:r}" -y ${path}', { ext: ARCHIVE_EXT, target: "file" }),
+        a("archive.extractDownloads", "path", "Extract into downloads", "drive_folder_upload",
+          'cd ${downloads} && 7z x -o"${4:r}" -y ${path}', { ext: ARCHIVE_EXT, target: "file" }),
+        a("archive.list", "path", "Show what is inside", "list",
+          ARCHIVE_LIST, { ext: ARCHIVE_EXT, target: "file", notify: false }),
+
         // Android
         a("apk.framework", "path", "What is this written in?", "code_blocks",
           APK_FRAMEWORK, { ext: APK_EXT, notify: false }),
@@ -283,7 +315,7 @@ function all() {
 // Bumped whenever a shipped command changes. On a bump, an action still
 // carrying its shipped command is brought up to date; one the user has
 // rewritten is left exactly as they wrote it.
-var SEED_VERSION = 2;
+var SEED_VERSION = 3;
 
 // Seeding runs once. seededIds records every preset that has ever been written
 // into the list, so a later version can tell a genuinely new action from one

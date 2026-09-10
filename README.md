@@ -215,11 +215,11 @@ copy /home/you/holiday.mkv           then  clip  →  play, transcode, share
 copy anything else                   then  clip  →  translate, define, pastebin
 ```
 
-44 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
+51 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
 links, aria2c for magnets, clone / `pm create` / fork for GitHub, ffmpeg and
 imagemagick conversions for audio, video and images, libreoffice for documents,
-framework detection and `adb install` for APKs, AppImage installation, colour
-conversions, and a virus scan. They are seeded into your list as ordinary
+framework detection and `adb install` for APKs, AppImage installation, 7z and
+tar for folders and archives, colour conversions, and a virus scan. They are seeded into your list as ordinary
 entries, so they are all editable.
 
 An action carries filters — `includes`, `excludes`, `is exactly`, `starts with`,
