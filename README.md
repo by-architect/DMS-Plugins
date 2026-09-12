@@ -12,6 +12,7 @@ the DMS chat system.
 | [commandRunner](commandRunner/) | launcher | `run <name>` | — |
 | [clipboardRunner](clipboardRunner/) | launcher | `clip <name>` | `yt-dlp`, `aria2`, `ffmpeg`, `imagemagick`, … |
 | [tmuxRunner](tmuxRunner/) | launcher | `tmux <name>` | `tmux`, a terminal |
+| [sshManager](sshManager/) | launcher + daemon | `ssh <name>` | an ssh client, a terminal |
 | [musicRunner](musicRunner/) | launcher | `mpd <query>` | `mpc` |
 | [nixSearch](nixSearch/) | launcher | `nix <query>` | `nix` (flakes) |
 | [chatRunner](chatRunner/) | launcher | `c <name/number>` | a chat provider |
@@ -124,6 +125,27 @@ Needs `tmux` and a terminal emulator. Eleven common terminals are auto-detected
 or set the exec flags yourself.
 
 → [tmuxRunner/README.md](tmuxRunner/README.md)
+
+## sshManager — `ssh <name>`
+
+A list of SSH connections — name, host, port, username, auth method — entered
+once in settings and shared two ways: this plugin's own launcher, and a small
+API any other plugin (a runner, say) can call to build the same connection.
+
+```
+ssh            →  every configured host
+ssh prod       →  hosts matching "prod" by name, address or username
+```
+
+Connecting always opens a terminal running plain `ssh` with the host's
+non-secret fields filled in — port, identity file, `user@host`. Password auth
+is never fed to `ssh` automatically here; it prompts for it interactively,
+same as typing the command by hand. A password can still be *stored*, for
+other plugins that want to drive `ssh` non-interactively themselves — see
+this plugin's README for exactly where that's kept and how to reach it as a
+consumer.
+
+→ [sshManager/README.md](sshManager/README.md)
 
 ## musicRunner — `mpd <query>`
 
@@ -496,7 +518,7 @@ its output is invisible.
 ## A note on trust
 
 These plugins run as your user, with your permissions. So do all DMS plugins —
-there is no sandbox. Three are worth naming specifically:
+there is no sandbox. Four are worth naming specifically:
 
 - **commandRunner** runs what you configure, verbatim and unsanitized. That's
   the point of a command launcher, and anyone who can write its settings could
@@ -504,6 +526,10 @@ there is no sandbox. Three are worth naming specifically:
 - **systemPanel** reads the journal, wtmp, systemd and `ss` — all as your own
   user, no root and no helper daemon — and displays who has logged into the
   machine. Treat the panel as you'd treat that output.
+- **sshManager** can hold a plaintext password per host, deliberately kept out
+  of the ordinary settings file but still just a 0600 file on disk. Any other
+  enabled plugin can ask for it — there's no extra gate beyond being enabled
+  at all. Prefer key-based auth; it's the default.
 - **whatsappChat** holds your WhatsApp session and talks to WhatsApp's servers.
   It uses [whatsmeow](https://github.com/tulir/whatsmeow), the library most
   third-party WhatsApp clients are built on. WhatsApp does not sanction

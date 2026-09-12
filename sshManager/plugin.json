@@ -1,0 +1,23 @@
+{
+    "id": "sshManager",
+    "name": "SSH Hosts",
+    "description": "A list of SSH connections -- host, port, username, auth method -- entered once here and shared with this plugin's own launcher ('ssh <name>') and with any other plugin, like a runner, that needs to reach the same machines.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["launcher", "daemon", "command-execution"],
+    "icon": "dns",
+    "trigger": "ssh ",
+    "settings": "./SSHManagerSettings.qml",
+    "startupCheck": "./SSHManagerStartupCheck.qml",
+    "dependencies": ["ssh"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ],
+    "components": {
+        "daemon": "./SSHManagerDaemon.qml",
+        "launcher": "./SSHManagerLauncher.qml"
+    }
+}
