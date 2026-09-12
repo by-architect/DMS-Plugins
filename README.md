@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twelve plugins in three shapes: **launcher** plugins that answer a trigger word
+Thirteen plugins in three shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, and a **chat provider** that connects an outside messaging service to
 the DMS chat system.
