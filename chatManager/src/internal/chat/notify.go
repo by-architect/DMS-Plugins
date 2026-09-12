@@ -47,7 +47,7 @@ func DefaultNotifyPrefs() NotifyPrefs {
 // for. It is the whole reason a bridge never calls notify-send itself: get this
 // wrong once and a first login fires several hundred notifications at a user.
 type NotifyPolicy struct {
-	store *HistoryStore
+	store NotifyStore
 	media *Media
 
 	// StartedAt is when the host came up. Anything older is backfill.
@@ -65,7 +65,17 @@ type focusKey struct {
 
 // NewNotifyPolicy returns a policy anchored at the current time, so anything
 // older than this instant counts as backfill.
-func NewNotifyPolicy(store *HistoryStore, media *Media) *NotifyPolicy {
+// NotifyStore is the little of the store that deciding whether to notify needs.
+//
+// An interface rather than the store itself so this works the same whether
+// there is one database or one per provider.
+type NotifyStore interface {
+	ChatByID(ctx context.Context, provider, chatID string) (Chat, error)
+	IsArchived(ctx context.Context, provider, chatID string) bool
+	IsMuted(ctx context.Context, provider, chatID string) bool
+}
+
+func NewNotifyPolicy(store NotifyStore, media *Media) *NotifyPolicy {
 	return &NotifyPolicy{
 		store:     store,
 		media:     media,

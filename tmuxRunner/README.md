@@ -5,10 +5,17 @@ tmux session by name and attach to it, or type a name that doesn't exist yet
 to create one.
 
 ```
-tmux            →  lists every running session
+tmux            →  lists every running session, plus configured SSH hosts
 tmux dms        →  sessions matching "dms"
+tmux prod       →  an SSH host named "prod" (see sshManager) with no session yet
 tmux new-thing  →  no session named that → offers "Create \"new-thing\""
 ```
+
+If the [sshManager](../sshManager/) plugin is installed and has hosts
+configured, they're searchable here too. Selecting one runs `tmux new-session`
+with `ssh` as the session's command, instead of a shell -- so the connection
+gets tmux's detach/reattach for free, and reappears as an ordinary tmux
+session (same name, `ssh-<host>`) the next time you look.
 
 ## Install
 
@@ -35,6 +42,12 @@ Plugins.
 - Right-click (or the action panel) on a real session offers "Copy session
   name" and "Kill session".
 - No sessions running at all shows a status row rather than an empty list.
+- An SSH host only shows up here while it has no matching tmux session
+  running — the session name is derived from the host (`ssh-<name>`,
+  sanitized), so reselecting the same host later reattaches to the same
+  session rather than creating a new one. Once that session exists it's
+  found and killed the same way as any other, and sshManager's own launcher
+  is untouched — this only adds hosts into tmux's own search.
 
 ## Settings
 

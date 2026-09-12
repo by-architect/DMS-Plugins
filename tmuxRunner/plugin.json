@@ -1,7 +1,7 @@
 {
     "id": "tmuxRunner",
     "name": "Tmux Runner",
-    "description": "Search and switch between tmux sessions from the launcher, or create a new one by typing a name that doesn't exist yet.",
+    "description": "Search and switch between tmux sessions from the launcher, or create a new one by typing a name that doesn't exist yet. If the sshManager plugin is installed, its hosts are searchable here too -- selecting one opens it in a new, reattachable tmux session.",
     "version": "1.0.0",
     "author": "neo",
     "type": "launcher",

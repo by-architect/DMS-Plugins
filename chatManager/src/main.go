@@ -35,6 +35,8 @@ type serviceEvent struct {
 	Data    any    `json:"data"`
 }
 
+var errAlreadyRunning = errors.New("another chat manager is already listening")
+
 type response struct {
 	ID     int    `json:"id,omitempty"`
 	Result any    `json:"result,omitempty"`
@@ -46,6 +48,13 @@ func main() {
 	flag.Parse()
 
 	if err := run(*socketPath); err != nil {
+		// Another manager already serving is an ordinary outcome -- a second
+		// shell, or a restart racing the old process -- and not worth a failure
+		// exit that would have the caller relaunch this in a loop.
+		if errors.Is(err, errAlreadyRunning) {
+			fmt.Fprintln(os.Stderr, "chat-managerd: another manager is already serving this socket")
+			return
+		}
 		fmt.Fprintf(os.Stderr, "chat-managerd: %v\n", err)
 		os.Exit(1)
 	}
@@ -276,7 +285,7 @@ func removeStaleSocket(path string) error {
 
 	if conn, err := net.Dial("unix", path); err == nil {
 		conn.Close()
-		return fmt.Errorf("another chat manager is already listening on %s", path)
+		return errAlreadyRunning
 	}
 
 	if err := os.Remove(path); err != nil {

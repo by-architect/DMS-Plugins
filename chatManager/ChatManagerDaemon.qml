@@ -60,6 +60,18 @@ PluginComponent {
         chatCore: chatCore
     }
 
+    // Called by each chat provider's own daemon. A provider is a separate
+    // plugin so it can be installed later without touching this one; enabling
+    // that plugin is what switches the provider on, and its settings stay in its
+    // own settings page rather than being centralised here.
+    function registerProvider(providerId, settings) {
+        chatCore.registerProvider(providerId, settings);
+    }
+
+    function unregisterProvider(providerId) {
+        chatCore.unregisterProvider(providerId);
+    }
+
     // Reached by other plugins through
     // pluginService.pluginDaemonInstances["chatManager"]. The shell used to
     // offer this on PopoutService; stock DMS has no such function, and a plugin

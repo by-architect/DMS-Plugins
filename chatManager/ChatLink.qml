@@ -22,6 +22,8 @@ Item {
 
     signal chatStateUpdate(var data)
 
+    // Remembered so a failure inside a handler can name the call it came from.
+    property string _lastMethod: ""
     property bool _wantSubscription: false
     property int _nextRequestId: 1
     property var _pending: ({})
@@ -66,7 +68,10 @@ Item {
 
         const id = root._nextRequestId++;
         if (callback)
-            root._pending[id] = callback;
+            root._pending[id] = {
+                "callback": callback,
+                "method": method
+            };
 
         socket.send(JSON.stringify({
             "id": id,
@@ -84,38 +89,48 @@ Item {
             return;
         }
 
-        const callback = root._pending[msg.id];
-        if (!callback)
+        const pending = root._pending[msg.id];
+        if (!pending)
             return;
 
         delete root._pending[msg.id];
-        callback(msg);
+        root._lastMethod = pending.method;
+        pending.callback(msg);
     }
 
     Process {
         id: managerProcess
 
-        running: true
         command: [root._managerBinary]
 
         onExited: exitCode => {
             root.managerRunning = false;
             if (exitCode !== 0)
-                console.warn("chatManager: manager exited with", exitCode, "- restarting");
-            // Always comes back: the window is useless without it, and a
-            // provider bridge left running by a crashed manager is reaped by
-            // the new one on startup.
-            restartTimer.restart();
+                console.warn("chatManager: manager exited with", exitCode);
+            // Deliberately not restarted from here. supervisor decides, and only
+            // when nothing is answering the socket -- a manager that exited
+            // because another one already holds the socket must not be
+            // relaunched in a loop.
+            supervisor.restart();
         }
 
         onStarted: root.managerRunning = true
     }
 
+    // Starts the manager only when the socket is unanswered. Another shell, or
+    // a manager left from a previous run, is served rather than fought over.
     Timer {
-        id: restartTimer
+        id: supervisor
 
         interval: 2000
-        onTriggered: managerProcess.running = true
+        repeat: true
+        running: true
+        triggeredOnStart: true
+        onTriggered: {
+            if (socket.linkUp || managerProcess.running)
+                return;
+            managerProcess.running = true;
+        }
     }
 
     DankSocket {
@@ -128,10 +143,22 @@ Item {
             onRead: line => {
                 if (!line)
                     return;
+
+                // Parsing and handling are caught separately: wrapping both
+                // reported a failure in some handler as an unreadable line,
+                // which sent the last round of debugging the wrong way.
+                let msg;
                 try {
-                    root._handleMessage(JSON.parse(line));
+                    msg = JSON.parse(line);
                 } catch (e) {
-                    console.warn("chatManager: unreadable line from manager:", e);
+                    console.warn("chatManager: unreadable line from manager:", line.substring(0, 200));
+                    return;
+                }
+
+                try {
+                    root._handleMessage(msg);
+                } catch (e) {
+                    console.warn("chatManager: failed handling", root._lastMethod ? "the reply to " + root._lastMethod : "an event", "-", e);
                 }
             }
         }
@@ -143,7 +170,7 @@ Item {
                 const pending = root._pending;
                 root._pending = ({});
                 for (const id in pending)
-                    pending[id]({
+                    pending[id].callback({
                         "error": "lost the connection to the chat manager"
                     });
                 return;

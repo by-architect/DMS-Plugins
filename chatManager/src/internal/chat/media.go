@@ -159,7 +159,12 @@ func (m *Media) Size() (int64, error) {
 // them through the message's media ref, so losing a cached copy costs a
 // download rather than the attachment itself. Files the store no longer
 // references at all go first.
-func (m *Media) GC(ctx context.Context, store *HistoryStore) (freed int64, err error) {
+// MediaReferences reports which cached files are still pointed at by a message.
+type MediaReferences interface {
+	MediaPaths(ctx context.Context) ([]string, error)
+}
+
+func (m *Media) GC(ctx context.Context, store MediaReferences) (freed int64, err error) {
 	type entry struct {
 		path       string
 		size       int64

@@ -34,13 +34,44 @@ Item {
         }
     }
 
-    function _providerEnabledMap() {
-        const map = root.pluginData ? root.pluginData.providerEnabled : undefined;
-        return map || ({});
+    // Providers that have registered themselves, and the settings each supplied.
+    //
+    // A chat provider is a plugin of its own, so it is switched on by the shell
+    // enabling that plugin rather than by a setting kept here. Its daemon
+    // registers on load and unregisters on unload. Held in memory and reapplied
+    // on reconnect, because the manager starts every provider stopped and has no
+    // idea which ones the user has installed.
+    property var registeredProviders: ({})
+
+    function registerProvider(providerId, settings) {
+        const next = Object.assign({}, root.registeredProviders);
+        next[providerId] = settings || ({});
+        root.registeredProviders = next;
+        root._applyProvider(providerId, true, next[providerId]);
     }
 
-    function _isProviderEnabled(providerId) {
-        return root._providerEnabledMap()[providerId] === true;
+    function unregisterProvider(providerId) {
+        const next = Object.assign({}, root.registeredProviders);
+        delete next[providerId];
+        root.registeredProviders = next;
+        root._applyProvider(providerId, false, null);
+    }
+
+    function _applyProvider(providerId, enabled, settings) {
+        if (!available)
+            return;
+
+        root.link.sendRequest("chat.setEnabled", {
+            "provider": providerId,
+            "enabled": enabled,
+            "settings": settings || ({})
+        }, response => {
+            if (response.error) {
+                root.log.warn("could not", enabled ? "start" : "stop", providerId + ":", response.error);
+                return;
+            }
+            root.refresh();
+        });
     }
 
     function _setting(key, fallback) {
@@ -522,52 +553,23 @@ Item {
         if (!available)
             return;
 
-        // Which providers are switched on belongs to this plugin, not to the
-        // provider's own settings. The shell has no idea chat providers exist,
-        // and a fork that still has chat built in reads that per-provider key
-        // too -- both hosts would then drive the same bridge, which for an
-        // encrypted provider means two processes on one device database.
-        const wanted = Object.assign({}, root._providerEnabledMap());
-        wanted[providerId] = enabled;
-        SettingsData.setPluginSetting("chatManager", "providerEnabled", wanted);
-
-        root.link.sendRequest("chat.setEnabled", {
-            "provider": providerId,
-            "enabled": enabled,
-            "settings": SettingsData.getPluginSettingsForPlugin(providerId)
-        }, response => {
-            if (response.error) {
-                root.log.warn("failed to toggle provider:", response.error);
-                ToastService.showError(I18n.tr("Could not start chat provider"), response.error);
-                return;
-            }
-            root.refresh();
-        });
+        if (enabled)
+            root.registerProvider(providerId, root.registeredProviders[providerId] || ({}));
+        else
+            root.unregisterProvider(providerId);
     }
 
-    // syncEnabledProviders starts the bridges the user had switched on.
+    // syncEnabledProviders restarts the bridges of every registered provider.
     //
-    // The backend deliberately starts every provider stopped: it has no opinion
-    // about which the user wants, and that lives in the shell's plugin
-    // settings. Without this, an enabled provider would never come back after a
-    // restart.
+    // The manager deliberately starts every provider stopped: it has no opinion
+    // about which the user wants. Without this, a provider would never come back
+    // after the manager restarts.
     function syncEnabledProviders() {
         if (!available)
             return;
 
-        for (let i = 0; i < root.providers.length; i++) {
-            const provider = root.providers[i];
-            const wanted = root._isProviderEnabled(provider.id);
-            if (wanted === provider.enabled)
-                continue;
-
-            root.log.info("restoring", provider.id, wanted ? "enabled" : "disabled");
-            root.link.sendRequest("chat.setEnabled", {
-                "provider": provider.id,
-                "enabled": wanted,
-                "settings": SettingsData.getPluginSettingsForPlugin(provider.id)
-            }, null);
-        }
+        for (const providerId in root.registeredProviders)
+            root._applyProvider(providerId, true, root.registeredProviders[providerId]);
     }
 
     // setProviderNotifications overrides the notification policy for one

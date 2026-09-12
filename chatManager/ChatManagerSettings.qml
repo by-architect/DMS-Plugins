@@ -77,34 +77,17 @@ PluginSettings {
 
     StyledText {
         width: parent ? parent.width : 0
-        visible: !root.chat || root.chat.providers.length === 0
         text: {
             if (!root.chat)
-                return "The chat manager is not running. Enable this plugin and reopen settings.";
-            return "No providers installed. Put one in ~/.config/DankMaterialShell/chat-providers/ and it appears here.";
+                return "The chat manager is not running.";
+            const n = root.chat.providers.length;
+            if (n === 0)
+                return "No chat providers installed. Install one — Matrix, WhatsApp, Signal — and enable it under Plugins; its own settings live there too.";
+            const on = root.chat.providers.filter(p => p.enabled).length;
+            return `${n} provider${n === 1 ? "" : "s"} installed, ${on} running. Each one is a plugin of its own: enable it and configure it under Plugins.`;
         }
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
-    }
-
-    Repeater {
-        model: root.chat ? root.chat.providers : []
-
-        DankToggle {
-            required property var modelData
-
-            width: parent ? parent.width : 0
-            text: modelData.name || modelData.id
-            description: {
-                if (!modelData.enabled)
-                    return "Not running";
-                if (modelData.error)
-                    return modelData.error;
-                return modelData.state === "connected" ? "Connected" : modelData.state;
-            }
-            checked: modelData.enabled
-            onToggled: checked => root.chat.setProviderEnabled(modelData.id, checked)
-        }
     }
 }

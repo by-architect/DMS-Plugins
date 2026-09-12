@@ -165,7 +165,12 @@ func loadProvider(dir string) (Provider, error) {
 		return Provider{}, fmt.Errorf("parse plugin.json: %w", err)
 	}
 
-	if m.Type != "chat" {
+	// What makes a plugin a chat provider is that it ships a bridge, not what
+	// its manifest calls itself. "type" belongs to the shell's plugin system,
+	// which needs its own values there for the plugin to load at all, and a
+	// provider that had to claim type "chat" was rejected by the shell as
+	// invalid on every scan.
+	if len(m.Bridge) == 0 && m.Type != "chat" {
 		return Provider{}, fmt.Errorf("not a chat plugin")
 	}
 	if m.ID == "" {

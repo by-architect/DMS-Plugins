@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Nine plugins in three shapes: **launcher** plugins that answer a trigger word
+Thirteen plugins in three shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, and a **chat provider** that connects an outside messaging service to
 the DMS chat system.
@@ -10,7 +10,9 @@ the DMS chat system.
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
 | [commandRunner](commandRunner/) | launcher | `run <name>` | — |
+| [clipboardRunner](clipboardRunner/) | launcher | `clip <name>` | `yt-dlp`, `aria2`, `ffmpeg`, `imagemagick`, … |
 | [tmuxRunner](tmuxRunner/) | launcher | `tmux <name>` | `tmux`, a terminal |
+| [sshManager](sshManager/) | launcher + daemon | `ssh <name>` | an ssh client, a terminal |
 | [musicRunner](musicRunner/) | launcher | `mpd <query>` | `mpc` |
 | [nixSearch](nixSearch/) | launcher | `nix <query>` | `nix` (flakes) |
 | [chatRunner](chatRunner/) | launcher | `c <name/number>` | a chat provider |
@@ -118,11 +120,36 @@ tmux new-thing  →  no session by that name → offers  Create "new-thing"
 Existing sessions are always offered before the "create" fallback. Right-click
 a session for **Copy session name** or **Kill session**.
 
+With [sshManager](sshManager/) installed, its hosts are searchable here too —
+selecting one without a running session yet opens `ssh` as a tmux session's
+command instead of a plain shell, so the connection survives a detach.
+
 Needs `tmux` and a terminal emulator. Eleven common terminals are auto-detected
 (ghostty, kitty, alacritty, foot, wezterm, …); anything else falls back to `-e`,
 or set the exec flags yourself.
 
 → [tmuxRunner/README.md](tmuxRunner/README.md)
+
+## sshManager — `ssh <name>`
+
+A list of SSH connections — name, host, port, username, auth method — entered
+once in settings and shared two ways: this plugin's own launcher, and a small
+API any other plugin (a runner, say) can call to build the same connection.
+
+```
+ssh            →  every configured host
+ssh prod       →  hosts matching "prod" by name, address or username
+```
+
+Connecting always opens a terminal running plain `ssh` with the host's
+non-secret fields filled in — port, identity file, `user@host`. Password auth
+is never fed to `ssh` automatically here; it prompts for it interactively,
+same as typing the command by hand. A password can still be *stored*, for
+other plugins that want to drive `ssh` non-interactively themselves — see
+this plugin's README for exactly where that's kept and how to reach it as a
+consumer.
+
+→ [sshManager/README.md](sshManager/README.md)
 
 ## musicRunner — `mpd <query>`
 
@@ -200,6 +227,38 @@ chat section below. With none, the runner says so rather than showing an empty
 list.
 
 → [chatRunner/README.md](chatRunner/README.md)
+
+## clipboardRunner — `clip <name>`
+
+Your own commands, run against whatever is on the clipboard. Every action is
+filed under one of four kinds of content, and only the actions that fit what
+you copied are offered:
+
+```
+copy https://youtube.com/watch?v=…   then  clip  →  yt-dlp, mpv, send to phone
+copy #ff0080                         then  clip  →  set accent, name this colour
+copy /home/you/holiday.mkv           then  clip  →  play, transcode, share
+copy anything else                   then  clip  →  translate, define, pastebin
+```
+
+51 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
+links, aria2c for magnets, clone / `pm create` / fork for GitHub, ffmpeg and
+imagemagick conversions for audio, video and images, libreoffice for documents,
+framework detection and `adb install` for APKs, AppImage installation, 7z and
+tar for folders and archives, colour conversions, and a virus scan. They are seeded into your list as ordinary
+entries, so they are all editable.
+
+An action carries filters — `includes`, `excludes`, `is exactly`, `starts with`,
+a regex, and so on — so `includes youtube.com` under **Link** never fires for
+any other site. File actions can also be narrowed by extension.
+
+Everything runs through zsh, detached, with no terminal, and posts a
+notification when it finishes. Copying is not a trigger: nothing runs until you
+open the launcher and pick something. Clipboard text reaches the command as an
+argument rather than as part of the script, so a copied `; rm -rf ~` is a
+strange argument and not a second command.
+
+→ [clipboardRunner/README.md](clipboardRunner/README.md)
 
 ---
 
@@ -463,7 +522,7 @@ its output is invisible.
 ## A note on trust
 
 These plugins run as your user, with your permissions. So do all DMS plugins —
-there is no sandbox. Three are worth naming specifically:
+there is no sandbox. Four are worth naming specifically:
 
 - **commandRunner** runs what you configure, verbatim and unsanitized. That's
   the point of a command launcher, and anyone who can write its settings could
@@ -471,6 +530,10 @@ there is no sandbox. Three are worth naming specifically:
 - **systemPanel** reads the journal, wtmp, systemd and `ss` — all as your own
   user, no root and no helper daemon — and displays who has logged into the
   machine. Treat the panel as you'd treat that output.
+- **sshManager** can hold a plaintext password per host, deliberately kept out
+  of the ordinary settings file but still just a 0600 file on disk. Any other
+  enabled plugin can ask for it — there's no extra gate beyond being enabled
+  at all. Prefer key-based auth; it's the default.
 - **whatsappChat** holds your WhatsApp session and talks to WhatsApp's servers.
   It uses [whatsmeow](https://github.com/tulir/whatsmeow), the library most
   third-party WhatsApp clients are built on. WhatsApp does not sanction
