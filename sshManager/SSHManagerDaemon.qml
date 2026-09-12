@@ -27,8 +27,9 @@ Item {
     readonly property string pluginId: "sshManager"
     property var pluginService: null
 
-    signal hostsChanged
-
+    // No explicit "signal hostsChanged" here -- `property var hosts` already
+    // auto-generates one, and redeclaring it is a hard QML error ("Duplicate
+    // signal name") that fails this whole component to load.
     property var hosts: []
 
     readonly property string _secretsDir: Paths.strip(Paths.data) + "/plugins/sshManager"
@@ -66,7 +67,6 @@ Item {
         hosts = newHosts;
         if (pluginService)
             pluginService.savePluginData(pluginId, "hosts", newHosts);
-        hostsChanged();
     }
 
     // ---------------------------------------------------------------- CRUD
