@@ -103,7 +103,13 @@ sitting in `ps` output for anyone else on the machine to read.
 
 ## Requirements
 
-An `ssh` client, and a terminal emulator that can run a command via a flag
-(`-e`, or similar). A startup check verifies both `ssh` and the configured
-terminal are on PATH before the trigger goes live, and says which one is
-missing if not.
+An `ssh` client. A startup check verifies it's on PATH before the plugin
+enables, and says so if not.
+
+A terminal emulator is needed too, to actually connect, but it is
+deliberately **not** part of that check: Settings can't be opened until a
+plugin passes its startup check, so gating on the terminal default
+(`ghostty`) would lock out anyone without it before they could ever reach the
+setting that changes it. If your terminal isn't ghostty, set it under this
+plugin's settings before using the launcher -- connecting with the wrong
+terminal configured just does nothing, silently.
