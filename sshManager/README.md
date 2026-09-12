@@ -11,6 +11,14 @@ ssh            →  every configured host
 ssh prod       →  hosts matching "prod" by name, address or username
 ```
 
+The [tmuxRunner](../tmuxRunner/) plugin, if installed, folds this same host
+list into its own `tmux <query>` search -- a host without a live tmux session
+yet shows up there too, and connecting through it wraps `ssh` in
+`tmux new-session` instead of running it bare, so the connection survives a
+detach. That's implemented entirely in tmuxRunner by reading this plugin's
+settings directly (`pluginService.loadPluginData("sshManager", "hosts", [])`);
+nothing here knows tmuxRunner exists.
+
 ## Install
 
 ```sh

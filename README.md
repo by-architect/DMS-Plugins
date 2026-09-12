@@ -120,6 +120,10 @@ tmux new-thing  →  no session by that name → offers  Create "new-thing"
 Existing sessions are always offered before the "create" fallback. Right-click
 a session for **Copy session name** or **Kill session**.
 
+With [sshManager](sshManager/) installed, its hosts are searchable here too —
+selecting one without a running session yet opens `ssh` as a tmux session's
+command instead of a plain shell, so the connection survives a detach.
+
 Needs `tmux` and a terminal emulator. Eleven common terminals are auto-detected
 (ghostty, kitty, alacritty, foot, wezterm, …); anything else falls back to `-e`,
 or set the exec flags yourself.

@@ -1,12 +1,20 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Common
 import qs.Services
 
 // Launcher provider backed by `tmux list-sessions`. Unlike a search query, the
 // session list doesn't depend on what's typed - it's the same command every
 // time, filtered locally - so this polls it (throttled) rather than firing a
 // process per keystroke, and getItems() always answers from cache.
+//
+// Also folds in hosts from the sshManager plugin, if installed: each host
+// that has no live tmux session yet shows up as its own entry, and selecting
+// it creates one that runs `ssh` as the session's command -- so a remote
+// connection gets tmux's detach/reattach for free. Once that session exists,
+// the host stops appearing separately; it's just a normal tmux session from
+// then on, found and killed the same way as any other.
 Item {
     id: root
 
@@ -21,6 +29,11 @@ Item {
     property string tmuxBin: "tmux"
     property string terminalBin: "ghostty"
     property string terminalArgsOverride: ""
+
+    // Hosts from sshManager, if that plugin is installed. Reading another
+    // plugin's settings this way needs no special permission -- see
+    // sshManager's README for the shape of a "hosts" entry.
+    property var sshHosts: []
 
     // Known -e-style flags for common terminals. Covers the ones that need
     // something other than "-e" (foot takes none, wezterm/gnome-terminal use
@@ -60,9 +73,12 @@ Item {
     Connections {
         target: root.pluginService
         function onPluginDataChanged(changedPluginId) {
-            if (changedPluginId !== root.pluginId)
-                return;
-            root._loadSettings();
+            if (changedPluginId === root.pluginId) {
+                root._loadSettings();
+            } else if (changedPluginId === "sshManager") {
+                root._loadSshHosts();
+                root.itemsChanged();
+            }
         }
     }
 
@@ -73,6 +89,14 @@ Item {
         tmuxBin = pluginService.loadPluginData(pluginId, "tmuxBin", "tmux");
         terminalBin = pluginService.loadPluginData(pluginId, "terminalBin", "ghostty");
         terminalArgsOverride = pluginService.loadPluginData(pluginId, "terminalArgsOverride", "");
+        _loadSshHosts();
+    }
+
+    function _loadSshHosts() {
+        if (!pluginService)
+            return;
+        const loaded = pluginService.loadPluginData("sshManager", "hosts", []);
+        sshHosts = Array.isArray(loaded) ? loaded : [];
     }
 
     // ---------------------------------------------------------------- launcher
@@ -87,18 +111,35 @@ Item {
             return [_statusItem("error", "tmux list-sessions failed", _fetchError + "  ·  Press Enter to retry", "retry")];
 
         const q = (query || "").trim();
+        const lower = q.toLowerCase();
         let items = [];
 
         if (q.length === 0) {
             for (let i = 0; i < _sessions.length; i++)
                 items.push(_sessionItem(_sessions[i], _sessions.length - i + 8000));
         } else {
-            const lower = q.toLowerCase();
             const matched = _sessions.filter(s => s.name.toLowerCase().includes(lower));
             const ranked = _rank(matched, lower);
             for (let i = 0; i < ranked.length; i++)
                 items.push(_sessionItem(ranked[i], ranked.length - i + 8000));
+        }
 
+        // SSH hosts whose session is already running are just that tmux
+        // session above -- attaching to it needs no special-casing, so they
+        // are skipped here to avoid listing the same destination twice.
+        const liveSessionNames = new Set(_sessions.map(s => s.name));
+        const sshMatches = q.length === 0 ? sshHosts : sshHosts.filter(h => {
+            return (h.name || "").toLowerCase().includes(lower) || (h.host || "").toLowerCase().includes(lower) || (h.username || "").toLowerCase().includes(lower);
+        });
+        for (let i = 0; i < sshMatches.length; i++) {
+            const h = sshMatches[i];
+            const sessionName = _sshSessionName(h);
+            if (liveSessionNames.has(sessionName))
+                continue;
+            items.push(_sshItem(h, sessionName));
+        }
+
+        if (q.length > 0) {
             const hasExact = _sessions.some(s => s.name === q);
             if (!hasExact)
                 items.push(_createItem(q));
@@ -125,11 +166,31 @@ Item {
         }
         if (item.action === "create" && item.sessionName) {
             _create(item.sessionName);
+            return;
+        }
+        if (item.action === "ssh-connect" && item.sshEntry) {
+            _connectSsh(item.sshEntry, item.sshSessionName);
         }
     }
 
     function getContextMenuActions(item) {
-        if (!item || item.action !== "attach" || !item.tmuxEntry)
+        if (!item)
+            return [];
+
+        if (item.action === "ssh-connect" && item.sshEntry) {
+            const h = item.sshEntry;
+            const dest = h.username ? (h.username + "@" + h.host) : h.host;
+            return [{
+                icon: "content_copy",
+                text: "Copy connection string",
+                action: () => {
+                    Quickshell.execDetached(["dms", "cl", "copy", "ssh://" + dest + (h.port && h.port !== "22" ? ":" + h.port : "")]);
+                    root._toast("Copied", dest);
+                }
+            }];
+        }
+
+        if (item.action !== "attach" || !item.tmuxEntry)
             return [];
 
         const entry = item.tmuxEntry;
@@ -333,6 +394,22 @@ Item {
         };
     }
 
+    function _sshItem(h, sessionName) {
+        const dest = h.username ? (h.username + "@" + h.host) : h.host;
+        const portSuffix = h.port && h.port !== "22" ? ":" + h.port : "";
+        return {
+            id: "tmux:ssh:" + h.id,
+            name: h.name || dest,
+            icon: "material:vpn_key",
+            comment: dest + portSuffix + " · SSH host, opens in a new tmux session",
+            action: "ssh-connect",
+            categories: ["SSH Hosts"],
+            _preScored: 7000,
+            sshEntry: h,
+            sshSessionName: sessionName
+        };
+    }
+
     function _createItem(name) {
         return {
             id: "tmux:create:" + name,
@@ -368,6 +445,30 @@ Item {
     function _create(name) {
         Quickshell.execDetached(_terminalPrefix().concat([tmuxBin, "new-session", "-s", name]));
         _toast("Creating session", name);
+    }
+
+    // Deterministic from the host so re-selecting the same host later resolves
+    // to the same session instead of piling up "ssh-prod", "ssh-prod-2", ...
+    function _sshSessionName(h) {
+        const base = (h.name || h.host || "ssh").toString();
+        return "ssh-" + base.replace(/[^a-zA-Z0-9_-]/g, "-");
+    }
+
+    function _sshArgs(h) {
+        const argv = ["ssh"];
+        if (h.port && h.port !== "22")
+            argv.push("-p", h.port);
+        if (h.authMethod === "key" && h.identityFile)
+            argv.push("-i", Paths.expandTilde(h.identityFile));
+        argv.push(h.username ? (h.username + "@" + h.host) : h.host);
+        return argv;
+    }
+
+    function _connectSsh(h, sessionName) {
+        const name = sessionName || _sshSessionName(h);
+        Quickshell.execDetached(_terminalPrefix().concat([tmuxBin, "new-session", "-s", name]).concat(_sshArgs(h)));
+        _toast("Connecting via tmux", h.name || h.host);
+        _refresh();
     }
 
     function _terminalPrefix() {
