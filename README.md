@@ -33,6 +33,21 @@ summaries of what each one is for and what it needs.
 
 ## Install
 
+**clipboardRunner is in the [DMS plugin registry][registry]**, so it installs
+itself:
+
+```sh
+dms plugins install clipboardRunner
+```
+
+It is also in **Settings → Plugins → Browse**, which is the same thing with a
+list to scroll. The rest of the plugins here are not in the registry yet;
+install those from a clone, below.
+
+[registry]: https://github.com/AvengeMedia/dms-plugin-registry
+
+### From a clone
+
 Plugins live in `~/.config/DankMaterialShell/plugins/`. Symlinking from a clone
 means `git pull` updates them in place, and the directory is watched, so they
 appear without restarting the shell.
@@ -241,6 +256,8 @@ copy /home/you/holiday.mkv           then  clip  →  play, transcode, share
 copy anything else                   then  clip  →  translate, define, pastebin
 ```
 
+![Converting what was just copied, then archiving the results, without leaving the launcher](clipboardRunner/docs/demo.gif)
+
 51 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
 links, aria2c for magnets, clone / `pm create` / fork for GitHub, ffmpeg and
 imagemagick conversions for audio, video and images, libreoffice for documents,
@@ -251,6 +268,8 @@ entries, so they are all editable.
 An action carries filters — `includes`, `excludes`, `is exactly`, `starts with`,
 a regex, and so on — so `includes youtube.com` under **Link** never fires for
 any other site. File actions can also be narrowed by extension.
+
+![One action in the settings: what it applies to, which extensions, its filters, and the command template](clipboardRunner/docs/action-editor.png)
 
 Everything runs through zsh, detached, with no terminal, and posts a
 notification when it finishes. Copying is not a trigger: nothing runs until you

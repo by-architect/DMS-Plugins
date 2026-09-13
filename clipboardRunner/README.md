@@ -14,17 +14,29 @@ copy anything else                   then   clip   →  your text actions
 Nothing runs on its own. Copying is not a trigger — you open the launcher and
 pick an action, or nothing happens.
 
+![Converting what was just copied, then archiving the results, without leaving the launcher](docs/demo.gif)
+
 ## Install
 
-Symlink it into the DMS plugin directory:
+It is in the [DMS plugin registry][registry], so:
+
+```sh
+dms plugins install clipboardRunner
+```
+
+Or **Settings → Plugins → Browse**, which is the same thing with a list to
+scroll. To run it from a clone instead, symlink it into the DMS plugin
+directory:
 
 ```sh
 ln -s "$PWD/clipboardRunner" ~/.config/DankMaterialShell/plugins/clipboardRunner
 ```
 
-The shell picks it up on its own (it watches the plugins directory). Enable
-**Clipboard Runner** under Settings → Plugins, then add actions under that same
-settings panel.
+Either way the shell picks it up on its own (it watches the plugins directory).
+Enable **Clipboard Runner** under Settings → Plugins, then add actions under
+that same settings panel.
+
+[registry]: https://github.com/AvengeMedia/dms-plugin-registry
 
 ## The four kinds
 
@@ -173,6 +185,13 @@ Filter operators: `anything`, `includes`, `excludes`, `is exactly`,
 `is not exactly`, `starts with`, `ends with`, `matches regex`,
 `does not match regex`. They compare against the whole clipboard text and
 ignore case unless you turn on the `match_case` button next to the filter.
+
+![A file action: what it applies to, its extensions, its filters, and the command template](docs/action-editor.png)
+
+A new one starts empty, under the kind you added it to, with the placeholders
+for that kind listed above the row:
+
+![Adding a link action and naming it](docs/new-action.gif)
 
 ### Placeholders
 
