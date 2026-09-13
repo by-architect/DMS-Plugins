@@ -1,6 +1,6 @@
 {
     "id": "matrixChat",
-    "name": "Matrix",
+    "name": "Matrix Chat",
     "description": "Connects DMS to a Matrix homeserver such as Synapse. Rooms, direct messages, attachments, replies and read receipts appear in the DMS chat window, with end-to-end encryption.",
     "version": "1.0.0",
     "author": "neo",

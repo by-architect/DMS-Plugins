@@ -12,7 +12,7 @@ QtObject {
         const dir = PluginService.getPluginPath("chatManager");
         if (!dir) {
             done({
-                "title": "Chats plugin directory not found",
+                "title": "Chat Manager plugin directory not found",
                 "details": "The plugin could not locate its own files. Try reinstalling it."
             });
             return;

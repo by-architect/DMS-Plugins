@@ -1,6 +1,6 @@
 {
     "id": "signalChat",
-    "name": "Signal",
+    "name": "Signal Chat",
     "description": "Connects DMS to Signal as a linked device. Chats, groups, attachments, replies and read receipts appear in the DMS chat window.",
     "version": "1.0.0",
     "author": "neo",

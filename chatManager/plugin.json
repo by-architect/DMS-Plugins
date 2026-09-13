@@ -1,6 +1,6 @@
 {
     "id": "chatManager",
-    "name": "Chats",
+    "name": "Chat Manager",
     "description": "The chat system: one window and one message store for every provider. Install a provider (Matrix, WhatsApp, Signal) alongside it and configure it here.",
     "version": "1.0.0",
     "author": "neo",

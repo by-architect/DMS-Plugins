@@ -1,4 +1,4 @@
-# Chats (chatManager)
+# Chat Manager (chatManager)
 
 The chat system as a plugin: one window and one message store, shared by every
 provider.

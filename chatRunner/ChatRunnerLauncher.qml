@@ -72,7 +72,7 @@ Item {
         const q = (query || "").trim();
 
         if (!root.chat)
-            return root._statusItem("chat_bubble", "Chat is unavailable", "Enable the Chats plugin to search your conversations");
+            return root._statusItem("chat_bubble", "Chat is unavailable", "Enable the Chat Manager plugin to search your conversations");
 
         if (!root.chat.available)
             return root._statusItem("chat_bubble", "Chat is unavailable", "The chat manager is not running, or no provider is enabled");
