@@ -1,0 +1,18 @@
+{
+    "id": "notificationLine",
+    "name": "Notification Line",
+    "description": "Minecraft-style notifications: one line per notification, stacked in a screen corner. Each line is only as wide as its text, up to half the screen; anything longer is elided with an arrow that expands it in place. Replaces the shipped notification popups while still using the DMS notification system underneath.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "daemon",
+    "capabilities": ["daemon", "notifications"],
+    "icon": "chat",
+    "settings": "./NotificationLineSettings.qml",
+    "permissions": [
+        "settings_read",
+        "settings_write"
+    ],
+    "components": {
+        "daemon": "./NotificationLineDaemon.qml"
+    }
+}

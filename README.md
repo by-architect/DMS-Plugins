@@ -2,10 +2,10 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Thirteen plugins in three shapes: **launcher** plugins that answer a trigger word
+Fourteen plugins in four shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
-keybind, and a **chat provider** that connects an outside messaging service to
-the DMS chat system.
+keybind, a **chat provider** that connects an outside messaging service to the
+DMS chat system, and an **overlay** that replaces a piece of shell chrome.
 
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
@@ -19,6 +19,7 @@ the DMS chat system.
 | [screenCatcher](screenCatcher/) | panel + bar widget | keybind / IPC | `grim`, `slurp`, `wf-recorder` |
 | [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
+| [notificationLine](notificationLine/) | overlay | every notification | — |
 | [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
 | [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
 | [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
@@ -383,6 +384,30 @@ closes from anywhere; **q** closes too, but only when the search field isn't
 focused.
 
 → [notificationPanel/README.md](notificationPanel/README.md)
+
+## notificationLine
+
+Notifications as chat lines instead of cards — one notification, one line,
+stacked in a screen corner the way Minecraft's chat overlay stacks messages:
+
+```
+ 4m  [] discord    Someone   →  are you coming to the thing tonight or …  ⌄
+```
+
+A line is only as wide as its text, up to half the screen. Past that the title
+and body are elided and a `⌄` appears; clicking it unfolds that line in place
+into a wrapped, multi-line version with the notification's action buttons
+underneath, and stops the expiry timer while you read. Hovering pauses the
+timer, left click fires the default action, middle click dismisses.
+
+It is a different *view*, not a different notification system: it renders
+`NotificationService.visibleNotifications`, so timeouts, per-app rules, dedupe,
+Do Not Disturb, history and the notification centre all behave exactly as they
+did. Because DMS has no switch for turning its own popup cards off, the plugin
+does it by pointing the shell's notification monitor list at a screen name that
+cannot exist, and puts the old value back when it is disabled or removed.
+
+→ [notificationLine/README.md](notificationLine/README.md)
 
 ---
 
