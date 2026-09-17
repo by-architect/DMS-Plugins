@@ -1,0 +1,16 @@
+{
+    "id": "wallpaperSearch",
+    "name": "Wallpaper Search",
+    "description": "Fullscreen, keyboard-driven wallpaper browser: search Wallhaven or browse a local folder, and apply with a keystroke",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "dankbar-widget"],
+    "icon": "wallpaper",
+    "components": {
+        "daemon": "./WallpaperSearchDaemon.qml",
+        "widget": "./WallpaperSearchWidget.qml"
+    },
+    "settings": "./WallpaperSearchSettings.qml",
+    "permissions": ["settings_read", "settings_write"]
+}
