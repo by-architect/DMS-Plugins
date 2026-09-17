@@ -30,10 +30,32 @@ PanelWindow {
     property string searchQuery: ""
 
     readonly property bool keyboardReady: rootFocus.activeFocus
+    readonly property bool searchFocused: searchField.hasFocus
 
     onOpenChanged: {
         if (open)
             searchField.field.forceActiveFocus();
+    }
+
+    function clearSearch() {
+        win.searchQuery = "";
+        searchField.text = "";
+    }
+
+    function deleteSearchWord() {
+        const text = searchField.text;
+        const pos = searchField.field.cursorPosition;
+        if (pos === 0)
+            return;
+        let i = pos;
+        while (i > 0 && /\s/.test(text[i - 1]))
+            i--;
+        while (i > 0 && !/\s/.test(text[i - 1]))
+            i--;
+        const next = text.slice(0, i) + text.slice(pos);
+        win.searchQuery = next;
+        searchField.text = next;
+        searchField.field.cursorPosition = i;
     }
 
     readonly property var searchTokens: Filters.parseFilter(searchQuery)
@@ -105,7 +127,19 @@ PanelWindow {
 
             Keys.onEscapePressed: win.closeRequested()
             Keys.onPressed: event => {
-                if (event.key === Qt.Key_Q && !searchField.field.activeFocus) {
+                const searchFocused = searchField.hasFocus;
+                const ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
+                if (searchFocused && ctrl && event.key === Qt.Key_U) {
+                    win.clearSearch();
+                    event.accepted = true;
+                    return;
+                }
+                if (searchFocused && ctrl && event.key === Qt.Key_W) {
+                    win.deleteSearchWord();
+                    event.accepted = true;
+                    return;
+                }
+                if (event.key === Qt.Key_Q && !searchFocused) {
                     win.closeRequested();
                     event.accepted = true;
                 }

@@ -109,13 +109,17 @@ Then add the **Notification Panel** widget to the bar under Settings → DankBar
 quickshell -p <shell-path> ipc call notificationPanel toggle   # also: open, close, status
 ```
 
-`status` reports whether the panel holds keyboard focus (`keyboard=ready`),
-useful when debugging compositor focus behaviour.
+`status` reports whether the panel holds keyboard focus (`keyboard=ready`)
+and specifically whether the search field does (`search=focused`), useful
+when debugging compositor focus behaviour.
 
 The search bar takes keyboard focus automatically on open, so typing starts
 filtering immediately. **Esc** closes from anywhere, including while typing;
 **q** also closes, but only when the search field isn't focused (otherwise
-it'd just be typed as a search character).
+it'd just be typed as a search character). While the search field is
+focused, **Ctrl+W** deletes the word before the cursor and **Ctrl+U** clears
+the field — standard readline/shell editing shortcuts that Qt's `TextInput`
+doesn't bind by default.
 
 ## Implementation notes
 
@@ -144,3 +148,16 @@ daemon loads it once and the window's own `open` property just maps/unmaps
 the surface; reopening is instant. The tradeoff is that the tree — and its
 image cache — stays resident in memory for as long as the plugin is enabled,
 not just while the panel is visible.
+
+**`DankTextField.activeFocus` is not the inner field's focus.** `DankTextField`'s
+own root is a plain `Rectangle`, not a `FocusScope`, so it never reports
+`activeFocus = true` itself even while its inner `TextInput` visibly has the
+cursor and the focus ring is showing — a `FocusScope` is required for a
+wrapper to reflect a focused child's state at all. Reading
+`searchField.field.activeFocus` is a trap: it silently evaluates to `false`
+forever, which both makes a `keyboard=ready`-style status check lie and
+makes any `!field.activeFocus` guard (e.g. "close on `q` unless typing")
+fire unconditionally. `SearchBar.qml` instead forwards the real state via
+`DankTextField`'s own `focusStateChanged(bool)` signal into a plain
+`hasFocus` property — use `searchField.hasFocus`, not
+`searchField.field.activeFocus`.

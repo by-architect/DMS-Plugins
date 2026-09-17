@@ -60,7 +60,9 @@ PluginComponent {
             if (openVar.value !== true)
                 return "closed";
             const item = panelLoader.item;
-            return "open\tkeyboard=" + (item && item.keyboardReady ? "ready" : "not-focused");
+            const keyboard = item && item.keyboardReady ? "ready" : "not-focused";
+            const search = item && item.searchFocused ? "focused" : "unfocused";
+            return "open\tkeyboard=" + keyboard + "\tsearch=" + search;
         }
     }
 

@@ -10,6 +10,13 @@ StyledRect {
     property alias text: field.text
     property alias field: field
 
+    // DankTextField's own root is a plain Rectangle, not a FocusScope, so
+    // `field.activeFocus` never reflects the inner TextInput's real focus —
+    // it stays false even while the field visibly has the cursor. This
+    // mirrors the inner TextInput's activeFocus via DankTextField's own
+    // forwarding signal instead, which is the supported way to read it.
+    property bool hasFocus: false
+
     signal textEdited
 
     width: 480
@@ -29,5 +36,6 @@ StyledRect {
         showClearButton: true
         cornerRadius: root.radius - 2
         onTextEdited: root.textEdited()
+        onFocusStateChanged: focused => root.hasFocus = focused
     }
 }
