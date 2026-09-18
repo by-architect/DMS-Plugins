@@ -21,6 +21,7 @@ collide.
 | `Ctrl+Enter` | download and apply the selected **Wallhaven** result |
 | `Alt+Enter` | apply the selected **Local** image directly (no download) |
 | `Alt+j` / `Alt+k` | next / previous tab |
+| `Space` (panel mode) | fetch the next page of Wallhaven results and append them |
 | `Ctrl+w` / `Ctrl+u` (search focused) | delete word before cursor / clear field |
 
 `Ctrl`/`Alt`+`Enter` and `Alt+j/k` are live regardless of whether the search
@@ -31,10 +32,18 @@ triggers a hotkey by accident.
 ## The two tabs
 
 **Wallhaven** — SFW-only (`purity=100`), no API key needed or supported.
-Typing a query and pressing Enter fetches the first page of results
+Typing a query and pressing Enter fetches results
 (`https://wallhaven.cc/api/v1/search`); the API isn't queried on every
 keystroke. The top result is pre-selected the moment results arrive, so
 `Ctrl+Enter` alone (no navigation) grabs the top hit.
+
+Wallhaven's API ignores a bigger `per_page` — it's always 24 results per
+page — so a single page rarely fills a fullscreen grid. A fresh search
+fetches two pages automatically (48 results) before it's done "loading";
+`Space` (in panel mode, not while typing) fetches one more page and appends
+it, same as clicking "Load More" in the reference implementation this was
+modeled after, just without needing the mouse. A small indicator at the
+bottom of the grid shows the running total and whether more pages exist.
 
 **Local** — scans the configured folder once per panel session (or on first
 switch to the tab) for `.jpg`/`.jpeg`/`.png`/`.webp`/`.avif` files, up to 4
@@ -110,3 +119,12 @@ rather than calling `Paths.mkdir()` (which is fire-and-forget
 `execDetached`, with no way to know when — or whether — it finished) followed
 by a separate download command; otherwise there's a real, if narrow, race on
 the very first download to a not-yet-existing install directory.
+
+The fresh-search auto-prefetch and `Space`-to-load-more both call the same
+`fetchWallhavenPage(page, append, autoChain)`, distinguished only by
+`autoChain`: a fresh search calls itself with `autoChain: true` and keeps
+fetching until `wallhavenPrefetchPages`, while a manual `Space` press always
+fetches exactly the one page it asked for and never continues the chain on
+its own. Collapsing these into one flag rather than checking `page === 1`
+(what an earlier draft did) means a manual load-more triggered from page 1
+can't accidentally re-trigger the auto-fill behavior.

@@ -89,41 +89,88 @@ PanelWindow {
     // navigation works immediately without an extra unfocus step.
     function handleSearchAccepted() {
         if (activeTab === 0)
-            searchWallhaven(searchQuery, 1);
+            searchWallhaven(searchQuery);
         focusAnchor.forceActiveFocus();
     }
 
     // -------------------------------------------------------- wallhaven tab
     property var wallhavenItems: []
     property int wallhavenIndex: -1
+    property string wallhavenActiveQuery: ""
     property int wallhavenPage: 1
     property int wallhavenLastPage: 1
+    // Wallhaven ignores a bigger per_page (always 24/page), so "more on the
+    // first search" means fetching this many pages up front instead of one.
+    readonly property int wallhavenPrefetchPages: 2
     property bool wallhavenLoading: false
+    property bool wallhavenLoadingMore: false
     property string wallhavenError: ""
     property bool wallhavenApplying: false
 
-    function searchWallhaven(query, page) {
-        wallhavenLoading = true;
+    // page 1 replaces the results; every later page appends. A fresh search,
+    // the auto-prefetch chain below it, and Space-to-load-more all funnel
+    // through this one function. `autoChain` marks a call as part of the
+    // initial fill-the-screen sequence (as opposed to a user-triggered
+    // load-more) — only those keep fetching until wallhavenPrefetchPages;
+    // a manual Space press always fetches exactly one more page.
+    function fetchWallhavenPage(page, append, autoChain) {
+        if (append)
+            wallhavenLoadingMore = true;
+        else
+            wallhavenLoading = true;
         wallhavenError = "";
         wallhavenPage = page;
-        const url = Wallhaven.searchUrl(query, page);
+        const url = Wallhaven.searchUrl(wallhavenActiveQuery, page);
         Proc.runCommand("wallpaperSearch:wallhaven", ["curl", "-s", url], (output, exitCode) => {
             wallhavenLoading = false;
+            wallhavenLoadingMore = false;
             if (exitCode !== 0) {
-                wallhavenError = "Search failed (network error)";
+                if (append)
+                    ToastService.showError("Load more failed (network error)");
+                else
+                    wallhavenError = "Search failed (network error)";
                 return;
             }
             const parsed = Wallhaven.parseResults(output);
             if (!parsed) {
-                wallhavenError = "Search failed (bad response — rate limited?)";
+                if (append)
+                    ToastService.showError("Load more failed (bad response — rate limited?)");
+                else
+                    wallhavenError = "Search failed (bad response — rate limited?)";
                 return;
             }
-            wallhavenItems = parsed.items;
+
             wallhavenLastPage = parsed.lastPage;
-            selectWallhaven(parsed.items.length > 0 ? 0 : -1);
-            if (parsed.items.length === 0)
-                wallhavenError = "No results";
+            if (append) {
+                wallhavenItems = wallhavenItems.concat(parsed.items);
+            } else {
+                wallhavenItems = parsed.items;
+                selectWallhaven(parsed.items.length > 0 ? 0 : -1);
+                if (parsed.items.length === 0)
+                    wallhavenError = "No results";
+            }
+
+            // Keep fetching while still inside the initial fill-the-screen
+            // window — a 24-result first page rarely covers a fullscreen
+            // grid on its own. A manual load-more (autoChain unset) never
+            // continues past the one page it asked for.
+            if (autoChain && page < wallhavenPrefetchPages && page < wallhavenLastPage)
+                fetchWallhavenPage(page + 1, true, true);
         });
+    }
+
+    function searchWallhaven(query) {
+        wallhavenActiveQuery = query;
+        wallhavenItems = [];
+        fetchWallhavenPage(1, false, true);
+    }
+
+    function loadMoreWallhaven() {
+        if (activeTab !== 0 || wallhavenLoading || wallhavenLoadingMore)
+            return;
+        if (wallhavenItems.length === 0 || wallhavenPage >= wallhavenLastPage)
+            return;
+        fetchWallhavenPage(wallhavenPage + 1, true, false);
     }
 
     function applyWallhavenSelection() {
@@ -370,6 +417,11 @@ PanelWindow {
                     event.accepted = true;
                     return;
                 }
+                if (event.key === Qt.Key_Space) {
+                    win.loadMoreWallhaven();
+                    event.accepted = true;
+                    return;
+                }
                 if (ctrl) {
                     switch (event.key) {
                     case Qt.Key_H:
@@ -426,7 +478,7 @@ PanelWindow {
                         }
 
                         StyledText {
-                            text: "/ search · Ctrl+hjkl select · Ctrl+Enter apply (Wallhaven) · Alt+Enter apply (Local) · Alt+j/k tabs"
+                            text: "/ search · Space more · Ctrl+hjkl select · Ctrl+Enter apply (Wallhaven) · Alt+Enter apply (Local) · Alt+j/k tabs"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                         }
@@ -480,7 +532,7 @@ PanelWindow {
                         anchors.fill: parent
                         visible: win.activeTab === 0
                         clip: true
-                        cellWidth: Math.max(220, width / Math.floor(width / 260))
+                        cellWidth: Math.max(170, width / Math.floor(width / 200))
                         cellHeight: cellWidth * 0.62
                         model: win.wallhavenItems
                         keyNavigationEnabled: false
@@ -510,7 +562,7 @@ PanelWindow {
                         anchors.fill: parent
                         visible: win.activeTab === 1
                         clip: true
-                        cellWidth: Math.max(220, width / Math.floor(width / 260))
+                        cellWidth: Math.max(170, width / Math.floor(width / 200))
                         cellHeight: cellWidth * 0.62
                         model: win.localFiltered
                         keyNavigationEnabled: false
@@ -534,11 +586,16 @@ PanelWindow {
                     }
 
                     // ---------------------------------------------- empty/status states
+                    // Gated on there being zero items, not just "loading" —
+                    // otherwise the background page-2+ prefetch or a Space
+                    // load-more would cover the results that are already on
+                    // screen with a spinner instead of appending quietly
+                    // beneath them.
                     Column {
                         anchors.centerIn: parent
                         spacing: Theme.spacingS
                         width: parent.width - Theme.spacingXL * 2
-                        visible: win.activeTab === 0 ? (win.wallhavenLoading || win.wallhavenError.length > 0 || win.wallhavenItems.length === 0) : (win.localLoading || win.localError.length > 0)
+                        visible: win.activeTab === 0 ? win.wallhavenItems.length === 0 : (win.localLoading || win.localError.length > 0)
 
                         DankSpinner {
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -575,6 +632,35 @@ PanelWindow {
                                 if (win.localError)
                                     return win.localError + "\n(configure the folder in plugin settings)";
                                 return "";
+                            }
+                        }
+                    }
+
+                    // ---------------------------------------- load-more indicator
+                    Row {
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottomMargin: Theme.spacingM
+                        spacing: Theme.spacingS
+                        visible: win.activeTab === 0 && win.wallhavenItems.length > 0
+
+                        DankSpinner {
+                            visible: win.wallhavenLoadingMore
+                            running: visible
+                            size: 16
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            anchors.verticalCenter: parent.verticalCenter
+                            font.pixelSize: Theme.fontSizeSmall - 1
+                            color: Theme.surfaceVariantText
+                            text: {
+                                if (win.wallhavenLoadingMore)
+                                    return "Loading more…";
+                                if (win.wallhavenPage >= win.wallhavenLastPage)
+                                    return win.wallhavenItems.length + " results — end reached";
+                                return win.wallhavenItems.length + " results — Space for more";
                             }
                         }
                     }
