@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"dmschatmanager/internal/log"
@@ -93,11 +94,36 @@ func (p *NotifyPolicy) Focused() (provider, chatID string) {
 	return p.focused.provider, p.focused.chatID
 }
 
+const (
+	// catchUpWindow is how far back a message held during a sync may be and
+	// still be worth interrupting someone for.
+	//
+	// A shell restarted a minute ago should still say what arrived while it was
+	// down; a message from yesterday has had its chance, and would otherwise be
+	// announced afresh on every single start -- nothing remembers what has
+	// already been notified, and nothing should have to.
+	catchUpWindow = 30 * time.Minute
+
+	// How many conversations get their own notification when a provider
+	// finishes catching up. Past this they are counted in one line: coming back
+	// to a full inbox is one fact, not thirty.
+	maxCatchUpNotifications = 5
+)
+
 // suppressionReason returns why a message should not notify, or "" to notify.
+func (p *NotifyPolicy) suppressionReason(ctx context.Context, m Message, prefs NotifyPrefs) string {
+	return p.suppress(ctx, m, prefs, 0)
+}
+
+// suppress is suppressionReason with an allowance on how old a message may be.
+//
+// grace is what separates a live message from one recovered after a sync: live
+// traffic older than this host is history and never notifies, while a message
+// missed during a restart is exactly what the user wants to hear about.
 //
 // The order matters: the cheap, certain checks come before anything that hits
 // the database.
-func (p *NotifyPolicy) suppressionReason(ctx context.Context, m Message, prefs NotifyPrefs) string {
+func (p *NotifyPolicy) suppress(ctx context.Context, m Message, prefs NotifyPrefs, grace time.Duration) string {
 	if prefs.DoNotDisturb {
 		return "do not disturb"
 	}
@@ -117,13 +143,22 @@ func (p *NotifyPolicy) suppressionReason(ctx context.Context, m Message, prefs N
 
 	// Backfill. History sync delivers messages that predate the host starting;
 	// without this, a first login notifies for the user's entire history.
-	if m.TS > 0 && !time.UnixMilli(m.TS).After(p.StartedAt) {
+	if m.TS > 0 && !time.UnixMilli(m.TS).After(p.StartedAt.Add(-grace)) {
 		return "backfill"
 	}
 
 	// The conversation is already on screen.
 	if p.focused.provider == m.Provider && p.focused.chatID == m.ChatID {
 		return "chat focused"
+	}
+
+	// Read somewhere else. A provider that knows its own read position pushes
+	// it down, and a message at or before it has been seen -- on a phone, in
+	// another client -- whatever this device happens to have stored.
+	if p.store != nil && m.TS > 0 {
+		if c, err := p.store.ChatByID(ctx, m.Provider, m.ChatID); err == nil && c.ReadUpTo >= m.TS {
+			return "already read"
+		}
 	}
 
 	if p.store != nil {
@@ -183,9 +218,77 @@ func (p *NotifyPolicy) Notify(ctx context.Context, m Message, providerName strin
 		log.Debugf("chat: suppressed notification for %s/%s: %s", m.Provider, m.ChatID, reason)
 		return false
 	}
+	return p.send(p.notificationFor(ctx, m, providerName, prefs))
+}
 
-	title := p.titleFor(ctx, m, providerName)
+// NotifyCatchUp announces messages that were held while a provider was still
+// syncing -- see settle.go in the host package.
+//
+// One notification per conversation, however many messages it holds: coming
+// back to a day of traffic should cost a handful of notifications, not a
+// hundred. Everything is re-judged first, which is the entire reason for
+// having waited: by now the provider has said how far each conversation was
+// read elsewhere, and most of a catch-up usually turns out to be already seen.
+//
+// Reports how many notifications were shown.
+func (p *NotifyPolicy) NotifyCatchUp(ctx context.Context, msgs []Message, providerName string, prefs NotifyPrefs) int {
+	// Grouped in arrival order, so conversations are announced in the order
+	// their first unread message came in rather than in map order.
+	order := make([]string, 0, len(msgs))
+	byChat := make(map[string][]Message, len(msgs))
 
+	for _, m := range msgs {
+		if reason := p.suppress(ctx, m, prefs, catchUpWindow); reason != "" {
+			log.Debugf("chat: held message from %s/%s not notified: %s", m.Provider, m.ChatID, reason)
+			continue
+		}
+		if _, seen := byChat[m.ChatID]; !seen {
+			order = append(order, m.ChatID)
+		}
+		byChat[m.ChatID] = append(byChat[m.ChatID], m)
+	}
+
+	shown := 0
+	for i, chatID := range order {
+		if i == maxCatchUpNotifications {
+			// The rest as one line. Thirty conversations is a state of affairs,
+			// not thirty things to be told one after another.
+			remaining := len(order) - i
+			p.send(notify.Notification{
+				AppName: NotifyAppName,
+				Icon:    "material:chat",
+				Summary: providerNameOr(providerName),
+				Body:    plural(remaining, "more conversation", "more conversations") + " with unread messages",
+			})
+			shown++
+			break
+		}
+
+		group := byChat[chatID]
+		latest := group[len(group)-1]
+
+		n := p.notificationFor(ctx, latest, providerName, prefs)
+		if len(group) > 1 {
+			// The newest message, under a count of how much is waiting behind
+			// it. A count alone says nothing about whether it matters.
+			n.Body = plural(len(group), "new message", "new messages") + "\n" + n.Body
+		}
+		if p.send(n) {
+			shown++
+		}
+	}
+	return shown
+}
+
+func providerNameOr(providerName string) string {
+	if providerName != "" {
+		return providerName
+	}
+	return "Chats"
+}
+
+// notificationFor builds what one message looks like on screen.
+func (p *NotifyPolicy) notificationFor(ctx context.Context, m Message, providerName string, prefs NotifyPrefs) notify.Notification {
 	body := "New message"
 	if prefs.Preview {
 		if preview := m.Preview(); preview != "" {
@@ -200,7 +303,7 @@ func (p *NotifyPolicy) Notify(ctx context.Context, m Message, providerName strin
 	n := notify.Notification{
 		AppName: NotifyAppName,
 		Icon:    "material:chat",
-		Summary: title,
+		Summary: p.titleFor(ctx, m, providerName),
 		Body:    body,
 	}
 
@@ -209,7 +312,10 @@ func (p *NotifyPolicy) Notify(ctx context.Context, m Message, providerName strin
 	if prefs.Preview && m.Kind == KindImage && m.MediaPath != "" {
 		n.FilePath = m.MediaPath
 	}
+	return n
+}
 
+func (p *NotifyPolicy) send(n notify.Notification) bool {
 	// Send returns the notification id, which chat has no use for: these are
 	// fire-and-forget and never replaced or recalled.
 	if _, err := notify.Send(n); err != nil {
@@ -217,6 +323,13 @@ func (p *NotifyPolicy) Notify(ctx context.Context, m Message, providerName strin
 		return false
 	}
 	return true
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
 }
 
 // titleFor names the conversation, falling back through sender then provider so

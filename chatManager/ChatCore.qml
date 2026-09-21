@@ -194,20 +194,34 @@ Item {
     property bool loadingHistory: false
     property bool hasMoreHistory: false
 
+    // Where the open conversation had been read when it was opened.
+    //
+    // A snapshot, deliberately: opening marks the conversation read, so the
+    // live value is "now" a moment later and the divider it draws would vanish
+    // while the user is still looking at it.
+    property real unreadMarkTs: 0
+
+    // The first message the user had not seen when they opened this
+    // conversation, or -1. Where the view lands, and where the divider goes.
+    readonly property int firstUnreadIndex: {
+        if (unreadMarkTs <= 0)
+            return -1;
+        for (let i = 0; i < messages.length; i++) {
+            const msg = messages[i];
+            if (msg.fromMe)
+                continue;
+            if ((msg.ts || 0) > unreadMarkTs)
+                return i;
+        }
+        return -1;
+    }
+
     // No messagesChanged signal is declared: `property var messages` already
     // generates one, and redeclaring it is a duplicate-signal error.
     signal historyLoaded(string provider, string chatId)
     signal sendFailed(string reason)
 
-    readonly property var activeChat: {
-        if (!hasActiveChat)
-            return null;
-        for (let i = 0; i < chats.length; i++) {
-            if (chats[i].provider === activeProvider && chats[i].id === activeChatId)
-                return chats[i];
-        }
-        return null;
-    }
+    readonly property var activeChat: hasActiveChat ? chatByKey(activeProvider, activeChatId) : null
 
     function providerById(id) {
         for (let i = 0; i < providers.length; i++) {
@@ -256,6 +270,11 @@ Item {
         if (!provider || !chatId)
             return;
 
+        // Only where something is actually waiting: the read position of a
+        // conversation already caught up on would mark its newest message.
+        const entry = root.chatByKey(provider, chatId);
+        root.unreadMarkTs = entry && (entry.unread || 0) > 0 ? (entry.readUpTo || 0) : 0;
+
         root.activeProvider = provider;
         root.activeChatId = chatId;
         root.messages = [];
@@ -277,6 +296,9 @@ Item {
         if (!provider || !chatId)
             return;
 
+        // Jumping to a search result is a deliberate destination, so no unread
+        // mark: the view belongs at the message that was picked.
+        root.unreadMarkTs = 0;
         root.activeProvider = provider;
         root.activeChatId = chatId;
         root.messages = [];
@@ -292,7 +314,18 @@ Item {
         root.activeChatId = "";
         root.messages = [];
         root.hasMoreHistory = false;
+        root.unreadMarkTs = 0;
         setFocus("", "");
+    }
+
+    // chatByKey finds a conversation in the cached list, or null.
+    function chatByKey(provider, chatId) {
+        for (let i = 0; i < chats.length; i++) {
+            const chat = chats[i];
+            if (chat.provider === provider && chat.id === chatId)
+                return chat;
+        }
+        return null;
     }
 
     function setFocus(provider, chatId) {
@@ -316,11 +349,22 @@ Item {
         const chatId = root.activeChatId;
         root.loadingHistory = true;
 
+        // A page big enough to reach the unread mark, with room above it for
+        // the conversation it is part of. Only ever for the newest page: paging
+        // backwards is the user asking for fifty more.
+        let limit = 50;
+        if (!before) {
+            const entry = root.chatByKey(provider, chatId);
+            const unread = entry ? (entry.unread || 0) : 0;
+            if (unread > 0)
+                limit = Math.min(500, Math.max(limit, unread + 20));
+        }
+
         root.link.sendRequest("chat.history", {
             "provider": provider,
             "chatId": chatId,
             "before": before || 0,
-            "limit": 50
+            "limit": limit
         }, response => {
             root.loadingHistory = false;
 
@@ -545,6 +589,116 @@ Item {
             "chatId": chatId,
             "value": muted
         }, null);
+    }
+
+    // ------------------------------------------------------------ unread
+
+    // Where the unread cycle has got to, as "<provider> <chatId>". Kept so a
+    // keybind pressed repeatedly walks the list instead of reopening whichever
+    // conversation happens to be newest.
+    property string _unreadCursor: ""
+
+    // Conversations with something waiting, oldest activity first.
+    //
+    // Oldest first on purpose: working through a backlog means starting at the
+    // one that has been waiting longest, and it makes the cycle order stable
+    // while new messages arrive at the other end.
+    readonly property var unreadChats: {
+        const out = [];
+        for (let i = 0; i < chats.length; i++) {
+            const chat = chats[i];
+            if ((chat.unread || 0) <= 0 || chat.archived)
+                continue;
+            if (isChatHidden(chat))
+                continue;
+            out.push(chat);
+        }
+        out.sort((a, b) => (a.lastTs || 0) - (b.lastTs || 0));
+        return out;
+    }
+
+    readonly property int unreadChatCount: unreadChats.length
+
+    // nextUnread picks the conversation after the last one this cycle opened,
+    // wrapping at the end. Returns null when nothing is waiting.
+    function nextUnread() {
+        const waiting = root.unreadChats;
+        if (waiting.length === 0)
+            return null;
+
+        let at = -1;
+        for (let i = 0; i < waiting.length; i++) {
+            if (root._unreadCursor === waiting[i].provider + " " + waiting[i].id) {
+                at = i;
+                break;
+            }
+        }
+
+        const chat = waiting[(at + 1) % waiting.length];
+        root._unreadCursor = chat.provider + " " + chat.id;
+        return chat;
+    }
+
+    // cycleUnread hands the next unread conversation to its callback, after
+    // refreshing what is known.
+    //
+    // Refreshed rather than trusted: the keybind works with the window closed,
+    // and with nothing on screen the state stream is not subscribed, so what is
+    // held here may be minutes old. Opening is the caller's business -- the
+    // window and the launcher open a conversation in different ways.
+    function cycleUnread(onPicked) {
+        if (!available) {
+            if (onPicked)
+                onPicked(null);
+            return;
+        }
+
+        root.link.sendRequest("chat.unread", null, response => {
+            if (response.error) {
+                root.log.warn("failed to list unread conversations:", response.error);
+                if (onPicked)
+                    onPicked(null);
+                return;
+            }
+
+            const waiting = response.result?.chats || [];
+            // Fold what came back into the cached list so the ordering and the
+            // hidden-tag filtering above apply to fresh data.
+            root.chats = root._mergeChats(waiting);
+
+            if (onPicked)
+                onPicked(root.nextUnread());
+        });
+    }
+
+    // _mergeChats overlays a fresh set onto what is cached, so a partial answer
+    // never makes conversations it did not mention disappear.
+    function _mergeChats(fresh) {
+        const byKey = {};
+        for (let i = 0; i < fresh.length; i++)
+            byKey[fresh[i].provider + " " + fresh[i].id] = fresh[i];
+
+        const merged = [];
+        for (let i = 0; i < root.chats.length; i++) {
+            const chat = root.chats[i];
+            const key = chat.provider + " " + chat.id;
+            if (byKey[key]) {
+                merged.push(byKey[key]);
+                delete byKey[key];
+            } else if ((chat.unread || 0) > 0) {
+                // It was unread and the fresh answer does not list it, so it
+                // has since been read.
+                const copy = Object.assign({}, chat);
+                copy.unread = 0;
+                merged.push(copy);
+            } else {
+                merged.push(chat);
+            }
+        }
+        for (const key in byKey)
+            merged.push(byKey[key]);
+
+        return merged;
     }
 
     // ------------------------------------------------------------ invites

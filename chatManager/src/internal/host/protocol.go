@@ -166,6 +166,10 @@ type wireChat struct {
 	LastTS   int64  `json:"lastTs"`
 	LastText string `json:"lastText"`
 	Unread   *int   `json:"unread"`
+	// ReadUpTo is how far the provider itself says this conversation has been
+	// read -- from a read receipt, a server-side read marker, another client.
+	// Zero means it has no opinion, which is not the same as "nothing read".
+	ReadUpTo int64 `json:"readUpTo"`
 	// Pointers so "the bridge did not mention this" is distinguishable from
 	// "the bridge says false" -- otherwise a partial update unarchives a chat.
 	Archived     *bool    `json:"archived"`

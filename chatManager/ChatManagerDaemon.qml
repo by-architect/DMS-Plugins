@@ -136,6 +136,35 @@ PluginComponent {
             return "CHATS_OPEN_SUCCESS";
         }
 
+        // Step through the conversations with something waiting, one per
+        // press: the keybind equivalent of working down the unread list.
+        //
+        // The answer comes back before the conversation is on screen, because
+        // finding out what is unread means asking the manager. Bound to a key,
+        // that reads as instant.
+        function unread(): string {
+            if (!chatCore.available)
+                return "CHATS_UNAVAILABLE: the chat manager is not running";
+
+            chatCore.cycleUnread(chat => {
+                if (chat)
+                    root.openChatPopout(chat.provider, chat.id);
+            });
+            return "CHATS_UNREAD_CYCLE";
+        }
+
+        // What is waiting, without opening anything.
+        //
+        // As of the last update: with the window closed nothing is subscribed
+        // to the manager's state, so this is what was last known rather than a
+        // fresh count. Calling unread() above refreshes it as a side effect.
+        function unreadStatus(): string {
+            if (!chatCore.available)
+                return "CHATS_UNAVAILABLE: the chat manager is not running";
+
+            return `CHATS_UNREAD: chats=${chatCore.unreadChatCount} messages=${chatCore.totalUnread}`;
+        }
+
         function status(): string {
             if (!chatCore.available)
                 return "CHATS_UNAVAILABLE: the chat manager is not running";

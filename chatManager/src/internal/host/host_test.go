@@ -116,6 +116,9 @@ func newTestManager(t *testing.T, pluginRoot string) *Manager {
 		sync:          map[string]SyncProgress{},
 		// Notifications off: there is no session bus under test.
 		prefs:     map[string]chat.NotifyPrefs{},
+		held:      map[string][]chat.Message{},
+		settled:   map[string]bool{},
+		settleJob: map[string]*time.Timer{},
 		events:    make(chan ingestEvent, ingestQueueDepth),
 		dirty:     make(chan struct{}, 1),
 		stopChan:  make(chan struct{}),

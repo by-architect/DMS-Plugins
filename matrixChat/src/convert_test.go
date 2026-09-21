@@ -254,7 +254,9 @@ func TestRedactionEmitsDeleted(t *testing.T) {
 
 // Our own read receipt says nothing about whether anyone else read it, and
 // would mark our own messages read the moment we send them.
-func TestOwnReceiptIsIgnored(t *testing.T) {
+// Our own receipt is not somebody else having read our message. It says where
+// we have read up to, which is tested in read_test.go.
+func TestOwnReceiptIsNotSomeoneElsesRead(t *testing.T) {
 	b := testBridge()
 
 	content := event.ReceiptEventContent{
