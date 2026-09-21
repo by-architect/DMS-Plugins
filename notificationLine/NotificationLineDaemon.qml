@@ -389,6 +389,12 @@ PluginComponent {
             return w ? ("RECALLED\t" + w.appName + "\t" + w.summary) : "NOTHING";
         }
 
+        function suppress(state: string): string {
+            const on = state !== "off" && state !== "false" && state !== "0";
+            PluginService.savePluginData(root.pluginId, "suppressBuiltin", on);
+            return on ? "SUPPRESSED" : "RESTORED";
+        }
+
         function status(): string {
             const list = root.visibleList();
             const timing = root.ownsTiming ? (root.lifetime > 0 ? root.lifetime + "s" : "urgency") : "shell";
