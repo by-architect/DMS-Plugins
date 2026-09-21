@@ -43,6 +43,7 @@ func main() {
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
 			"send", "markRead", "media", "reply", "revoke", "groups", "richText",
+			"invites",
 		},
 	})
 
@@ -111,6 +112,10 @@ func (b *bridge) dispatch(c call) {
 		b.handleLogout(ctx, c)
 	case "revoke":
 		b.handleRevoke(ctx, c)
+	case "acceptInvite":
+		b.handleAcceptInvite(ctx, c)
+	case "declineInvite":
+		b.handleDeclineInvite(ctx, c)
 	case "shutdown":
 		ok(c.ID, nil)
 		b.shutdown()

@@ -21,7 +21,20 @@ type roomInfo struct {
 	IsDirect  bool
 	IsSpace   bool
 	Encrypted bool
-	Invited   bool
+
+	// Invited is a room we have been asked to join but have not joined, and
+	// Left one we are no longer in -- because we declined, or left from another
+	// client. Neither is an ordinary conversation: an invitation has no
+	// timeline of its own, and a room we are not in has stopped being one.
+	Invited bool
+	Left    bool
+
+	// InviteTS is when the invitation was first seen and InvitedBy who sent it.
+	// An invitation carries no messages, so without a time of our own the host
+	// -- which orders conversations by their last activity and shows none that
+	// have any -- would never surface it.
+	InviteTS  int64
+	InvitedBy id.UserID
 
 	// Members maps a user to their display name in this room. Display names are
 	// per-room in Matrix: the same account can be "Ada" in one and "A." in
@@ -167,12 +180,16 @@ func (b *bridge) tagsFor(roomID id.RoomID) []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	// Never nil: an omitted tag list means "no opinion" to the host, which
+	// keeps whatever it already had. Only an empty one can take a tag off a
+	// room -- which is exactly what accepting an invitation has to do.
+	tags := []string{}
+
 	info, ok := b.rooms[roomID]
 	if !ok {
-		return nil
+		return tags
 	}
 
-	var tags []string
 	if info.IsSpace {
 		// A space is a container for rooms, not a conversation. Tagged rather
 		// than dropped so the filter is the user's to set.

@@ -67,6 +67,11 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	b.firstSyncDone = true
 	b.mu.Unlock()
 
+	// Membership first, and on every sync rather than only incremental ones:
+	// an invitation is mentioned once and never again, so a response skipped
+	// here is an invitation nobody ever sees.
+	changed := b.noteMembership(resp)
+
 	if first || wasFirst {
 		emitState("connected")
 		go b.publishRooms()
@@ -75,16 +80,19 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 
 	// An incremental sync: refresh only the rooms it mentioned, so a busy
 	// account does not republish thousands of rooms on every round trip.
-	touched := make([]id.RoomID, 0, len(resp.Rooms.Join)+len(resp.Rooms.Invite))
+	touched := make([]id.RoomID, 0, len(resp.Rooms.Join)+len(changed))
 	for roomID := range resp.Rooms.Join {
 		touched = append(touched, roomID)
 	}
-	for roomID := range resp.Rooms.Invite {
-		b.room(roomID).Invited = true
-		touched = append(touched, roomID)
-	}
+	touched = append(touched, changed...)
+
 	if len(touched) > 0 {
 		go b.publishSome(touched)
+	}
+	if len(changed) > 0 {
+		// Written now rather than at shutdown: an invitation that only exists
+		// in memory is lost if the shell is killed rather than stopped.
+		go b.persistRooms()
 	}
 }
 
@@ -105,11 +113,19 @@ func (b *bridge) publishRooms() {
 	}
 
 	// Anything the cache cannot name is looked up before publishing, so a room
-	// is never sent to the host as a raw id.
+	// is never sent to the host as a raw id. Only joined rooms: the state of a
+	// room we have merely been invited to is not ours to read.
 	b.hydrate(context.Background(), client, joined.JoinedRooms)
 
-	chats := make([]chatObj, 0, len(joined.JoinedRooms))
-	for _, roomID := range joined.JoinedRooms {
+	// Invitations are not in the joined list, and after the sync that carried
+	// one the homeserver never mentions it again -- so they come from the
+	// cache, which is the only thing that still remembers them.
+	rooms := make([]id.RoomID, 0, len(joined.JoinedRooms))
+	rooms = append(rooms, joined.JoinedRooms...)
+	rooms = append(rooms, b.pendingInvites(joined.JoinedRooms)...)
+
+	chats := make([]chatObj, 0, len(rooms))
+	for _, roomID := range rooms {
 		chats = append(chats, b.chatFor(roomID))
 	}
 
@@ -135,7 +151,7 @@ func (b *bridge) publishSome(roomIDs []id.RoomID) {
 	chats := make([]chatObj, 0, len(roomIDs))
 
 	for _, roomID := range roomIDs {
-		if seen[roomID] {
+		if seen[roomID] || b.hasLeft(roomID) {
 			continue
 		}
 		seen[roomID] = true
@@ -162,6 +178,14 @@ func (b *bridge) chatFor(roomID id.RoomID) chatObj {
 		// A room is a group unless Matrix has been told it is a direct chat.
 		chat.IsGroup = !info.IsDirect
 		chat.Subject = info.Topic
+
+		// An invitation has no timeline, so it has to carry its own activity
+		// line: the host hides conversations that have never had any, which is
+		// exactly what an unanswered invitation looks like without this.
+		if info.Invited {
+			chat.LastTS = info.InviteTS
+			chat.LastText = b.inviteLine(roomID)
+		}
 	}
 	return chat
 }
@@ -221,6 +245,22 @@ func (b *bridge) onMember(ctx context.Context, evt *event.Event) {
 	default:
 		// Left, banned or knocked: they no longer name the room.
 		delete(info.Members, user)
+	}
+
+	// Our own membership is not just another member: it decides whether this
+	// is a conversation at all. An invitation accepted or a room left anywhere
+	// else in the world arrives here as one of these.
+	if user == b.selfIDLocked() {
+		switch content.Membership {
+		case event.MembershipJoin:
+			info.Invited = false
+			info.Left = false
+		case event.MembershipLeave, event.MembershipBan:
+			// Left only, deliberately: whether this room was an invitation up
+			// to this moment is what tells noteMembership that an invitation
+			// was turned down elsewhere, and clearing it here would erase that.
+			info.Left = true
+		}
 	}
 	b.mu.Unlock()
 
@@ -297,7 +337,7 @@ func (b *bridge) touchRoom(roomID id.RoomID) {
 	ready := b.firstSyncDone
 	b.mu.RUnlock()
 
-	if !ready {
+	if !ready || b.hasLeft(roomID) {
 		return
 	}
 	emitEvent("chat", map[string]any{"chat": b.chatFor(roomID)})

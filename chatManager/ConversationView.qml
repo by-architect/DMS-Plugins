@@ -21,6 +21,10 @@ FocusScope {
     readonly property var chat: root.chatCore.activeChat
     readonly property string chatName: chat?.name || chat?.subject || root.chatCore.activeChatId
 
+    // An invitation is a conversation you are not in yet. Nothing can be sent
+    // into it, so the composer gives way to the two answers there are.
+    readonly property bool isInvite: root.chatCore.isInvite(root.chat) && root.chatCore.activeSupports("invites")
+
     // What the user is replying to, or null. Cleared when the conversation
     // changes, since a reply target from another chat is meaningless.
     property var replyTarget: null
@@ -52,11 +56,21 @@ FocusScope {
     // keeps working and typing keeps landing in the text field.
     onHasOverlayChanged: {
         if (!hasOverlay)
-            Qt.callLater(() => composer.takeFocus());
+            Qt.callLater(() => root.takeFocus());
     }
 
     function takeFocus() {
+        // Nothing to type into while an invitation is unanswered, and focusing
+        // a hidden field would swallow the keys that do work here.
+        if (root.isInvite)
+            return;
         composer.takeFocus();
+    }
+
+    function answerInvite(accept) {
+        if (!root.isInvite)
+            return;
+        root.chatCore.answerInvite(root.chatCore.activeProvider, root.chatCore.activeChatId, accept);
     }
 
     // ------------------------------------------------------------- selection
@@ -236,6 +250,20 @@ FocusScope {
         onActivated: root.requestDelete(root.selectedMessage, false)
     }
 
+    // Only ever live on an unanswered invitation, so these cannot collide with
+    // anything the conversation itself uses.
+    Shortcut {
+        sequences: ["Alt+Y"]
+        enabled: root.isInvite && !root.hasOverlay
+        onActivated: root.answerInvite(true)
+    }
+
+    Shortcut {
+        sequences: ["Alt+N"]
+        enabled: root.isInvite && !root.hasOverlay
+        onActivated: root.answerInvite(false)
+    }
+
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Escape) {
             if (root.pendingDelete) {
@@ -413,7 +441,7 @@ FocusScope {
 
         Item {
             width: parent.width
-            height: parent.height - 52 - 1 - composer.height
+            height: parent.height - 52 - 1 - (root.isInvite ? inviteBar.height : composer.height)
 
             DankListView {
                 id: messageList
@@ -471,13 +499,26 @@ FocusScope {
             }
         }
 
-        // ---------------------------------------------------------- composer
+        // ------------------------------------------- invitation, or composer
+
+        ChatInviteBar {
+            id: inviteBar
+            width: parent.width
+            visible: root.isInvite
+            // The provider's own wording for the invitation, which is already
+            // the conversation's activity line.
+            prompt: root.chat?.lastText ?? ""
+
+            onAccepted: root.answerInvite(true)
+            onDeclined: root.answerInvite(false)
+        }
 
         Composer {
 
             chatCore: root.chatCore
             id: composer
             width: parent.width
+            visible: !root.isInvite
             replyTarget: root.replyTarget
 
             onReplyCleared: root.replyTarget = null

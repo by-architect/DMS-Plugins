@@ -70,6 +70,10 @@ func HandleRequest(conn *models.Conn, req models.Request, manager *Manager) {
 		handleAuth(ctx, conn, req, manager, MethodLogout)
 	case "chat.revoke":
 		handleRevoke(ctx, conn, req, manager)
+	case "chat.acceptInvite":
+		handleInvite(ctx, conn, req, manager, true)
+	case "chat.declineInvite":
+		handleInvite(ctx, conn, req, manager, false)
 	case "chat.deleteLocal":
 		handleDeleteLocal(ctx, conn, req, manager)
 	case "chat.purge":
@@ -771,6 +775,50 @@ func handleRevoke(ctx context.Context, conn *models.Conn, req models.Request, m 
 
 	if err := m.Store().MarkDeleted(ctx, provider, chatID, messageID); err != nil {
 		log.Warnf("chat: could not mark message deleted: %v", err)
+	}
+
+	m.markDirty()
+	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+}
+
+// handleInvite answers an invitation to a conversation: joining it, or turning
+// it down.
+//
+// A declined invitation is removed locally as well, because nothing else ever
+// will: the provider stops mentioning a conversation the moment it is declined,
+// so a row left behind would sit in the list forever, offering to open
+// something that no longer exists. Only a conversation nobody has written in is
+// removed -- an invitation back into a room with history in it leaves that
+// history alone.
+func handleInvite(ctx context.Context, conn *models.Conn, req models.Request, m *Manager, accept bool) {
+	provider, chatID, ok := chatTarget(conn, req)
+	if !ok {
+		return
+	}
+
+	b, err := m.bridgeFor(provider)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if !b.HasCapability(CapInvites) {
+		models.RespondError(conn, req.ID, fmt.Sprintf("%s has no invitations to answer", provider))
+		return
+	}
+
+	method := MethodDeclineInvite
+	if accept {
+		method = MethodAcceptInvite
+	}
+	if _, err := b.call(ctx, method, map[string]any{"chatId": chatID}); err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+
+	if !accept {
+		if err := m.Store().DeleteChatIfUnwritten(ctx, provider, chatID); err != nil {
+			log.Warnf("chat: could not remove the declined invitation %s/%s: %v", provider, chatID, err)
+		}
 	}
 
 	m.markDirty()

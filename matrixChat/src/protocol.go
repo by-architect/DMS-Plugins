@@ -56,7 +56,12 @@ type chatObj struct {
 	Handles []string `json:"handles,omitempty"`
 	// Tags say what kind of conversation this is, so it can be filtered without
 	// the shell knowing anything about Matrix.
-	Tags []string `json:"tags,omitempty"`
+	//
+	// The only field here that is sent even when empty. Everything else omitted
+	// means "unchanged", but a tag has to be removable: a room that has just
+	// been joined is no longer an invitation, and an omitted list would leave
+	// the host showing it as one forever.
+	Tags []string `json:"tags"`
 }
 
 type messageObj struct {
