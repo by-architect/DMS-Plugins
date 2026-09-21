@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"time"
 
 	"maunium.net/go/mautrix"
@@ -333,71 +331,11 @@ func serverMessage(err error, fallback string) string {
 	return fallback + ": " + err.Error()
 }
 
-// ---------------------------------------------------------------- recovery
-
-// inviteSyncFilter asks for room identity and nothing else.
-//
-// Used for the one-off look for invitations below. Without the filter this is a
-// full initial sync, which on a busy account means megabytes of timeline for
-// the sake of a handful of stripped state events.
-const inviteSyncFilter = `{"presence":{"types":[]},"account_data":{"types":[]},` +
-	`"room":{"account_data":{"types":[]},"ephemeral":{"types":[]},"timeline":{"limit":1},` +
-	`"state":{"lazy_load_members":true,"types":["m.room.create","m.room.name",` +
-	`"m.room.canonical_alias","m.room.topic","m.room.avatar","m.room.encryption","m.room.member"]}}}`
-
-// findPendingInvites looks for invitations that arrived before this bridge knew
-// to write them down, exactly once.
-//
-// An invitation appears in one sync response and never again. A bridge that
-// resumes from a stored position therefore never sees the ones already sitting
-// there -- so the first run that understands invitations asks the homeserver
-// outright, and leaves a marker so no later run pays for it again.
-func (b *bridge) findPendingInvites(ctx context.Context, client *mautrix.Client) {
-	dir, err := stateDir()
-	if err != nil {
-		return
-	}
-	marker := filepath.Join(dir, "invites-checked")
-	if _, err := os.Stat(marker); err == nil {
-		return
-	}
-
-	resp, err := client.FullSyncRequest(ctx, mautrix.ReqSync{FilterID: inviteSyncFilter})
-	if err != nil {
-		// Left unmarked on purpose, so the next start tries again.
-		logf("debug", "could not look for pending invitations: %v", err)
-		return
-	}
-	// Written before the work, not after: a marker that only appears on a
-	// perfect run would repeat this whole sync on every start until one is.
-	_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)+"\n"), 0o600)
-
-	// Only the invitations. The joined rooms in this response are a filtered
-	// snapshot taken beside the real sync loop, and that loop is what keeps
-	// them current.
-	var found []id.RoomID
-	for roomID, invited := range resp.Rooms.Invite {
-		if invited != nil {
-			b.applyStrippedState(roomID, invited.State.Events)
-		}
-		if b.noteInvite(roomID, inviterOf(invited, b.selfID())) {
-			found = append(found, roomID)
-		}
-	}
-	if len(found) == 0 {
-		return
-	}
-
-	logf("info", "found %d invitation(s) waiting", len(found))
-	b.publishSome(found)
-	b.persistRooms()
-}
-
 // applyStrippedState feeds an invitation's state through the ordinary handlers.
 //
 // The sync loop gets this for free -- mautrix dispatches invite state like any
-// other -- but the lookup above bypasses the syncer, so it has to do it itself
-// or every invitation would be named after its room id.
+// other -- but the catch-up sync bypasses the syncer, so it has to do it itself
+// or every invitation it finds would be named after its room id.
 func (b *bridge) applyStrippedState(roomID id.RoomID, events []*event.Event) {
 	ctx := context.Background()
 

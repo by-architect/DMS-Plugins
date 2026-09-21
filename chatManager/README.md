@@ -108,6 +108,69 @@ and a `lastText`, and may send the invitation itself as a `system` message so
 the conversation does not open empty. `system` is what keeps it out of unread
 counts and notifications.
 
+### Where a conversation has been read
+
+A provider that knows its own read position — a Matrix read receipt, a
+server-side read marker, another client of the same account — puts it on the
+conversation it publishes:
+
+```json
+{"event":"chat","chat":{"id":"!room:example.org","readUpTo":1755300000000}}
+```
+
+The store takes the later of that and its own, and recounts unread from the
+messages themselves. It can therefore only ever settle a disagreement in the
+direction of *already seen*, which is the direction that matters: a
+conversation read on a phone this morning should not be waiting here this
+afternoon.
+
+### Notifications wait for the sync to finish
+
+A bridge that has just connected is not reporting news. It is replaying what
+happened while nobody was listening, and every one of those messages looks live
+to a host that only knows when it arrived — which is how a reconnect turns into
+twenty notifications for conversations already dealt with.
+
+So messages that arrive before a provider reports `connected` are held, and
+judged a few seconds after it does: anything the provider says has since been
+read is dropped, and what is left is announced **one notification per
+conversation** — "3 new messages", under the newest one — for at most five
+conversations, with the rest counted in a single line. A provider that never
+reports connected is flushed anyway after 45 seconds, and one switched off
+loses whatever it was holding rather than notifying about it later.
+
+Held messages are allowed to be up to half an hour older than the shell itself,
+which is the difference between "you were away for a minute, here is what you
+missed" and re-announcing yesterday's unread on every start. Live messages that
+predate the shell are backfill and never notify at all.
+
+This is also why a bridge should report `connected` again after recovering from
+a failure, not only on its first sync: it is the signal that the catch-up is
+over.
+
+## Unread
+
+```json
+{"id":14,"method":"chat.unread","params":{"limit":200}}
+→ {"id":14,"result":{"chats":[…],"messages":[…]}}
+```
+
+Both halves, because they answer different questions: the conversations are
+what a cycle key steps through, and the messages — everything that arrived
+after its conversation's read position — are what a search over unread text
+matches on.
+
+Two IPC verbs use it:
+
+```sh
+dms ipc call chats unread        # open the next conversation with something waiting
+dms ipc call chats unreadStatus  # how much is waiting, without opening anything
+```
+
+`unread` cycles: oldest waiting first, one per press, wrapping at the end — a
+backlog is worked from the bottom. The conversation opens at the first message
+you had not seen, under a divider.
+
 ## Building
 
 ```sh

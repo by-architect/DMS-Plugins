@@ -490,3 +490,48 @@ func TestDeleteChatIfUnwrittenKeepsRealHistory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, msgs, 1, "its messages were deleted")
 }
+
+// What "unread" means when it has to be the messages themselves: everything
+// after the read position, minus the rows nobody wrote.
+func TestUnreadMessages(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	const dm = "dm"
+	const away = "filed"
+	require.NoError(t, store.TouchChat(ctx, prov, dm, "Ada", "", 1000, false, false))
+	require.NoError(t, store.TouchChat(ctx, prov, away, "Old", "", 1000, false, false))
+	require.NoError(t, store.SetArchived(ctx, prov, away, true))
+
+	put := func(chatID, id string, ts int64, fromMe bool, kind string) {
+		require.NoError(t, store.PutMessage(ctx, Message{
+			Provider: prov, ChatID: chatID, ID: id, TS: ts, FromMe: fromMe, Kind: kind, Text: id,
+		}))
+	}
+
+	put(dm, "read-1", 1000, false, KindText)
+	put(dm, "unread-1", 3000, false, KindText)
+	put(dm, "unread-2", 4000, false, KindText)
+	put(dm, "mine", 5000, true, KindText)
+	put(dm, "noise", 6000, false, KindSystem)
+	put(away, "archived-1", 7000, false, KindText)
+
+	require.NoError(t, store.SetReadUpTo(ctx, prov, dm, 2000))
+
+	hits, err := store.UnreadMessages(ctx, 50)
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(hits))
+	for _, h := range hits {
+		ids = append(ids, h.ID)
+	}
+	assert.Equal(t, []string{"unread-2", "unread-1"}, ids,
+		"unread is what arrived after the read position, newest first")
+	assert.Equal(t, "Ada", hits[0].ChatName, "a hit carries the conversation it is in")
+
+	// Reading the rest empties it.
+	require.NoError(t, store.SetReadUpTo(ctx, prov, dm, 9000))
+	hits, err = store.UnreadMessages(ctx, 50)
+	require.NoError(t, err)
+	assert.Empty(t, hits)
+}

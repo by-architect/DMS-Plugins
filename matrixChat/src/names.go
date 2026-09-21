@@ -36,6 +36,11 @@ type roomInfo struct {
 	InviteTS  int64
 	InvitedBy id.UserID
 
+	// ReadUpTo is the timestamp of our own newest read receipt in this room --
+	// the one Matrix keeps, which every client of ours updates. It is what
+	// tells the host that a conversation read elsewhere is not unread here.
+	ReadUpTo int64
+
 	// Members maps a user to their display name in this room. Display names are
 	// per-room in Matrix: the same account can be "Ada" in one and "A." in
 	// another, and using the wrong one mislabels every message they send.

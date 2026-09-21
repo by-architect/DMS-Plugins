@@ -714,11 +714,7 @@ func (s *HistoryStore) SearchMessages(ctx context.Context, query string, limit i
 		// unbalanced quote or a bare NEAR would otherwise be a query error.
 		phrase := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 		rows, err = s.db.QueryContext(ctx, `
-SELECT m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
-       m.sender_avatar_path, m.kind, m.text, m.body_html, m.status, m.reply_to, m.cc, m.bcc,
-       m.media_path, m.media_ref, m.media_mime, m.media_w, m.media_h, m.file_name, m.file_size,
-       m.duration, m.link_url, m.link_title, m.link_desc, m.link_image,
-       COALESCE(c.name, '')
+SELECT `+hitColumns+`
   FROM messages_fts f
   JOIN messages m ON m.rowid = f.rowid
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
@@ -727,11 +723,7 @@ SELECT m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
  LIMIT ?`, phrase, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-SELECT m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
-       m.sender_avatar_path, m.kind, m.text, m.body_html, m.status, m.reply_to, m.cc, m.bcc,
-       m.media_path, m.media_ref, m.media_mime, m.media_w, m.media_h, m.file_name, m.file_size,
-       m.duration, m.link_url, m.link_title, m.link_desc, m.link_image,
-       COALESCE(c.name, '')
+SELECT `+hitColumns+`
   FROM messages m
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
  WHERE m.text LIKE '%' || ? || '%' ESCAPE '\'
@@ -743,6 +735,18 @@ SELECT m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
 	}
 	defer rows.Close()
 
+	return scanHits(rows)
+}
+
+// hitColumns is the projection shared by every query that returns messages
+// alongside the conversation they are in.
+const hitColumns = `m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
+       m.sender_avatar_path, m.kind, m.text, m.body_html, m.status, m.reply_to, m.cc, m.bcc,
+       m.media_path, m.media_ref, m.media_mime, m.media_w, m.media_h, m.file_name, m.file_size,
+       m.duration, m.link_url, m.link_title, m.link_desc, m.link_image,
+       COALESCE(c.name, '')`
+
+func scanHits(rows *sql.Rows) ([]SearchHit, error) {
 	var out []SearchHit
 	for rows.Next() {
 		var h SearchHit
@@ -763,6 +767,37 @@ SELECT m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// UnreadMessages returns what has arrived in each conversation since it was
+// last read, newest first.
+//
+// Read position rather than the stored unread count, because the count is a
+// number and this has to be the messages themselves -- for searching what you
+// have not got to yet, and for opening a conversation where you left off.
+// Protocol rows and your own messages are not unread by anyone; archived
+// conversations are deliberately out of the way, so they are left out too.
+func (s *HistoryStore) UnreadMessages(ctx context.Context, limit int) ([]SearchHit, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+hitColumns+`
+  FROM messages m
+  JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
+ WHERE m.ts > c.read_upto
+   AND m.from_me = 0
+   AND m.kind NOT IN (?,?,?)
+   AND c.archived = 0
+ ORDER BY m.ts DESC
+ LIMIT ?`, KindSystem, KindDeleted, KindUnsupported, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanHits(rows)
 }
 
 // SearchChats finds conversations by name or subject, most recent first.

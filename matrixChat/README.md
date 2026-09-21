@@ -90,7 +90,7 @@ Unencrypted rooms are readable immediately either way.
 | Message edits | yes — the edit replaces the original in place |
 | Images, video, audio, files | yes, including encrypted attachments |
 | Formatted messages | yes — HTML bodies are passed through |
-| Read receipts | yes |
+| Read receipts | yes, both ways — what you read elsewhere counts as read here |
 | Rooms, with per-room display names | yes |
 | Delete for everyone (redaction) | yes |
 | Direct messages named after the other person | yes |
@@ -100,6 +100,21 @@ Unencrypted rooms are readable immediately either way.
 | Backfill of older messages | not yet — the room shows what has arrived since signing in |
 | Search | local only — the DMS store indexes what it has received |
 | Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
+
+## What counts as unread
+
+Matrix keeps your read position for every room, and every client of yours moves
+it. The bridge reports it, so a room you read on your phone this morning is not
+unread here this afternoon, and does not notify when the shell starts and the
+conversation arrives.
+
+Rooms read before this bridge learned to look are caught up on once, at the next
+start — one filtered sync, recorded in `~/.local/share/dms-matrix/catchup` so no
+later start repeats it.
+
+Nothing is sent on your behalf: whether **you** send read receipts is still the
+**Send read receipts** setting below, and turning it off only stops other people
+seeing when you have read theirs.
 
 ## Invitations
 
@@ -138,6 +153,7 @@ Under **Settings → Chats → Matrix**:
 | Access token and device id | `~/.local/share/dms-matrix/session.json`, mode 0600 | matrixChat |
 | Encryption keys | `~/.local/share/dms-matrix/crypto.db` | matrixChat |
 | Sync position | `~/.local/share/dms-matrix/sync.json` | matrixChat |
+| One-off catch-up marker | `~/.local/share/dms-matrix/catchup` | matrixChat |
 | Room names and pending invitations | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
 | Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |

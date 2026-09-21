@@ -38,6 +38,23 @@ Item {
     // change as messages arrive, but not fast enough to matter while typing.
     readonly property int staleAfterMs: 15000
 
+    // What is waiting, fetched separately from the conversation list: it has to
+    // be fresher, and it carries the unread messages themselves so a search can
+    // match their text rather than only the conversation's name.
+    property var _unreadChats: []
+    property var _unreadMessages: []
+    property bool _unreadLoading: false
+    property real _unreadLoadedAt: 0
+
+    // Shorter than the conversation list's: unread is the thing that changes
+    // while you are looking at it, and a stale answer here sends you into a
+    // conversation you have already read.
+    readonly property int unreadStaleAfterMs: 5000
+
+    // The word that turns the runner into an unread list. Typed as a first
+    // word, with anything after it searching within what is unread.
+    readonly property string unreadKeyword: "unread"
+
     readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
     readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
 
@@ -77,6 +94,14 @@ Item {
         if (!root.chat.available)
             return root._statusItem("chat_bubble", "Chat is unavailable", "The chat manager is not running, or no provider is enabled");
 
+        // "unread" on its own, or as the first word, lists only what is
+        // waiting -- and searches inside it rather than across everything.
+        const unreadQuery = root._unreadQuery(q);
+        if (unreadQuery !== null) {
+            root._ensureUnreadLoaded();
+            return root._unreadItems(unreadQuery);
+        }
+
         root._ensureLoaded();
 
         if (root._allChats.length === 0) {
@@ -114,6 +139,120 @@ Item {
             if (root.pluginService)
                 root.pluginService.requestLauncherUpdate();
         });
+    }
+
+    // ------------------------------------------------------------- unread
+
+    // _unreadQuery returns what is being searched for within the unread list,
+    // or null when this is an ordinary search.
+    function _unreadQuery(query) {
+        const lower = query.toLowerCase();
+        if (lower === root.unreadKeyword)
+            return "";
+        if (lower.indexOf(root.unreadKeyword + " ") === 0)
+            return query.slice(root.unreadKeyword.length + 1).trim();
+        return null;
+    }
+
+    function _ensureUnreadLoaded() {
+        if (root._unreadLoading || !root.chat)
+            return;
+        if (root._unreadLoadedAt > 0 && (Date.now() - root._unreadLoadedAt) < root.unreadStaleAfterMs)
+            return;
+
+        root._unreadLoading = true;
+        root.chat.link.sendRequest("chat.unread", {
+            "limit": 500
+        }, response => {
+            root._unreadLoading = false;
+            if (response.error)
+                return;
+
+            root._unreadChats = response.result?.chats || [];
+            root._unreadMessages = response.result?.messages || [];
+            root._unreadLoadedAt = Date.now();
+
+            if (root.pluginService)
+                root.pluginService.requestLauncherUpdate();
+        });
+    }
+
+    // _unreadMessagesFor is what is waiting in one conversation, newest first.
+    function _unreadMessagesFor(chat) {
+        const out = [];
+        for (let i = 0; i < root._unreadMessages.length; i++) {
+            const msg = root._unreadMessages[i];
+            if (msg.provider === chat.provider && msg.chatId === chat.id)
+                out.push(msg);
+        }
+        return out;
+    }
+
+    function _unreadItems(query) {
+        if (root._unreadChats.length === 0) {
+            return root._unreadLoading && root._unreadLoadedAt === 0 ? root._statusItem("hourglass_empty", "Looking for unread messages…", "") : root._statusItem("mark_email_read", "Nothing unread", "Everything has been read");
+        }
+
+        const lower = query.toLowerCase();
+        const items = [];
+
+        for (let i = 0; i < root._unreadChats.length && items.length < root.maxResults; i++) {
+            const chat = root._unreadChats[i];
+            if (root.isHidden(chat))
+                continue;
+
+            const waiting = root._unreadMessagesFor(chat);
+
+            // With a query, the conversation matches on its own name or on the
+            // text of something unread in it -- searching unread messages is
+            // the point of this mode, not searching names that happen to have
+            // unread messages.
+            let matched = null;
+            if (lower !== "") {
+                const byName = root._score(chat, lower, query.replace(/\D/g, "")) > 0;
+                for (let j = 0; j < waiting.length && !matched; j++) {
+                    if ((waiting[j].text || "").toLowerCase().indexOf(lower) !== -1)
+                        matched = waiting[j];
+                }
+                if (!matched && !byName)
+                    continue;
+            }
+
+            // The matching message where there is one, so the row shows why it
+            // is in the list; otherwise the newest thing waiting.
+            const shown = matched || (waiting.length > 0 ? waiting[0] : null);
+
+            items.push({
+                "id": "chatRunner:unread:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                "comment": root._unreadComment(chat, shown),
+                "categories": ["Chats"],
+                "keywords": chat.handles || [],
+                "_preScored": 10000 - items.length,
+                "chatProvider": chat.provider,
+                "chatId": chat.id
+            });
+        }
+
+        if (items.length === 0)
+            return root._statusItem("search_off", "No unread message matches \"" + query + "\"", "Type unread on its own to see everything waiting");
+
+        return items;
+    }
+
+    function _unreadComment(chat, message) {
+        const parts = [chat.unread + " unread"];
+
+        if (message) {
+            const who = message.senderName || "";
+            const text = message.text || "";
+            if (text !== "")
+                parts.push(who !== "" && chat.isGroup ? who + ": " + text : text);
+        }
+        parts.push(root._providerName(chat.provider));
+
+        return parts.join("  ·  ");
     }
 
     // _filter ranks locally, matching the backend's own ordering: an exact

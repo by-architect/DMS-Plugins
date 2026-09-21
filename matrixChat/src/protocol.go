@@ -38,12 +38,16 @@ type errInfo struct {
 // bridge has nothing to say about are omitted so the host keeps whatever it
 // already knows -- a partial update must never blank an earlier one.
 type chatObj struct {
-	ID         string `json:"id"`
-	Name       string `json:"name,omitempty"`
-	IsGroup    bool   `json:"isGroup,omitempty"`
-	LastTS     int64  `json:"lastTs,omitempty"`
-	LastText   string `json:"lastText,omitempty"`
-	Unread     *int   `json:"unread,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	IsGroup  bool   `json:"isGroup,omitempty"`
+	LastTS   int64  `json:"lastTs,omitempty"`
+	LastText string `json:"lastText,omitempty"`
+	Unread   *int   `json:"unread,omitempty"`
+	// ReadUpTo is how far this conversation has been read, as Matrix itself
+	// knows it: our own read receipt, wherever it was sent from. Without it a
+	// room read on a phone an hour ago comes back unread here, and notifies.
+	ReadUpTo   int64  `json:"readUpTo,omitempty"`
 	Archived   bool   `json:"archived,omitempty"`
 	Muted      bool   `json:"muted,omitempty"`
 	AvatarPath string `json:"avatarPath,omitempty"`

@@ -65,6 +65,8 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	b.mu.Lock()
 	wasFirst := !b.firstSyncDone
 	b.firstSyncDone = true
+	recovered := b.degraded
+	b.degraded = false
 	b.mu.Unlock()
 
 	// Membership first, and on every sync rather than only incremental ones:
@@ -76,6 +78,13 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 		emitState("connected")
 		go b.publishRooms()
 		return
+	}
+
+	// Back after a failure. Saying so matters twice over: the host stops
+	// showing this as connecting, and it knows that what just arrived was the
+	// backlog rather than live traffic.
+	if recovered {
+		emitState("connected")
 	}
 
 	// An incremental sync: refresh only the rooms it mentioned, so a busy
@@ -178,6 +187,7 @@ func (b *bridge) chatFor(roomID id.RoomID) chatObj {
 		// A room is a group unless Matrix has been told it is a direct chat.
 		chat.IsGroup = !info.IsDirect
 		chat.Subject = info.Topic
+		chat.ReadUpTo = info.ReadUpTo
 
 		// An invitation has no timeline, so it has to carry its own activity
 		// line: the host hides conversations that have never had any, which is

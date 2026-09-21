@@ -21,6 +21,25 @@ Ada                 Echo Chat  ·  no messages yet
 
 You tell them apart by reading the row, not by guessing.
 
+## Only what is waiting
+
+Type `c unread` and the list becomes what you have not got to yet — every
+conversation with something unread, whichever service it is on:
+
+```
+Ada Lovelace        3 unread  ·  are we still on for friday?   ·  Matrix
+#release            1 unread  ·  Bea: tagged 2.1               ·  Matrix
+```
+
+Anything after the word searches **inside** those messages rather than across
+every conversation: `c unread invoice` finds the unread message that mentions an
+invoice, and says which conversation it is in. Selecting a row opens that
+conversation at the first message you had not seen.
+
+For working through them without the launcher, bind a key to
+`dms ipc call chats unread`, which steps to the next unread conversation each
+time it is pressed.
+
 ## What it can find
 
 Matching happens in the backend, so this plugin knows nothing about any
@@ -29,6 +48,7 @@ particular service:
 | You type | Matches |
 |---|---|
 | `Ada` | a conversation name |
+| `unread` | only conversations with something waiting |
 | `+90 555 123 45 67` | a phone number, in any formatting |
 | `ada@example.com` | an email address |
 | `whatsappChat:1847…@lid` | an exact conversation |

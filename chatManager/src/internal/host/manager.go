@@ -79,6 +79,14 @@ type Manager struct {
 	// global defaults in config".
 	prefs map[string]chat.NotifyPrefs
 
+	// Notifications held while a provider is still catching up, and whether it
+	// has finished. See settle.go: a bridge that has just connected is not
+	// reporting news, it is telling us what happened while we were away, and
+	// some of it has already been read elsewhere.
+	held      map[string][]chat.Message
+	settled   map[string]bool
+	settleJob map[string]*time.Timer
+
 	events      chan ingestEvent
 	subscribers syncmap.Map[string, chan State]
 
@@ -129,6 +137,9 @@ func NewManager() (*Manager, error) {
 		enabled:       map[string]bool{},
 		sync:          map[string]SyncProgress{},
 		prefs:         map[string]chat.NotifyPrefs{},
+		held:          map[string][]chat.Message{},
+		settled:       map[string]bool{},
+		settleJob:     map[string]*time.Timer{},
 		events:        make(chan ingestEvent, ingestQueueDepth),
 		dirty:         make(chan struct{}, 1),
 		stopChan:      make(chan struct{}),
@@ -287,6 +298,9 @@ func (m *Manager) SetEnabled(ctx context.Context, providerID string, enabled boo
 			delete(m.bridges, providerID)
 			m.mu.Unlock()
 		}
+		// Anything it was still holding goes with it: a provider switched off
+		// must not notify minutes later for messages nobody can now open.
+		m.stopSettling(providerID)
 		m.markDirty()
 		return nil
 	}
