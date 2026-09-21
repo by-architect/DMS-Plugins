@@ -236,6 +236,14 @@ func (m *MultiStore) IsArchived(ctx context.Context, provider, chatID string) bo
 	return s.IsArchived(ctx, provider, chatID)
 }
 
+func (m *MultiStore) DeleteChatIfUnwritten(ctx context.Context, provider, chatID string) error {
+	s, err := m.For(provider)
+	if err != nil {
+		return err
+	}
+	return s.DeleteChatIfUnwritten(ctx, provider, chatID)
+}
+
 func (m *MultiStore) SetReadUpTo(ctx context.Context, provider, chatID string, ts int64) error {
 	s, err := m.For(provider)
 	if err != nil {

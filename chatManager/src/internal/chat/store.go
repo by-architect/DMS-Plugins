@@ -378,6 +378,43 @@ func (s *HistoryStore) IsArchived(ctx context.Context, provider, chatID string) 
 	return err == nil && archived
 }
 
+// DeleteChatIfUnwritten removes a conversation nobody has written in, and the
+// bookkeeping rows it accumulated.
+//
+// For conversations that stop existing rather than going quiet: an invitation
+// that was declined is gone at the provider, and the row would otherwise stay
+// in the list offering to open something that is not there. The guard is what
+// makes it safe -- a conversation with a single real message in it is history,
+// and history is never dropped on the provider's say-so.
+func (s *HistoryStore) DeleteChatIfUnwritten(ctx context.Context, provider, chatID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var written int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM messages
+ WHERE provider = ? AND chat_id = ? AND kind NOT IN (?,?,?)`,
+		provider, chatID, KindSystem, KindDeleted, KindUnsupported).Scan(&written); err != nil {
+		return err
+	}
+	if written > 0 {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM messages WHERE provider = ? AND chat_id = ?`, provider, chatID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chats WHERE provider = ? AND id = ?`, provider, chatID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SetReadUpTo marks everything at or before ts as read and recomputes the
 // unread count from the messages themselves.
 //

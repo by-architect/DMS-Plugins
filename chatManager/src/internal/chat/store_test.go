@@ -437,3 +437,56 @@ func TestReopenIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, chats, 1)
 }
+
+// A declined invitation is gone at the provider, so the local row has to go
+// with it -- nothing will ever update it again, and it would sit in the list
+// offering to open a conversation that no longer exists.
+func TestDeleteChatIfUnwrittenRemovesAnUnansweredInvitation(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	const invite = "!invited:example.org"
+	require.NoError(t, store.UpsertChat(ctx, Chat{
+		Provider: prov, ID: invite, Name: "Study Group", LastTS: 5000,
+		LastText: "Ada invited you to this room", Unread: -1, Tags: []string{"invite"},
+	}))
+	// The stand-in line an invitation carries instead of a timeline.
+	require.NoError(t, store.PutMessage(ctx, Message{
+		Provider: prov, ID: invite + "/invite", ChatID: invite, TS: 5000, Kind: KindSystem,
+		Text: "Ada invited you to this room",
+	}))
+
+	require.NoError(t, store.DeleteChatIfUnwritten(ctx, prov, invite))
+
+	chats, err := store.AllChats(ctx, 50)
+	require.NoError(t, err)
+	for _, c := range chats {
+		assert.NotEqual(t, invite, c.ID, "the declined invitation is still listed")
+	}
+
+	msgs, _, err := store.Page(ctx, prov, invite, 0, 50)
+	require.NoError(t, err)
+	assert.Empty(t, msgs, "the invitation's own line outlived the conversation")
+}
+
+// Being re-invited to a room you once had a conversation in must not be a way
+// to delete that conversation.
+func TestDeleteChatIfUnwrittenKeepsRealHistory(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	const room = "!known:example.org"
+	require.NoError(t, store.TouchChat(ctx, prov, room, "Old Room", "hi", 4000, true, false))
+	require.NoError(t, store.PutMessage(ctx, Message{
+		Provider: prov, ID: "m1", ChatID: room, TS: 4000, Kind: KindText, Text: "hi",
+	}))
+
+	require.NoError(t, store.DeleteChatIfUnwritten(ctx, prov, room))
+
+	_, err := store.ChatByID(ctx, prov, room)
+	assert.NoError(t, err, "a conversation with history in it was deleted")
+
+	msgs, _, err := store.Page(ctx, prov, room, 0, 50)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 1, "its messages were deleted")
+}

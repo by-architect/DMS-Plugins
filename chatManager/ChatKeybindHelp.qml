@@ -72,6 +72,19 @@ StyledRect {
             ]
         },
         {
+            "title": I18n.tr("An invitation"),
+            "binds": [
+                {
+                    "keys": "Alt + Y",
+                    "text": I18n.tr("Join the conversation you have been invited to")
+                },
+                {
+                    "keys": "Alt + N",
+                    "text": I18n.tr("Decline the invitation and remove it")
+                }
+            ]
+        },
+        {
             "title": I18n.tr("Writing"),
             "binds": [
                 {
