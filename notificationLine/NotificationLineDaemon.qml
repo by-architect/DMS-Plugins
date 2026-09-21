@@ -3,19 +3,25 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Notifications
 import qs.Common
 import qs.Services
 import qs.Modules.Plugins
 
-// Owns the configuration, the per-screen line stacks, and the switch that
-// takes the shipped notification popups off screen.
+// Owns the configuration, the expiry clock, the per-screen line stacks, and
+// the switch that takes the shipped notification popups off screen.
 //
 // The plugin is deliberately *not* its own notification server: DMS's
-// NotificationService already does the D-Bus work, dedupe, rules, DND and the
-// per-urgency expiry timers. This daemon only renders a different view of
+// NotificationService already does the D-Bus work, dedupe, rules and DND.
+// This daemon renders a different view of its
 // NotificationService.visibleNotifications, so everything a user configures
-// under Settings -> Notifications (timeouts, rules, DND, history) keeps
-// working exactly as before.
+// under Settings -> Notifications keeps working.
+//
+// Expiry is the one thing the plugin takes over, because the shell's own
+// per-notification timer honours whatever `expire_timeout` the sending app
+// asked for -- which is why notifications from different apps vanish at
+// wildly different speeds while the ones that pass -1 obey the configured
+// timeout. See `ownsTiming` below.
 PluginComponent {
     id: root
 
@@ -43,6 +49,8 @@ PluginComponent {
     readonly property int marginH: Math.max(0, Math.min(200, cfgValue("marginH", 12)))
     readonly property int marginV: Math.max(0, Math.min(200, cfgValue("marginV", 12)))
     readonly property int expandedMaxLines: Math.max(2, Math.min(20, cfgValue("expandedMaxLines", 8)))
+    readonly property int lifetime: Math.max(0, Math.min(300, cfgValue("lifetime", 0)))
+    readonly property bool ignoreAppTimeout: cfgValue("ignoreAppTimeout", true)
     readonly property bool showTime: cfgValue("showTime", true)
     readonly property bool showIcon: cfgValue("showIcon", true)
     readonly property bool showAppName: cfgValue("showAppName", true)
@@ -63,34 +71,206 @@ PluginComponent {
         root.focusedScreenName = s ? s.name : "";
     }
 
+    onMonitorsChanged: refreshFocusedScreen()
+
+    // ---- the lines currently on screen -----------------------------------
+
+    function visibleList() {
+        return NotificationService.visibleNotifications.filter(w => w && w.popup);
+    }
+
+    // Leaves the stack, stays in the notification centre -- the same thing
+    // swiping a shipped popup away does.
+    function retire(w) {
+        if (!w)
+            return false;
+        w.popup = false;
+        return true;
+    }
+
+    // ---- expiry ----------------------------------------------------------
+    //
+    // Timing lives here rather than in the line, because the line delegates
+    // are rebuilt whenever the stack changes and a per-delegate timer would
+    // restart everyone's countdown every time a new notification arrived.
+
+    readonly property bool ownsTiming: root.lifetime > 0 || root.ignoreAppTimeout
+
+    // [{ w, at, holds }] -- `at` is when the line last started counting down,
+    // `holds` how many lines (one per screen) are hovering or unfolded it.
+    property var tracked: []
+
+    function entryFor(w) {
+        for (const e of root.tracked) {
+            if (e.w === w)
+                return e;
+        }
+        return null;
+    }
+
+    function timeoutFor(w) {
+        if (root.lifetime > 0)
+            return root.lifetime * 1000;
+        if (!w)
+            return 0;
+        switch (w.urgency) {
+        case NotificationUrgency.Low:
+            return SettingsData.notificationTimeoutLow;
+        case NotificationUrgency.Critical:
+            return SettingsData.notificationTimeoutCritical;
+        default:
+            return SettingsData.notificationTimeoutNormal;
+        }
+    }
+
+    function syncTracked() {
+        const vis = root.visibleList();
+        const next = [];
+        for (const w of vis) {
+            let e = root.entryFor(w);
+            if (!e) {
+                e = {
+                    "w": w,
+                    "at": Date.now(),
+                    "holds": 0
+                };
+                if (root.ownsTiming && w.timer)
+                    w.timer.stop();
+            }
+            next.push(e);
+        }
+        root.tracked = next;
+    }
+
+    // Called by every line that starts or stops hovering/unfolding. Holds are
+    // counted, not set, because with "All monitors" one notification has one
+    // line per screen.
+    function hold(w, on) {
+        if (!w)
+            return;
+        const e = root.entryFor(w);
+        if (on) {
+            if (e)
+                e.holds++;
+            if (!root.ownsTiming && w.timer)
+                w.timer.stop();
+            return;
+        }
+        if (e) {
+            e.holds = Math.max(0, e.holds - 1);
+            if (e.holds > 0)
+                return;
+            // A released line gets its full time back, the same way the
+            // shipped popup restarts its timer on mouse-out.
+            e.at = Date.now();
+        }
+        if (!root.ownsTiming && w.timer)
+            w.timer.restart();
+    }
+
+    function reap() {
+        const now = Date.now();
+        for (const e of root.tracked) {
+            if (!e.w || e.holds > 0)
+                continue;
+            const ms = root.timeoutFor(e.w);
+            // 0 means "never expires" -- critical notifications default to it.
+            if (ms > 0 && now - e.at >= ms)
+                root.retire(e.w);
+        }
+    }
+
+    Timer {
+        interval: 250
+        repeat: true
+        running: root.ownsTiming && root.tracked.length > 0
+        onTriggered: root.reap()
+    }
+
+    // Handing timing back and forth has to leave the shell's own timers in a
+    // sane state, or a notification stranded with a stopped timer never goes
+    // away again.
+    onOwnsTimingChanged: {
+        for (const e of root.tracked) {
+            if (!e.w || !e.w.timer)
+                continue;
+            if (root.ownsTiming) {
+                e.w.timer.stop();
+                e.at = Date.now();
+            } else if (e.holds === 0) {
+                e.w.timer.restart();
+            }
+        }
+    }
+
+    function releaseTiming() {
+        if (!root.ownsTiming)
+            return;
+        for (const e of root.tracked) {
+            if (e.w && e.w.timer)
+                e.w.timer.restart();
+        }
+        root.tracked = [];
+    }
+
     Connections {
         target: NotificationService
 
         function onVisibleNotificationsChanged() {
+            root.syncTracked();
             root.refreshFocusedScreen();
         }
     }
 
-    onMonitorsChanged: refreshFocusedScreen()
+    // ---- one-at-a-time actions, for keybinds -----------------------------
+
+    function dismissNewest() {
+        const list = root.visibleList();
+        return root.retire(list[list.length - 1]);
+    }
+
+    function dismissOldest() {
+        const list = root.visibleList();
+        return root.retire(list[0]);
+    }
+
+    // Puts the most recent notification that is not currently a line back on
+    // the stack. Pressing it repeatedly walks backwards through the
+    // notification centre.
+    function recallOne() {
+        const shown = root.visibleList();
+        const all = NotificationService.notifications;
+        for (let i = all.length - 1; i >= 0; i--) {
+            const w = all[i];
+            if (!w || shown.indexOf(w) !== -1)
+                continue;
+            w.popup = true;
+            if (NotificationService.visibleNotifications.indexOf(w) === -1)
+                NotificationService.visibleNotifications = [...NotificationService.visibleNotifications, w];
+            root.syncTracked();
+            return w;
+        }
+        return null;
+    }
 
     // ---- built-in popup suppression -------------------------------------
 
-    property bool _suppressionApplied: false
+    property bool suppressionApplied: false
 
-    function _screenPrefs() {
+    function screenPrefs() {
         return SettingsData.screenPreferences || ({});
     }
 
-    function _setNotificationScreens(value) {
-        const next = Object.assign({}, root._screenPrefs());
+    function setNotificationScreens(value) {
+        const next = Object.assign({}, root.screenPrefs());
         next["notifications"] = value;
         SettingsData.set("screenPreferences", next);
     }
 
     function applySuppression() {
-        if (root._suppressionApplied)
+        if (root.suppressionApplied)
             return;
-        const current = root._screenPrefs()["notifications"] || ["all"];
+        const current = root.screenPrefs()["notifications"] || ["all"];
         // Never record the sentinel as the "previous" value -- that would make
         // the restore a no-op after a shell reload.
         if (current.length !== 1 || current[0] !== root.suppressSentinel) {
@@ -101,24 +281,24 @@ PluginComponent {
         // so it has to come down with it.
         if (SettingsData.notificationFocusedMonitor)
             SettingsData.set("notificationFocusedMonitor", false);
-        root._setNotificationScreens([root.suppressSentinel]);
-        root._suppressionApplied = true;
+        root.setNotificationScreens([root.suppressSentinel]);
+        root.suppressionApplied = true;
         console.info("notificationLine: shipped notification popups suppressed");
     }
 
     function releaseSuppression() {
-        const current = root._screenPrefs()["notifications"] || [];
+        const current = root.screenPrefs()["notifications"] || [];
         const isSuppressed = current.length === 1 && current[0] === root.suppressSentinel;
         if (!isSuppressed) {
-            root._suppressionApplied = false;
+            root.suppressionApplied = false;
             return;
         }
         const saved = PluginService.loadPluginData(root.pluginId, "_savedScreens", ["all"]);
-        root._setNotificationScreens((saved && saved.length) ? saved : ["all"]);
+        root.setNotificationScreens((saved && saved.length) ? saved : ["all"]);
         const savedFocused = PluginService.loadPluginData(root.pluginId, "_savedFocusedMonitor", false);
         if (savedFocused === true)
             SettingsData.set("notificationFocusedMonitor", true);
-        root._suppressionApplied = false;
+        root.suppressionApplied = false;
         console.info("notificationLine: shipped notification popups restored");
     }
 
@@ -133,21 +313,21 @@ PluginComponent {
 
     // ---- queue depth -----------------------------------------------------
 
-    // NotificationService only lets four popups coexist; past that it queues.
-    // A line stack is cheap enough to show more, so the service is told how
-    // many this plugin is prepared to draw.
-    property int _savedMaxVisible: -1
+    // NotificationService only lets four popups coexist; past that it queues,
+    // and past the limit it evicts the oldest on the spot. That eviction is
+    // what caps the stack, so it has to match the number of lines drawn.
+    property int savedMaxVisible: -1
 
     function applyQueueDepth() {
-        if (root._savedMaxVisible < 0)
-            root._savedMaxVisible = NotificationService.maxVisibleNotifications;
+        if (root.savedMaxVisible < 0)
+            root.savedMaxVisible = NotificationService.maxVisibleNotifications;
         NotificationService.maxVisibleNotifications = root.maxLines;
     }
 
     function restoreQueueDepth() {
-        if (root._savedMaxVisible >= 0)
-            NotificationService.maxVisibleNotifications = root._savedMaxVisible;
-        root._savedMaxVisible = -1;
+        if (root.savedMaxVisible >= 0)
+            NotificationService.maxVisibleNotifications = root.savedMaxVisible;
+        root.savedMaxVisible = -1;
     }
 
     onMaxLinesChanged: applyQueueDepth()
@@ -155,10 +335,12 @@ PluginComponent {
     Component.onCompleted: {
         applyQueueDepth();
         syncSuppression();
+        syncTracked();
         console.info("notificationLine: daemon ready (ipc target 'notificationLine')");
     }
 
     Component.onDestruction: {
+        releaseTiming();
         restoreQueueDepth();
         releaseSuppression();
     }
@@ -183,18 +365,34 @@ PluginComponent {
         }
 
         function clear(): string {
+            const n = root.visibleList().length;
             NotificationService.dismissAllPopups();
-            return "CLEARED";
+            return "CLEARED " + n;
         }
 
-        function suppress(state: string): string {
-            const on = state !== "off" && state !== "false" && state !== "0";
-            PluginService.savePluginData(root.pluginId, "suppressBuiltin", on);
-            return on ? "SUPPRESSED" : "RESTORED";
+        function clearAll(): string {
+            const n = NotificationService.notifications.length;
+            NotificationService.clearAllNotifications();
+            return "CLEARED " + n;
+        }
+
+        function dismiss(): string {
+            return root.dismissNewest() ? "DISMISSED" : "EMPTY";
+        }
+
+        function dismissOldest(): string {
+            return root.dismissOldest() ? "DISMISSED" : "EMPTY";
+        }
+
+        function recall(): string {
+            const w = root.recallOne();
+            return w ? ("RECALLED\t" + w.appName + "\t" + w.summary) : "NOTHING";
         }
 
         function status(): string {
-            return [root.position, "lines=" + NotificationService.visibleNotifications.length + "/" + root.maxLines, "suppressed=" + root._suppressionApplied].join("\t");
+            const list = root.visibleList();
+            const timing = root.ownsTiming ? (root.lifetime > 0 ? root.lifetime + "s" : "urgency") : "shell";
+            return [root.position, "lines=" + list.length + "/" + root.maxLines, "timing=" + timing, "suppressed=" + root.suppressionApplied].join("\t");
         }
     }
 }

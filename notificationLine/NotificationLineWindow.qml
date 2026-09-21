@@ -53,8 +53,10 @@ PanelWindow {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
     // Sit inside whatever the bar and other exclusive surfaces have reserved,
-    // rather than drawing over them.
+    // without reserving anything itself -- a stack that grows and shrinks
+    // every few seconds must never push the rest of the shell around.
     exclusionMode: ExclusionMode.Normal
+    WlrLayershell.exclusiveZone: 0
 
     anchors.bottom: win.isBottom
     anchors.top: !win.isBottom
@@ -68,8 +70,13 @@ PanelWindow {
         right: win.side === "right" ? win.host.marginH : 0
     }
 
+    // A stack taller than the screen would be clamped by the compositor from
+    // whichever end it likes. Capping it here, with the column pinned to the
+    // anchored edge, means the overflow is always the oldest lines.
+    readonly property real maxStackHeight: Math.max(64, (screen ? screen.height : 1080) - win.host.marginV * 2)
+
     implicitWidth: win.maxLineWidth
-    implicitHeight: Math.max(1, stack.implicitHeight)
+    implicitHeight: Math.max(1, Math.min(stack.implicitHeight, win.maxStackHeight))
 
     // Repeater.itemAt() is a plain function call, so the mask bindings below
     // need something that changes when the set of rows does.
@@ -129,22 +136,27 @@ PanelWindow {
 
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.bottom: win.isBottom ? parent.bottom : undefined
+        anchors.top: win.isBottom ? undefined : parent.top
 
         spacing: win.host.lineSpacing
 
+        // Indexed rather than fed the array directly: a JS array model resets
+        // the whole repeater on every change, so every line would be torn down
+        // and rebuilt -- replaying its entrance animation -- each time any
+        // other notification arrived or expired.
         Repeater {
             id: rowRepeater
 
-            model: win.lines
+            model: win.lines.length
 
             onItemAdded: win.maskRevision++
             onItemRemoved: win.maskRevision++
 
             delegate: NotificationLine {
-                required property var modelData
+                required property int index
 
-                wrapper: modelData
+                wrapper: win.lines[index] ?? null
                 host: win.host
                 maxWidth: win.maxLineWidth
                 align: win.side

@@ -140,6 +140,32 @@ PluginSettings {
 
     StyledText {
         width: parent.width
+        text: "Timing"
+        font.pixelSize: Theme.fontSizeLarge
+        font.weight: Font.Bold
+        color: Theme.surfaceText
+    }
+
+    ToggleSetting {
+        settingKey: "ignoreAppTimeout"
+        label: "Ignore app-supplied timeouts"
+        description: "Many apps ask for their own expiry time, which is why some notifications vanish in seconds while others obey Settings \u2192 Notifications. With this on, every line uses your per-urgency timeout instead, and the plugin runs the clock itself."
+        defaultValue: true
+    }
+
+    SliderSetting {
+        settingKey: "lifetime"
+        label: "Line lifetime"
+        description: "One duration for every line, whatever its urgency. Zero follows Settings \u2192 Notifications instead."
+        defaultValue: 0
+        minimum: 0
+        maximum: 120
+        unit: " s"
+        leftIcon: "timer"
+    }
+
+    StyledText {
+        width: parent.width
         text: "Appearance"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold

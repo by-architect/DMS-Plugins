@@ -30,6 +30,43 @@ Item {
     property bool expanded: false
     property bool hovered: false
 
+    // A held line does not count down. The daemon owns the clock, because
+    // these delegates come and go as the stack changes and a timer living in
+    // here would restart every time a neighbour appeared.
+    readonly property bool held: line.hovered || line.expanded
+
+    // Which notification this line is currently holding, if any. Rows are
+    // indexed, so `wrapper` can be swapped under a hovered line when an older
+    // one expires -- the hold has to move with it rather than stay stuck on a
+    // notification that is no longer here.
+    property var holdTarget: null
+
+    function syncHold() {
+        if (!line.host)
+            return;
+        const want = line.held ? line.wrapper : null;
+        if (want === line.holdTarget)
+            return;
+        if (line.holdTarget)
+            line.host.hold(line.holdTarget, false);
+        line.holdTarget = want;
+        if (want)
+            line.host.hold(want, true);
+    }
+
+    onHeldChanged: syncHold()
+    onWrapperChanged: {
+        // A recycled row must not inherit the previous notification's
+        // unfolded state.
+        line.expanded = false;
+        syncHold();
+    }
+
+    Component.onDestruction: {
+        if (line.holdTarget && line.host)
+            line.host.hold(line.holdTarget, false);
+    }
+
     readonly property bool isCritical: wrapper ? wrapper.urgency === NotificationUrgency.Critical : false
     readonly property color accent: isCritical ? Theme.error : Theme.primary
 
@@ -102,6 +139,7 @@ Item {
     readonly property real headerFlex: Math.max(0, maxWidth - (hPad * 2 + timeW + iconW + appW + gapsW + iconSize + gap))
 
     height: bubble.height
+    visible: line.wrapper !== null
 
     Component.onCompleted: enterAnim.start()
 
@@ -126,25 +164,10 @@ Item {
         }
     }
 
+    // Reading a long notification should not race its own expiry, which
+    // `held` takes care of.
     function toggleExpand() {
         line.expanded = !line.expanded;
-        if (!line.wrapper || !line.wrapper.timer)
-            return;
-        // Reading a long notification should not race its own expiry.
-        if (line.expanded)
-            line.wrapper.timer.stop();
-        else if (!line.hovered)
-            line.wrapper.timer.restart();
-    }
-
-    function dismiss() {
-        if (!line.wrapper)
-            return;
-        // Same as the shipped popup's swipe-away: leave the stack, stay in the
-        // notification centre.
-        if (line.wrapper.timer)
-            line.wrapper.timer.stop();
-        line.wrapper.popup = false;
     }
 
     TextMetrics {
@@ -225,17 +248,11 @@ Item {
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
 
-            onEntered: {
-                line.hovered = true;
-                if (line.wrapper && line.wrapper.timer)
-                    line.wrapper.timer.stop();
-            }
-            onExited: {
-                line.hovered = false;
-                if (line.wrapper && line.wrapper.timer && !line.expanded)
-                    line.wrapper.timer.restart();
-            }
+            onEntered: line.hovered = true
+            onExited: line.hovered = false
             onClicked: mouse => {
+                if (!line.wrapper)
+                    return;
                 if (mouse.button === Qt.RightButton) {
                     line.toggleExpand();
                     return;
@@ -249,7 +266,7 @@ Item {
                     NotificationService.dismissNotification(line.wrapper);
                     return;
                 }
-                line.dismiss();
+                line.host.retire(line.wrapper);
             }
         }
 
@@ -306,6 +323,8 @@ Item {
                     font.pixelSize: line.fontSize - 2
                     color: Theme.surfaceVariantText
                     opacity: 0.7
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                 }
 
                 DankCircularImage {
@@ -330,6 +349,8 @@ Item {
                     font.pixelSize: line.fontSize
                     font.weight: Font.DemiBold
                     color: line.accent
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                     elide: Text.ElideRight
                 }
 
@@ -343,6 +364,8 @@ Item {
                     font.pixelSize: line.fontSize
                     font.weight: Font.Medium
                     color: Theme.surfaceText
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                     elide: Text.ElideRight
                 }
 
@@ -354,6 +377,8 @@ Item {
                     text: "→"
                     font.pixelSize: line.fontSize
                     color: Theme.outline
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                 }
 
                 StyledText {
@@ -365,6 +390,9 @@ Item {
                     text: line.bodyPlain
                     font.pixelSize: line.fontSize
                     color: Theme.surfaceVariantText
+                    // The whole point of the collapsed line: one line, ever.
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                     elide: Text.ElideRight
                 }
             }
