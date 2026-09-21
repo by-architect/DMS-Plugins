@@ -401,11 +401,18 @@ underneath, and stops the expiry timer while you read. Hovering pauses the
 timer, left click fires the default action, middle click dismisses.
 
 It is a different *view*, not a different notification system: it renders
-`NotificationService.visibleNotifications`, so timeouts, per-app rules, dedupe,
-Do Not Disturb, history and the notification centre all behave exactly as they
-did. Because DMS has no switch for turning its own popup cards off, the plugin
-does it by pointing the shell's notification monitor list at a screen name that
+`NotificationService.visibleNotifications`, so per-app rules, dedupe, Do Not
+Disturb, history and the notification centre all behave exactly as they did.
+Expiry is the one thing it takes over, so that a line's lifetime comes from
+your settings rather than from whatever timeout the sending app asked for —
+or from a single flat duration, if you prefer every line to behave the same.
+
+Because DMS has no switch for turning its own popup cards off, the plugin does
+it by pointing the shell's notification monitor list at a screen name that
 cannot exist, and puts the old value back when it is disabled or removed.
+
+Keybind targets for clearing the stack, and for dismissing or recalling one
+line at a time, are on its IPC handler.
 
 → [notificationLine/README.md](notificationLine/README.md)
 
