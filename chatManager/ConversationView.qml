@@ -46,6 +46,13 @@ FocusScope {
     // moved with Alt+K/J.
     property int selectedIndex: -1
 
+    // Opening a conversation with unread messages puts the view at the first
+    // of them rather than at the bottom. These track that: one waiting for the
+    // messages to arrive, one keeping the view there afterwards instead of
+    // yanking it to the newest message on the next refresh.
+    property bool _awaitingUnreadJump: false
+    property bool _heldAtUnread: false
+
     readonly property var selectedMessage: selectedIndex >= 0 && selectedIndex < root.chatCore.messages.length ? root.chatCore.messages[selectedIndex] : null
 
     // True while anything is layered over the conversation. Escape belongs to
@@ -188,13 +195,35 @@ FocusScope {
             root.replyTarget = null;
             root.selectedIndex = -1;
             root.pendingDelete = null;
+            // The mark is set as the conversation opens, before its messages
+            // have been asked for -- so what is known here is only whether to
+            // expect one.
+            root._awaitingUnreadJump = root.chatCore.unreadMarkTs > 0;
+            root._heldAtUnread = false;
             Qt.callLater(() => messageList.positionViewAtEnd());
         }
 
         function onMessagesChanged() {
+            if (root._awaitingUnreadJump) {
+                const at = root.chatCore.firstUnreadIndex;
+                if (at > 0) {
+                    root._awaitingUnreadJump = false;
+                    root._heldAtUnread = true;
+                    // Beginning, so the divider is the first thing on screen
+                    // and the unread messages read downwards from it.
+                    Qt.callLater(() => messageList.positionViewAtIndex(at, ListView.Beginning));
+                    return;
+                }
+                if (root.chatCore.messages.length > 0) {
+                    // Messages arrived and none of them is behind a mark: there
+                    // is nowhere to jump to, so stop waiting for one.
+                    root._awaitingUnreadJump = false;
+                }
+            }
+
             // Stay pinned to the newest message unless the user has scrolled up
-            // to read something.
-            if (messageList.atYEnd || root.selectedIndex < 0)
+            // to read something -- including the unread mark they were put at.
+            if (messageList.atYEnd || (root.selectedIndex < 0 && !root._heldAtUnread))
                 Qt.callLater(() => messageList.positionViewAtEnd());
         }
     }
@@ -456,21 +485,38 @@ FocusScope {
                 // "scroll to the bottom" mean the wrong end of the history.
                 verticalLayoutDirection: ListView.TopToBottom
 
-                delegate: MessageBubble {
+                // A column rather than the bubble alone, so the unread mark
+                // can sit above the message it belongs to without the bubble
+                // itself having to know anything about it.
+                delegate: Column {
+                    id: messageRow
+
                     required property var modelData
                     required property int index
 
-                    chatCore: root.chatCore
-
                     width: messageList.width
-                    message: modelData
-                    selected: root.selectedIndex === index
-                    previousMessage: index > 0 ? root.chatCore.messages[index - 1] : null
+                    spacing: 0
 
-                    onReplyRequested: root.replyTarget = modelData
-                    onForwardRequested: root.forwardSource = modelData
-                    onCopyRequested: root.copyMessage(modelData)
-                    onDeleteRequested: root.requestDelete(modelData, root.chatCore.activeSupports("revoke"))
+                    ChatUnreadDivider {
+                        width: parent.width
+                        // Never at the very top: with nothing above it, the
+                        // line says only that the conversation starts here.
+                        visible: messageRow.index > 0 && messageRow.index === root.chatCore.firstUnreadIndex
+                    }
+
+                    MessageBubble {
+                        chatCore: root.chatCore
+
+                        width: parent.width
+                        message: messageRow.modelData
+                        selected: root.selectedIndex === messageRow.index
+                        previousMessage: messageRow.index > 0 ? root.chatCore.messages[messageRow.index - 1] : null
+
+                        onReplyRequested: root.replyTarget = messageRow.modelData
+                        onForwardRequested: root.forwardSource = messageRow.modelData
+                        onCopyRequested: root.copyMessage(messageRow.modelData)
+                        onDeleteRequested: root.requestDelete(messageRow.modelData, root.chatCore.activeSupports("revoke"))
+                    }
                 }
 
                 // Older messages page in at the top, which is where the
@@ -478,6 +524,13 @@ FocusScope {
                 onAtYBeginningChanged: {
                     if (atYBeginning && root.chatCore.hasMoreHistory && !root.chatCore.loadingHistory)
                         root.chatCore.loadOlder();
+                }
+
+                // Reaching the bottom is the user having caught up, so the
+                // view goes back to following the newest message.
+                onAtYEndChanged: {
+                    if (atYEnd)
+                        root._heldAtUnread = false;
                 }
             }
 
@@ -525,6 +578,8 @@ FocusScope {
             onSent: {
                 root.replyTarget = null;
                 root.clearSelection();
+                // Writing is catching up, whatever was left unread above.
+                root._heldAtUnread = false;
                 Qt.callLater(() => messageList.positionViewAtEnd());
             }
         }

@@ -42,6 +42,12 @@ type bridge struct {
 	// room cache; publishing during it would name every room after its id.
 	firstSyncDone bool
 
+	// degraded is set when the sync loop has failed and not yet recovered. It
+	// is what makes the next good response report connected again, rather than
+	// leaving the host showing "connecting" for the rest of the session -- and
+	// treating everything that arrives as live when it is in fact a catch-up.
+	degraded bool
+
 	configured bool
 	stopOnce   sync.Once
 }
@@ -191,12 +197,13 @@ func (b *bridge) startClient(sess *session) error {
 	b.syncCancel = cancel
 	b.mu.Unlock()
 
-	go b.runSync(ctx, client)
+	// Before the sync loop, not beside it: invitations already waiting and
+	// rooms already read elsewhere are in no response the loop will ever see,
+	// and both decide whether an arriving message is worth interrupting
+	// someone for. Costs nothing on a start that has already caught up.
+	b.catchUp(ctx, client)
 
-	// Beside the sync loop rather than inside it: an invitation that arrived
-	// before this bridge knew to write invitations down is in no sync response
-	// the loop will ever see, so it has to be asked for once, directly.
-	go b.findPendingInvites(ctx, client)
+	go b.runSync(ctx, client)
 	return nil
 }
 
@@ -266,6 +273,10 @@ func (b *bridge) runSync(ctx context.Context, client *mautrix.Client) {
 			}
 			logf("warn", "sync failed, retrying in %s: %v", backoff, err)
 		}
+
+		b.mu.Lock()
+		b.degraded = true
+		b.mu.Unlock()
 
 		emitState("connecting")
 		select {

@@ -84,9 +84,15 @@ func (m *Manager) ingest(ev ingestEvent) {
 		}
 		m.mu.Unlock()
 
-	case EventState, EventReady, EventAuth:
-		// State and capabilities live on the bridge; a broadcast is all that
-		// is needed so the UI re-reads them.
+	case EventState:
+		// State and capabilities live on the bridge; a broadcast is all the
+		// UI needs. Here it means something else as well: connecting is a
+		// provider about to replay what we missed, and connected is the point
+		// at which what it replayed can be judged. See settle.go.
+		m.noteProviderState(ev.provider, ev.frame.State)
+
+	case EventReady, EventAuth:
+		// Nothing to store; the broadcast below is what the UI re-reads.
 
 	default:
 		return
@@ -126,6 +132,17 @@ func (m *Manager) ingestChats(ctx context.Context, provider string, chats []wire
 		if err := m.store.UpsertChat(ctx, c); err != nil {
 			log.Warnf("chat: failed to store chat %s/%s: %v", provider, wc.ID, err)
 			continue
+		}
+
+		// Where the provider says this conversation has been read, which it
+		// may know better than we do: read on a phone, in another client. The
+		// store takes the later of the two and recounts unread from the
+		// messages themselves, so this can only ever settle a disagreement in
+		// the direction of "already seen".
+		if wc.ReadUpTo > 0 {
+			if err := m.store.SetReadUpTo(ctx, provider, wc.ID, wc.ReadUpTo); err != nil {
+				log.Warnf("chat: failed to set read position on %s/%s: %v", provider, wc.ID, err)
+			}
 		}
 
 		// Only when the bridge actually stated them, so a partial update does
@@ -176,9 +193,16 @@ func (m *Manager) ingestMessages(ctx context.Context, provider string, msgs []wi
 			log.Warnf("chat: failed to touch chat %s/%s: %v", provider, msg.ChatID, err)
 		}
 
-		if live {
-			m.notify.Notify(ctx, msg, m.providerName(provider), m.ProviderPrefs(provider))
+		if !live {
+			continue
 		}
+		// While the provider is still catching up this is put aside rather
+		// than announced -- it may well have been read elsewhere already, and
+		// we will know shortly.
+		if m.holdNotification(provider, msg) {
+			continue
+		}
+		m.notify.Notify(ctx, msg, m.providerName(provider), m.ProviderPrefs(provider))
 	}
 }
 

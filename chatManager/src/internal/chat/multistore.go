@@ -471,6 +471,25 @@ func (m *MultiStore) SearchMessages(ctx context.Context, query string, limit int
 	return all, err
 }
 
+// UnreadMessagesIn is UnreadMessages restricted to the named providers.
+func (m *MultiStore) UnreadMessagesIn(ctx context.Context, providers []string, limit int) ([]SearchHit, error) {
+	var all []SearchHit
+	err := m.eachIn(providers, func(_ string, s *HistoryStore) error {
+		hits, err := s.UnreadMessages(ctx, limit)
+		if err != nil {
+			return err
+		}
+		all = append(all, hits...)
+		return nil
+	})
+
+	sort.SliceStable(all, func(i, j int) bool { return all[i].TS > all[j].TS })
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, err
+}
+
 func (m *MultiStore) SearchChats(ctx context.Context, query string, limit int) ([]Chat, error) {
 	var all []Chat
 	err := m.each(func(_ string, s *HistoryStore) error {

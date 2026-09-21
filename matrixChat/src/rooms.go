@@ -45,6 +45,7 @@ type persistedRoom struct {
 	Left      bool   `json:"left,omitempty"`
 	InviteTS  int64  `json:"inviteTs,omitempty"`
 	InvitedBy string `json:"invitedBy,omitempty"`
+	ReadUpTo  int64  `json:"readUpTo,omitempty"`
 
 	Tags    []string          `json:"tags,omitempty"`
 	Members map[string]string `json:"members,omitempty"`
@@ -89,6 +90,7 @@ func (s *roomStore) load() map[id.RoomID]*roomInfo {
 		info.Left = p.Left
 		info.InviteTS = p.InviteTS
 		info.InvitedBy = id.UserID(p.InvitedBy)
+		info.ReadUpTo = p.ReadUpTo
 		info.Tags = p.Tags
 		for user, name := range p.Members {
 			info.Members[id.UserID(user)] = name
@@ -113,6 +115,7 @@ func (s *roomStore) save(rooms map[id.RoomID]*roomInfo) {
 			Left:      info.Left,
 			InviteTS:  info.InviteTS,
 			InvitedBy: string(info.InvitedBy),
+			ReadUpTo:  info.ReadUpTo,
 			Tags:      info.Tags,
 		}
 		// Only worth keeping when they are what names the room.

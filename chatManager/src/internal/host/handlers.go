@@ -54,6 +54,8 @@ func HandleRequest(conn *models.Conn, req models.Request, manager *Manager) {
 		handleSetFocus(conn, req, manager)
 	case "chat.fetchMedia":
 		handleFetchMedia(ctx, conn, req, manager)
+	case "chat.unread":
+		handleUnread(ctx, conn, req, manager)
 	case "chat.tags":
 		handleTags(ctx, conn, req, manager)
 	case "chat.resolve":
@@ -283,6 +285,51 @@ func handleHistory(ctx context.Context, conn *models.Conn, req models.Request, m
 type searchResult struct {
 	Messages []chat.SearchHit `json:"messages"`
 	Chats    []chat.Chat      `json:"chats"`
+}
+
+// unreadResult is every conversation with something waiting in it, and the
+// messages that are waiting.
+type unreadResult struct {
+	Chats    []chat.Chat      `json:"chats"`
+	Messages []chat.SearchHit `json:"messages"`
+}
+
+// handleUnread answers "what have I not got to yet".
+//
+// Both halves, because they answer different questions: the conversations are
+// what a cycle key steps through, and the messages are what a search over
+// unread text matches on. Deriving one from the other in the caller would mean
+// either fetching all messages or losing the text.
+func handleUnread(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
+	limit := models.GetOr(req, "limit", 200)
+	visible := m.EnabledProviders()
+
+	chats, err := m.Store().ChatsIn(ctx, visible, 0)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+
+	unread := make([]chat.Chat, 0, 8)
+	for _, c := range chats {
+		// Archived is how a user says "keep this out of my way", and a muted
+		// conversation still counts: muting silences it, it does not mark it
+		// read.
+		if c.Unread > 0 && !c.Archived {
+			unread = append(unread, c)
+		}
+	}
+
+	msgs, err := m.Store().UnreadMessagesIn(ctx, visible, limit)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if msgs == nil {
+		msgs = []chat.SearchHit{}
+	}
+
+	models.Respond(conn, req.ID, unreadResult{Chats: unread, Messages: msgs})
 }
 
 func handleSearch(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {

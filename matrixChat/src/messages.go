@@ -197,11 +197,17 @@ func (b *bridge) onRedaction(ctx context.Context, evt *event.Event) {
 	})
 }
 
-// onReceipt maps Matrix read receipts onto the contract's status ladder.
+// onReceipt maps Matrix read receipts onto the contract's status ladder, and
+// onto our own read position.
 //
 // Matrix has no per-message delivery receipt: a read receipt names one event and
 // means everything up to it has been read. Reporting that event as read is the
 // honest translation; the host ratchets, so nothing moves backwards.
+//
+// Our own receipt is the other half, and the more useful one. It is how Matrix
+// records what we have read -- on a phone, in Element, anywhere -- and without
+// it a conversation read an hour ago comes back unread here and notifies for
+// messages we have already seen.
 func (b *bridge) onReceipt(ctx context.Context, evt *event.Event) {
 	content, ok := evt.Content.Parsed.(*event.ReceiptEventContent)
 	if !ok {
@@ -211,23 +217,63 @@ func (b *bridge) onReceipt(ctx context.Context, evt *event.Event) {
 	self := b.selfID()
 	for eventID, receipts := range *content {
 		for receiptType, users := range receipts {
-			if receiptType != event.ReceiptTypeRead {
+			switch receiptType {
+			case event.ReceiptTypeRead, event.ReceiptTypeReadPrivate:
+			default:
 				continue
 			}
-			for user := range users {
-				// Our own receipt tells us nothing about whether anyone else
-				// read it, and would mark our own messages read on send.
+
+			for user, receipt := range users {
 				if user == self {
+					// A private receipt counts exactly as much as a public one:
+					// both are us, having read the room.
+					b.noteRead(evt.RoomID, receipt.Timestamp.UnixMilli())
 					continue
 				}
-				emitEvent("status", map[string]any{
-					"messageId": string(eventID),
-					"status":    "read",
-				})
-				break
+				// Somebody else read it. Only public receipts say that, and a
+				// private one is never anyone else's to see.
+				if receiptType == event.ReceiptTypeRead {
+					emitEvent("status", map[string]any{
+						"messageId": string(eventID),
+						"status":    "read",
+					})
+				}
 			}
 		}
 	}
+}
+
+// noteRead records how far this room has been read and tells the host, unless
+// it already knew as much.
+//
+// Never moves backwards: a receipt for an older event -- a client catching up,
+// a thread receipt -- must not un-read what has been read since.
+func (b *bridge) noteRead(roomID id.RoomID, ts int64) {
+	if b.setReadUpTo(roomID, ts) {
+		b.touchRoom(roomID)
+	}
+}
+
+// setReadUpTo records the position and reports whether it moved.
+//
+// Separate from publishing so the catch-up sync can settle hundreds of rooms
+// and then announce them together, rather than a frame per room.
+func (b *bridge) setReadUpTo(roomID id.RoomID, ts int64) bool {
+	if ts <= 0 {
+		// A receipt with no timestamp says nothing about when; guessing "now"
+		// here would mark a whole room read on the strength of nothing.
+		return false
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	info := b.roomLocked(roomID)
+	if ts <= info.ReadUpTo {
+		return false
+	}
+	info.ReadUpTo = ts
+	return true
 }
 
 func previewOf(msg *messageObj) string {
