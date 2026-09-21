@@ -192,6 +192,11 @@ func (b *bridge) startClient(sess *session) error {
 	b.mu.Unlock()
 
 	go b.runSync(ctx, client)
+
+	// Beside the sync loop rather than inside it: an invitation that arrived
+	// before this bridge knew to write invitations down is in no sync response
+	// the loop will ever see, so it has to be asked for once, directly.
+	go b.findPendingInvites(ctx, client)
 	return nil
 }
 

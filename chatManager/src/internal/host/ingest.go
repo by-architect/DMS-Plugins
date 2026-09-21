@@ -57,6 +57,15 @@ func (m *Manager) ingest(ev ingestEvent) {
 			return
 		}
 
+	case EventChatGone:
+		if ev.frame.ChatID == "" {
+			return
+		}
+		if err := m.store.DeleteChatIfUnwritten(ctx, ev.provider, ev.frame.ChatID); err != nil {
+			log.Warnf("chat: could not remove %s/%s: %v", ev.provider, ev.frame.ChatID, err)
+			return
+		}
+
 	case EventDeleted:
 		if ev.frame.MessageID == "" {
 			return

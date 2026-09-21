@@ -30,14 +30,24 @@ import (
 const maxStoredMembers = 32
 
 type persistedRoom struct {
-	Name      string            `json:"name,omitempty"`
-	Alias     string            `json:"alias,omitempty"`
-	Topic     string            `json:"topic,omitempty"`
-	IsDirect  bool              `json:"isDirect,omitempty"`
-	IsSpace   bool              `json:"isSpace,omitempty"`
-	Encrypted bool              `json:"encrypted,omitempty"`
-	Tags      []string          `json:"tags,omitempty"`
-	Members   map[string]string `json:"members,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Alias     string `json:"alias,omitempty"`
+	Topic     string `json:"topic,omitempty"`
+	IsDirect  bool   `json:"isDirect,omitempty"`
+	IsSpace   bool   `json:"isSpace,omitempty"`
+	Encrypted bool   `json:"encrypted,omitempty"`
+
+	// An unanswered invitation has to survive a restart for the same reason a
+	// name does, and more urgently: the homeserver mentions it in one sync and
+	// never again, so a cache that forgot it would leave the invitation
+	// invisible until somebody answered it elsewhere.
+	Invited   bool   `json:"invited,omitempty"`
+	Left      bool   `json:"left,omitempty"`
+	InviteTS  int64  `json:"inviteTs,omitempty"`
+	InvitedBy string `json:"invitedBy,omitempty"`
+
+	Tags    []string          `json:"tags,omitempty"`
+	Members map[string]string `json:"members,omitempty"`
 }
 
 type roomStore struct {
@@ -75,6 +85,10 @@ func (s *roomStore) load() map[id.RoomID]*roomInfo {
 		info.IsDirect = p.IsDirect
 		info.IsSpace = p.IsSpace
 		info.Encrypted = p.Encrypted
+		info.Invited = p.Invited
+		info.Left = p.Left
+		info.InviteTS = p.InviteTS
+		info.InvitedBy = id.UserID(p.InvitedBy)
 		info.Tags = p.Tags
 		for user, name := range p.Members {
 			info.Members[id.UserID(user)] = name
@@ -95,6 +109,10 @@ func (s *roomStore) save(rooms map[id.RoomID]*roomInfo) {
 			IsDirect:  info.IsDirect,
 			IsSpace:   info.IsSpace,
 			Encrypted: info.Encrypted,
+			Invited:   info.Invited,
+			Left:      info.Left,
+			InviteTS:  info.InviteTS,
+			InvitedBy: string(info.InvitedBy),
 			Tags:      info.Tags,
 		}
 		// Only worth keeping when they are what names the room.

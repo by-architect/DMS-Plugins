@@ -27,6 +27,12 @@ const (
 	MethodLogout     = "logout"
 	MethodRevoke     = "revoke"
 	MethodShutdown   = "shutdown"
+
+	// Answering an invitation to a conversation: joining it, or turning it
+	// down. Only services that have a notion of being invited implement these,
+	// which is what the invites capability says.
+	MethodAcceptInvite  = "acceptInvite"
+	MethodDeclineInvite = "declineInvite"
 )
 
 // Events a bridge pushes to the host.
@@ -42,6 +48,12 @@ const (
 	EventDeleted  = "deleted"
 	EventSync     = "sync"
 	EventLog      = "log"
+	// EventChatGone is a conversation that has stopped existing at the
+	// provider: an invitation answered on another device, most of all. Nothing
+	// would ever update such a row again, so it is removed -- unless it holds
+	// messages somebody actually wrote, which are never dropped on a
+	// provider's say-so.
+	EventChatGone = "chatGone"
 )
 
 // Capabilities a bridge may declare. The UI hides affordances a provider has
@@ -58,6 +70,11 @@ const (
 	CapRichText = "richText"
 	CapPresence = "presence"
 	CapGroups   = "groups"
+	// CapInvites is a provider where a conversation can arrive as an invitation
+	// you have not answered: a Matrix room invite, a group you have been added
+	// to but not joined. Such a conversation carries the "invite" tag until it
+	// is answered.
+	CapInvites = "invites"
 )
 
 // bridgeCall is what the host writes to a bridge's stdin.

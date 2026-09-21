@@ -547,6 +547,46 @@ Item {
         }, null);
     }
 
+    // ------------------------------------------------------------ invites
+
+    // isInvite reports a conversation the user has been asked into and has not
+    // answered yet. Providers say so with the "invite" tag -- the shell knows
+    // nothing about what being invited means on any one service.
+    function isInvite(chat) {
+        if (!chat)
+            return false;
+        return (chat.tags || []).indexOf("invite") !== -1;
+    }
+
+    // answerInvite joins the conversation or turns it down.
+    //
+    // Declining removes it: the conversation stops existing at the provider, so
+    // there is nothing left to look at and the open view has to close with it.
+    function answerInvite(provider, chatId, accept) {
+        if (!available)
+            return;
+
+        root.link.sendRequest(accept ? "chat.acceptInvite" : "chat.declineInvite", {
+            "provider": provider,
+            "chatId": chatId
+        }, response => {
+            if (response.error) {
+                root.log.warn("invite response failed:", response.error);
+                ToastService.showError(accept ? I18n.tr("Could not join") : I18n.tr("Could not decline"), response.error);
+                return;
+            }
+
+            if (accept) {
+                ToastService.showInfo(I18n.tr("Joined"));
+                return;
+            }
+
+            ToastService.showInfo(I18n.tr("Invitation declined"));
+            if (root.activeProvider === provider && root.activeChatId === chatId)
+                root.closeChat();
+        });
+    }
+
     // ------------------------------------------------------------ providers
 
     function setProviderEnabled(providerId, enabled) {

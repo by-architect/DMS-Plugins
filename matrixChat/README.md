@@ -95,11 +95,29 @@ Unencrypted rooms are readable immediately either way.
 | Delete for everyone (redaction) | yes |
 | Direct messages named after the other person | yes |
 | Spaces | listed and taggable, but they are containers rather than conversations |
-| Invitations | shown, so you can see you have been invited |
+| Invitations | shown in the conversation list, and joined or declined from it |
 | History before this device existed | unlock it with your recovery key, see below |
 | Backfill of older messages | not yet — the room shows what has arrived since signing in |
 | Search | local only — the DMS store indexes what it has received |
 | Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
+
+## Invitations
+
+An invitation to a room appears as an ordinary conversation tagged **invite**,
+named after the room and saying who asked you. Open it and the composer is
+replaced by the only two answers there are: **Join** (`Alt+Y`) or **Decline**
+(`Alt+N`).
+
+Joining enters the room and the conversation carries on as any other. Declining
+leaves the room, forgets it, and removes it here — unless there is real history
+in it from a previous stay, which is kept.
+
+It works both ways round: an invitation accepted or declined in another client
+stops being one here too, and one that arrives while the shell is closed is
+waiting the next time it starts.
+
+If you would rather not see them at all, turn **Show Invitations** off under the
+chat filters below. That only hides them; nothing is answered on your behalf.
 
 ## Settings
 
@@ -120,7 +138,7 @@ Under **Settings → Chats → Matrix**:
 | Access token and device id | `~/.local/share/dms-matrix/session.json`, mode 0600 | matrixChat |
 | Encryption keys | `~/.local/share/dms-matrix/crypto.db` | matrixChat |
 | Sync position | `~/.local/share/dms-matrix/sync.json` | matrixChat |
-| Room names | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
+| Room names and pending invitations | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
 | Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |
 | Plugin settings | `~/.config/DankMaterialShell/plugin_settings.json` | DMS |

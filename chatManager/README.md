@@ -32,8 +32,9 @@ DMS.
                         ChatWindow.qml     ChatManagerSettings.qml
 ```
 
-The wire protocol is unchanged from when the host lived inside `dms`, which is
-why **provider bridges needed no changes at all**.
+The wire protocol is the one from when the host lived inside `dms`, which is why
+**provider bridges needed no changes at all**; it has since gained invitations,
+below, which a provider that has no such notion simply never declares.
 
 ## What runs where
 
@@ -74,6 +75,38 @@ itself, so there is nothing for the provider to launch.
 
 The manifest needs a component of some kind — a manifest with none is rejected by
 DMS as invalid, which is what the daemon surface provides.
+
+### Invitations
+
+One addition to the contract as `docs/CHAT-PLUGINS.md` describes it, for services
+where a conversation can arrive as an invitation you have not answered.
+
+A provider declares the `invites` capability, publishes such a conversation with
+`"invite"` among its `tags`, and answers two calls:
+
+```json
+{"id":12,"method":"acceptInvite","params":{"chatId":"!room:example.org"}}
+{"id":13,"method":"declineInvite","params":{"chatId":"!room:example.org"}}
+```
+
+The conversation window then offers **Join** and **Decline** in place of the
+composer, since nothing can be sent into a conversation you are not in. A
+declined one is removed locally as well — the provider stops mentioning it, so
+nothing would ever update the row again — unless it holds messages somebody
+actually wrote, which are kept.
+
+An invitation answered on another device is reported with one event, and
+removed by the same rule:
+
+```json
+{"event":"chatGone","chatId":"!room:example.org"}
+```
+
+An invitation has no messages of its own, and conversations that have never had
+any activity stay out of the list. A bridge should therefore give one a `lastTs`
+and a `lastText`, and may send the invitation itself as a `system` message so
+the conversation does not open empty. `system` is what keeps it out of unread
+counts and notifications.
 
 ## Building
 
