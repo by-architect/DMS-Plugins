@@ -3,6 +3,7 @@ import qs.Common
 import qs.Services
 import qs.Widgets
 import "filters.js" as Filters
+import "rownav.js" as RowNav
 
 // One of the six category slots. Empty shows an "add" placeholder; filled
 // shows a header (name, match count, edit/delete) plus a filtered flow.
@@ -14,6 +15,12 @@ Rectangle {
     property var category: null
     required property var allItems
     required property string searchQuery
+    // Shared across every container by the window, so Alt+j/k moves the
+    // highlighted row in lockstep everywhere at once rather than navigating
+    // one container at a time.
+    property int currentRowIndex: -1
+
+    onCurrentRowIndexChanged: RowNav.scrollRowIntoView(catFlick, catRepeater, currentRowIndex)
 
     signal saveRequested(var category)
     signal deleteRequested
@@ -279,6 +286,8 @@ Rectangle {
             height: parent.height - 22 - 1 - Theme.spacingS * 2
 
             DankFlickable {
+                id: catFlick
+
                 anchors.fill: parent
                 clip: true
                 contentHeight: catCol.height
@@ -292,12 +301,16 @@ Rectangle {
                     spacing: 1
 
                     Repeater {
+                        id: catRepeater
+
                         model: root.matched
 
                         NotificationRow {
                             required property var modelData
+                            required property int index
 
                             item: modelData
+                            isCurrent: index === root.currentRowIndex
                             onRemoveRequested: NotificationService.removeFromHistory(modelData.id)
                         }
                     }

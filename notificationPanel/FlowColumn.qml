@@ -2,6 +2,7 @@ import QtQuick
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "rownav.js" as RowNav
 
 // The full-height column on the right: every notification, newest first,
 // narrowed only by the search bar (no category filter applies here).
@@ -10,6 +11,10 @@ Rectangle {
 
     required property var items
     required property string emptyReason
+    // Shared across every container by the window; see CategoryTile for why.
+    property int currentRowIndex: -1
+
+    onCurrentRowIndexChanged: RowNav.scrollRowIntoView(flowFlick, flowRepeater, currentRowIndex)
 
     radius: Theme.cornerRadius
     color: Theme.floatingWindowNestedSurface
@@ -67,6 +72,8 @@ Rectangle {
             height: parent.height - 18 - 1 - Theme.spacingS * 2
 
             DankFlickable {
+                id: flowFlick
+
                 anchors.fill: parent
                 clip: true
                 contentHeight: flowCol.height
@@ -80,12 +87,16 @@ Rectangle {
                     spacing: 1
 
                     Repeater {
+                        id: flowRepeater
+
                         model: root.items
 
                         NotificationRow {
                             required property var modelData
+                            required property int index
 
                             item: modelData
+                            isCurrent: index === root.currentRowIndex
                             onRemoveRequested: NotificationService.removeFromHistory(modelData.id)
                         }
                     }
