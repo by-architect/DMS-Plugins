@@ -20,9 +20,16 @@ PluginComponent {
 
     horizontalBarPill: Component {
         StyledRect {
-            width: pillContent.implicitWidth + Theme.spacingM * 2
-            height: parent.widgetThickness
-            radius: Theme.cornerRadius
+            // The pill's size on the bar comes from these IMPLICIT values:
+            // BasePill reads implicitWidth/implicitHeight and adds the bar's
+            // own widget padding around them. Setting width/height instead
+            // leaves the implicit size at zero, the pill collapses to bare
+            // padding, and on a vertical bar every icon ends up pressed
+            // against its neighbours. `parent` here is BasePill's Loader,
+            // which has no widgetThickness — that comes from root.
+            implicitWidth: pillContent.implicitWidth + Theme.spacingS * 2
+            implicitHeight: root.widgetThickness
+            radius: height / 2
             color: ScreenCatcherService.isRecording ? Theme.withAlpha(Theme.error, 0.16) : "transparent"
 
             Row {
@@ -103,44 +110,50 @@ PluginComponent {
     // recording; the horizontal pill has the room for an inline stop and
     // keeps it.
     verticalBarPill: Component {
-        StyledRect {
-            // On a vertical bar the pill's *height* is its inner padding: the
-            // icon otherwise sits flush against the widgets above and below it.
-            // Never shorter than the bar is thick, so the idle pill reads as a
-            // square button rather than a squeezed sliver.
-            readonly property real verticalPadding: Theme.spacingL
-
-            width: parent.widgetThickness
-            height: Math.max(parent.widgetThickness, vPillContent.implicitHeight + verticalPadding * 2)
-            radius: Theme.cornerRadius
-            color: ScreenCatcherService.isRecording ? Theme.withAlpha(Theme.error, 0.16) : "transparent"
+        Item {
+            // Implicit size only — see the horizontal pill. The icon sits in a
+            // round well of its own rather than colouring the whole pill, so
+            // the highlight is a circle instead of a short wide slab, and the
+            // bar's own padding is what separates it from its neighbours.
+            implicitWidth: root.widgetThickness
+            implicitHeight: vPillContent.implicitHeight
 
             Column {
                 id: vPillContent
+
                 anchors.centerIn: parent
-                spacing: Theme.spacingXS
+                spacing: 1
 
-                DankIcon {
-                    id: vRecIcon
+                Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
-                    color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
-                    size: root.iconSize
-                    filled: ScreenCatcherService.isRecording
+                    width: root.iconSize + 10
+                    height: width
+                    radius: width / 2
+                    color: ScreenCatcherService.isRecording ? Theme.withAlpha(Theme.error, 0.16) : "transparent"
 
-                    SequentialAnimation on opacity {
-                        running: ScreenCatcherService.isRecording
-                        loops: Animation.Infinite
-                        onRunningChanged: if (!running) vRecIcon.opacity = 1
-                        NumberAnimation {
-                            to: 0.35
-                            duration: 600
-                            easing.type: Easing.InOutQuad
-                        }
-                        NumberAnimation {
-                            to: 1
-                            duration: 600
-                            easing.type: Easing.InOutQuad
+                    DankIcon {
+                        id: vRecIcon
+
+                        anchors.centerIn: parent
+                        name: ScreenCatcherService.isRecording ? "fiber_manual_record" : "screenshot_monitor"
+                        color: ScreenCatcherService.isRecording ? Theme.error : Theme.surfaceText
+                        size: root.iconSize
+                        filled: ScreenCatcherService.isRecording
+
+                        SequentialAnimation on opacity {
+                            running: ScreenCatcherService.isRecording
+                            loops: Animation.Infinite
+                            onRunningChanged: if (!running) vRecIcon.opacity = 1
+                            NumberAnimation {
+                                to: 0.35
+                                duration: 600
+                                easing.type: Easing.InOutQuad
+                            }
+                            NumberAnimation {
+                                to: 1
+                                duration: 600
+                                easing.type: Easing.InOutQuad
+                            }
                         }
                     }
                 }

@@ -45,9 +45,16 @@ PluginComponent {
 
     horizontalBarPill: Component {
         StyledRect {
-            width: pillRow.implicitWidth + Theme.spacingM * 2
-            height: parent.widgetThickness
-            radius: Theme.cornerRadius
+            // The pill's size on the bar comes from these IMPLICIT values:
+            // BasePill reads implicitWidth/implicitHeight and adds the bar's
+            // own widget padding around them. Setting width/height instead
+            // leaves the implicit size at zero, the pill collapses to bare
+            // padding, and on a vertical bar every icon ends up pressed
+            // against its neighbours. `parent` here is BasePill's Loader,
+            // which has no widgetThickness — that comes from root.
+            implicitWidth: pillRow.implicitWidth + Theme.spacingS * 2
+            implicitHeight: root.widgetThickness
+            radius: height / 2
             color: root.busy ? Theme.withAlpha(root.accent, 0.16) : "transparent"
 
             Row {
@@ -106,26 +113,33 @@ PluginComponent {
     }
 
     verticalBarPill: Component {
-        StyledRect {
-            readonly property real verticalPadding: Theme.spacingS
-
-            width: parent.widgetThickness
-            height: Math.max(parent.widgetThickness, vPillContent.implicitHeight + verticalPadding * 2)
-            radius: Theme.cornerRadius
-            color: root.busy ? Theme.withAlpha(root.accent, 0.16) : "transparent"
+        Item {
+            // Implicit size only — see the horizontal pill. The icon sits in a
+            // round well of its own rather than colouring the whole pill, so
+            // the highlight is a circle instead of a short wide slab.
+            implicitWidth: root.widgetThickness
+            implicitHeight: vPillContent.implicitHeight
 
             Column {
                 id: vPillContent
 
                 anchors.centerIn: parent
-                spacing: 0
+                spacing: 1
 
-                DankIcon {
+                Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    name: root.pillIcon
-                    size: root.iconSize
-                    color: root.accent
-                    filled: root.busy
+                    width: root.iconSize + 10
+                    height: width
+                    radius: width / 2
+                    color: root.busy ? Theme.withAlpha(root.accent, 0.16) : "transparent"
+
+                    DankIcon {
+                        anchors.centerIn: parent
+                        name: root.pillIcon
+                        size: root.iconSize
+                        color: root.accent
+                        filled: root.busy
+                    }
                 }
 
                 // No room for "+1" as well, so a vertical bar shows the count
