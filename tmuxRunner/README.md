@@ -20,10 +20,13 @@ session (same name, `ssh-<host>`) the next time you look.
 Each configured host is also probed in the background for tmux sessions
 already running *on it* -- so if `prod` already has a `deploy` session going,
 `tmux prod` lists `prod / deploy` directly instead of just an entry that
-would start a second, unrelated one. Picking it wraps the same
-ssh-in-tmux pattern as above, but tells the remote tmux to attach to that
-session by name. A plain "New session on prod" entry stays available
-alongside it for starting another one.
+would start a second, unrelated one. Picking it connects straight into that
+session (`ssh -t prod "tmux attach -t deploy"`) with **no local tmux
+wrapper** -- unlike the plain connect entry above, since a session already
+running on the host already has its own detach/reattach; wrapping it in a
+second, local tmux would just be tmux nested inside tmux for no benefit. A
+plain "New session on prod" entry stays available alongside it for starting
+another one.
 
 ## Install
 
@@ -68,10 +71,12 @@ Plugins.
   sshManager's own README asks any consumer to handle it. A host that can't
   be probed for either reason just keeps showing the plain "connect" entry,
   same as before this existed.
-- Selecting a discovered remote session opens the same interactive `ssh` (in
-  a terminal, tmux-wrapped) as the plain connect entry — it never uses a
-  stored password for that part, only the background probe does. The remote
-  side is told to `tmux attach -t <session>` instead of opening a shell.
+- Selecting a discovered remote session opens an interactive `ssh` directly
+  (in a terminal, **not** tmux-wrapped like the plain connect entry) — it
+  never uses a stored password for that part, only the background probe
+  does. The remote side is told to `tmux attach -t <session>` instead of
+  opening a shell, so that session's own tmux is what you land in, not a
+  second local one wrapped around the connection.
 
 ## Settings
 

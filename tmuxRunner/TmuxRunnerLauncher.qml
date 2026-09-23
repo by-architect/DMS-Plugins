@@ -9,18 +9,20 @@ import qs.Services
 // time, filtered locally - so this polls it (throttled) rather than firing a
 // process per keystroke, and getItems() always answers from cache.
 //
-// Also folds in hosts from the sshManager plugin, if installed: each host
-// that has no live tmux session yet shows up as its own entry, and selecting
-// it creates one that runs `ssh` as the session's command -- so a remote
-// connection gets tmux's detach/reattach for free. Once that session exists,
-// the host stops appearing separately; it's just a normal tmux session from
-// then on, found and killed the same way as any other.
-//
-// Each host is also probed in the background (non-interactively, one at a
-// time, throttled harder than the local list since it's a real network
-// round trip) for tmux sessions already running on it -- otherwise there'd
-// be no way to tell a session was already there, and this would always
-// offer to start a redundant new one. See _maybeRefreshRemote below.
+// Also folds in hosts from the sshManager plugin, if installed. Each host is
+// probed in the background (non-interactively, one at a time, throttled
+// harder than the local list since it's a real network round trip) for tmux
+// sessions already running on it -- see _maybeRefreshRemote below. That
+// split matters for how selecting a host behaves:
+//  - A session the probe found already running on the host is attached to
+//    directly (plain `ssh -t host "tmux attach -t <session>"`), with no
+//    local tmux wrapper - that session already has its own detach/reattach
+//    on the remote end, so wrapping it locally too would just be tmux nested
+//    inside tmux for no benefit. See _connectSshRemoteSession.
+//  - A host with no live session yet gets one started via a *local* tmux
+//    wrapper running `ssh` as its command instead of a shell, so the
+//    connection itself gets tmux's detach/reattach for free (the remote end
+//    has nothing to provide that yet). See _connectSsh.
 Item {
     id: root
 
@@ -190,11 +192,7 @@ Item {
             const visibleRemote = byHost ? remoteSessions : remoteSessions.filter(s => s.name.toLowerCase().includes(lower));
 
             for (let j = 0; j < visibleRemote.length; j++) {
-                const rs = visibleRemote[j];
-                const remoteLocalName = _sshRemoteSessionName(h, rs.name);
-                if (liveSessionNames.has(remoteLocalName))
-                    continue;
-                items.push(_sshRemoteItem(h, rs, remoteLocalName));
+                items.push(_sshRemoteItem(h, visibleRemote[j]));
             }
 
             const sessionName = _sshSessionName(h);
@@ -236,7 +234,7 @@ Item {
             return;
         }
         if (item.action === "ssh-attach-remote" && item.sshEntry) {
-            _connectSshRemoteSession(item.sshEntry, item.remoteSessionName, item.sshSessionName);
+            _connectSshRemoteSession(item.sshEntry, item.remoteSessionName);
         }
     }
 
@@ -680,10 +678,12 @@ Item {
     }
 
     // A tmux session that's already running on the remote host itself,
-    // found by the background probe below. Selecting it wraps the same
-    // ssh-inside-tmux pattern as _sshItem, but tells the remote tmux to
-    // attach to this specific session instead of opening a bare shell.
-    function _sshRemoteItem(h, remoteSession, localName) {
+    // found by the background probe below. Selecting it connects straight
+    // in and attaches to that session on the remote end - no local tmux
+    // wrapper, since the remote session already has its own detach/reattach
+    // (that's what a persistent session on the host means); adding a local
+    // one too would just be tmux nested inside tmux for no benefit.
+    function _sshRemoteItem(h, remoteSession) {
         const dest = h.username ? (h.username + "@" + h.host) : h.host;
         const windowLabel = remoteSession.windows === "1" ? " window" : " windows";
         return {
@@ -695,8 +695,7 @@ Item {
             categories: ["SSH Hosts"],
             _preScored: 7500,
             sshEntry: h,
-            remoteSessionName: remoteSession.name,
-            sshSessionName: localName
+            remoteSessionName: remoteSession.name
         };
     }
 
@@ -744,14 +743,6 @@ Item {
         return "ssh-" + base.replace(/[^a-zA-Z0-9_-]/g, "-");
     }
 
-    // Same idea, but for one specific remote session on that host, so
-    // reselecting *that* session resolves to the same local wrapper too.
-    function _sshRemoteSessionName(h, remoteName) {
-        const base = (h.name || h.host || "ssh").toString();
-        const remote = (remoteName || "").toString();
-        return "ssh-" + base.replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + remote.replace(/[^a-zA-Z0-9_-]/g, "-");
-    }
-
     function _sshArgsWithOptions(h, extraOpts) {
         const argv = ["ssh"].concat(extraOpts || []);
         if (h.port && h.port !== "22")
@@ -779,18 +770,19 @@ Item {
         _refresh();
     }
 
-    // Same as _connectSsh, but tells the remote host's own tmux to attach to
-    // a session that the probe below already found running over there,
-    // instead of opening a bare shell.
-    function _connectSshRemoteSession(h, remoteSessionName, localName) {
-        const name = localName || _sshRemoteSessionName(h, remoteSessionName);
+    // Unlike _connectSsh, this opens the host's existing tmux session
+    // directly - no local tmux wrapper. That session already has its own
+    // detach/reattach on the remote end (that's what a persistent session on
+    // the host means), so wrapping it in a second, local tmux would just be
+    // tmux nested inside tmux for no benefit - the local layer can't outlive
+    // the ssh connection the way the remote session already does on its own.
+    function _connectSshRemoteSession(h, remoteSessionName) {
         const remoteCmd = "tmux attach -t " + _shQuote(remoteSessionName);
         // -t has to precede the destination -- ssh treats everything after
         // it as the remote command line, not more of its own options.
         const argv = _sshArgsWithOptions(h, ["-t"]).concat([remoteCmd]);
-        Quickshell.execDetached(_terminalPrefix().concat([tmuxBin, "new-session", "-s", name]).concat(argv));
-        _toast("Attaching via tmux", (h.name || h.host) + " / " + remoteSessionName);
-        _refresh();
+        Quickshell.execDetached(_terminalPrefix().concat(argv));
+        _toast("Attaching", (h.name || h.host) + " / " + remoteSessionName);
     }
 
     function _terminalPrefix() {
