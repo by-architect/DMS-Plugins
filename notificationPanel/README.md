@@ -27,6 +27,19 @@ by the search bar. Each of the six left tiles is empty until you assign it a
 filter; a filled tile shows its own scrollable flow of just the notifications
 that match, further narrowed by the same search bar.
 
+Every card shows its full title and body, wrapped rather than clipped to a
+line or two — nothing is truncated, so there's never a "…" hiding the rest
+of a notification. A card whose notification carries a real photo (as
+opposed to just an app-icon-sized avatar) also gets a larger image preview
+beneath the text, shown in full (never cropped) up to 220px tall.
+
+**Alt+j** / **Alt+k** move a single shared row index down/up — every
+container (all six category tiles and the flow) highlights and scrolls to
+that same index at once, so pressing Alt+j once moves the highlight down a
+row in all seven lists simultaneously rather than navigating one at a time.
+A container with fewer rows than the shared index just stays pinned at its
+own last row once the others move past it.
+
 ## Filter syntax
 
 Two different filter inputs exist, for two different situations.
@@ -119,7 +132,9 @@ filtering immediately. **Esc** closes from anywhere, including while typing;
 it'd just be typed as a search character). While the search field is
 focused, **Ctrl+W** deletes the word before the cursor and **Ctrl+U** clears
 the field — standard readline/shell editing shortcuts that Qt's `TextInput`
-doesn't bind by default.
+doesn't bind by default. **Alt+j** / **Alt+k** move the shared row highlight
+down/up across every container at once, live regardless of search focus
+since the combo never types a character.
 
 ## Implementation notes
 
@@ -161,3 +176,15 @@ fire unconditionally. `SearchBar.qml` instead forwards the real state via
 `DankTextField`'s own `focusStateChanged(bool)` signal into a plain
 `hasFocus` property — use `searchField.hasFocus`, not
 `searchField.field.activeFocus`.
+
+**The Alt+j/k "move together" scroll isn't a ListView `currentIndex`** —
+each container is a plain `Column` of `NotificationRow`s inside a
+`DankFlickable` (rows have variable height now that nothing's truncated, so
+a fixed-height list view wouldn't fit this well). `rownav.js`'s
+`scrollRowIntoView()` reads the target row's actual `y`/`height` off
+`Repeater.itemAt(index)` and nudges `flickable.contentY` only as far as
+needed to bring it fully into view — the same "contain" style scroll
+`wallpaperSearch`'s grid navigation uses, just computed from a repeater
+instead of a `GridView`'s built-in `positionViewAtIndex`. Both
+`CategoryTile` and `FlowColumn` take a `currentRowIndex` prop and react to
+it identically; the window is the only thing that owns the shared index.
