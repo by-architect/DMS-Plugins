@@ -14,14 +14,16 @@ import "actions.js" as Actions
 //
 // Two sources, because the tool that writes these has two outputs:
 //
-//   live      one JSON file per running action under $XDG_RUNTIME_DIR/matrix/fct,
-//             rewritten about four times a second and DELETED when the action
-//             ends — so it can only ever answer "what is running now"
-//   finished  one structured journal record per action, written on every exit
-//             path including a kill, under the tags matrix-fct / matrix-dejavu
+//   live      one JSON file per running action under $XDG_RUNTIME_DIR/matrix/fct
+//             (matrix/dejavu before the rename), rewritten about four times a
+//             second and DELETED when the action ends — so it can only ever
+//             answer "what is running now"
+//   finished  one record per action in the event log, written on every exit
+//             path including a kill: ~/.local/state/fct.json, or the journal
+//             under the tags matrix-fct / matrix-dejavu
 //
 // A finished action therefore never appears in the directory at all; asking the
-// journal is the only way to know how anything went.
+// event log is the only way to know how anything went.
 Singleton {
     id: root
 
