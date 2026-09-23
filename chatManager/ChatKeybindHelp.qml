@@ -79,11 +79,11 @@ StyledRect {
             "title": I18n.tr("An invitation"),
             "binds": [
                 {
-                    "keys": "Ctrl + Shift + Y",
+                    "keys": "Ctrl + Y",
                     "text": I18n.tr("Join the conversation you have been invited to")
                 },
                 {
-                    "keys": "Ctrl + Shift + N",
+                    "keys": "Ctrl + N",
                     "text": I18n.tr("Decline the invitation and remove it")
                 }
             ]

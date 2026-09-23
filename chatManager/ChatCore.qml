@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import qs.Common
+import "links.js" as Links
 
 // Client for the chat subsystem in the DMS backend.
 //
@@ -544,6 +545,21 @@ Item {
                 ToastService.showError(I18n.tr("Message not deleted"), response.error);
             }
         });
+    }
+
+    // openLink opens a link out of a message, if it is one worth opening.
+    //
+    // One door for all of them, because they all come from the same untrusted
+    // place: the text somebody sent, or the preview target their message
+    // carried. Handing either straight to xdg-open is handing the sender the
+    // choice of which program runs on this machine, so only http and https get
+    // through -- see links.js.
+    function openLink(url) {
+        if (!Links.isWebUrl(url)) {
+            root.log.warn("not opening a link that is not http(s):", url);
+            return;
+        }
+        Quickshell.execDetached(["xdg-open", url]);
     }
 
     // copyFileToClipboard puts a file on the clipboard as a file, so it can be

@@ -127,8 +127,8 @@ theirs.
 
 An invitation to a room appears as an ordinary conversation tagged **invite**,
 named after the room and saying who asked you. Open it and the composer is
-replaced by the only two answers there are: **Join** (`Ctrl+Shift+Y`) or
-**Decline** (`Ctrl+Shift+N`).
+replaced by the only two answers there are: **Join** (`Ctrl+Y`) or **Decline**
+(`Ctrl+N`).
 
 Joining enters the room and the conversation carries on as any other. Declining
 leaves the room, forgets it, and removes it here — unless there is real history

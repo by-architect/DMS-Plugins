@@ -593,7 +593,7 @@ remember.
 | `Ctrl+R` / `Ctrl+F` | Reply, again to take the reply back / forward |
 | `Ctrl+Delete` / `Ctrl+Shift+Delete` | Delete for you / for everyone, after confirming |
 | `Ctrl+V` | Attach an image or file from the clipboard |
-| `Ctrl+Shift+Y` / `Ctrl+Shift+N` | Join / decline an invitation |
+| `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
 | `Esc` | Clear the selection, then close |
 
 Attachments are pasted rather than browsed for: copy a file in a file manager,
