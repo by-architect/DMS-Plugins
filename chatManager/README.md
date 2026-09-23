@@ -124,6 +124,14 @@ direction of *already seen*, which is the direction that matters: a
 conversation read on a phone this morning should not be waiting here this
 afternoon.
 
+Opening a conversation reads that position back out of the answer that carries
+its messages -- `chat.history` replies with `readUpTo` and `unread` alongside the
+page -- and marks the conversation read only once the page is here. Both halves
+matter. The conversation list the shell holds is streamed only while a window is
+open, so a conversation opened from the launcher would otherwise be placed by a
+cache that can be hours old and cheerfully report nothing waiting; and marking it
+read before asking would erase the very thing being asked for.
+
 ### Notifications wait for the sync to finish
 
 A bridge that has just connected is not reporting news. It is replaying what

@@ -9,6 +9,10 @@ import qs.Widgets
 // Only shortcuts that work here; the global bindings for opening chat live in
 // Settings under Keyboard Shortcuts, because those are the user's to choose and
 // this cannot know what they picked.
+//
+// Ctrl and a letter, for all of it. The text field keeps focus the whole time,
+// so every one of these has to be a chord it does not want for itself -- and
+// one modifier for the lot is one thing to remember rather than three.
 StyledRect {
     id: root
 
@@ -29,15 +33,15 @@ StyledRect {
             "title": I18n.tr("Selecting a message"),
             "binds": [
                 {
-                    "keys": "Alt + K",
+                    "keys": "Ctrl + K",
                     "text": I18n.tr("Select the previous message")
                 },
                 {
-                    "keys": "Alt + J",
+                    "keys": "Ctrl + J",
                     "text": I18n.tr("Select the next message")
                 },
                 {
-                    "keys": "Shift + Enter",
+                    "keys": "Ctrl + Enter",
                     "text": I18n.tr("Open the selected message's attachment or link")
                 },
                 {
@@ -54,19 +58,19 @@ StyledRect {
                     "text": I18n.tr("Copy the text, or the attachment as a file")
                 },
                 {
-                    "keys": "Alt + R",
-                    "text": I18n.tr("Reply, where the provider supports it")
+                    "keys": "Ctrl + R",
+                    "text": I18n.tr("Reply to it, or press again to take the reply back")
                 },
                 {
-                    "keys": "Alt + F",
+                    "keys": "Ctrl + F",
                     "text": I18n.tr("Forward to another conversation")
                 },
                 {
-                    "keys": "Delete",
+                    "keys": "Ctrl + Delete",
                     "text": I18n.tr("Delete from this device, after confirming")
                 },
                 {
-                    "keys": "Shift + Delete",
+                    "keys": "Ctrl + Shift + Delete",
                     "text": I18n.tr("Delete for everyone, after confirming")
                 }
             ]
@@ -75,11 +79,11 @@ StyledRect {
             "title": I18n.tr("An invitation"),
             "binds": [
                 {
-                    "keys": "Alt + Y",
+                    "keys": "Ctrl + Shift + Y",
                     "text": I18n.tr("Join the conversation you have been invited to")
                 },
                 {
-                    "keys": "Alt + N",
+                    "keys": "Ctrl + Shift + N",
                     "text": I18n.tr("Decline the invitation and remove it")
                 }
             ]
