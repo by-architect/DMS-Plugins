@@ -43,15 +43,22 @@ FocusScope {
     //
     // Deliberately not real focus: the composer keeps that, so typing always
     // reaches the text field. This is a border drawn around one message and
-    // moved with Alt+K/J.
+    // moved with Ctrl+K/J.
     property int selectedIndex: -1
 
-    // Opening a conversation with unread messages puts the view at the first
-    // of them rather than at the bottom. These track that: one waiting for the
-    // messages to arrive, one keeping the view there afterwards instead of
-    // yanking it to the newest message on the next refresh.
-    property bool _awaitingUnreadJump: false
-    property bool _heldAtUnread: false
+    // Where the view belongs, and whether it is still ours to place.
+    //
+    // Both are needed because the open conversation is reloaded whole on every
+    // state push, and a list whose model is replaced puts itself back where it
+    // thinks it was rather than where it was put. So the intended position is
+    // remembered and reapplied, until the user scrolls somewhere themselves.
+    property int viewPin: -1
+    property int viewPinMode: ListView.Beginning
+    property bool viewPinned: true
+
+    // Whether this open is still waiting for the messages that decide where it
+    // lands. Set when a conversation is opened, cleared by the first page.
+    property bool _awaitingUnread: false
 
     readonly property var selectedMessage: selectedIndex >= 0 && selectedIndex < root.chatCore.messages.length ? root.chatCore.messages[selectedIndex] : null
 
@@ -64,6 +71,16 @@ FocusScope {
     onHasOverlayChanged: {
         if (!hasOverlay)
             Qt.callLater(() => root.takeFocus());
+    }
+
+    // The view can be built after the conversation was opened: a popout creates
+    // its contents as it appears. So it places itself on what is already there,
+    // rather than on a signal that has been and gone.
+    Component.onCompleted: {
+        if (root.chatCore.messages.length > 0)
+            root.pinView(root.chatCore.firstUnreadIndex);
+        else
+            root._awaitingUnread = root.chatCore.hasActiveChat;
     }
 
     function takeFocus() {
@@ -80,6 +97,57 @@ FocusScope {
         root.chatCore.answerInvite(root.chatCore.activeProvider, root.chatCore.activeChatId, accept);
     }
 
+    // ----------------------------------------------------------- the view
+
+    // pinView parks the view on a message -- or on the newest, with -1 -- and
+    // keeps it there through the reloads that follow.
+    //
+    // Contain for a selection, which only has to stay on screen; Beginning for
+    // the unread mark, which belongs at the top with what is unread below it.
+    function pinView(index, mode) {
+        root.viewPin = index;
+        root.viewPinMode = mode === undefined ? ListView.Beginning : mode;
+        root.viewPinned = true;
+        root.applyPin();
+    }
+
+    // applyPin puts the view where it belongs, and keeps saying so for a moment.
+    //
+    // Once is not enough: the messages and the layout they produce do not
+    // arrive together, the list restores its own scroll position when its model
+    // is replaced, and a position set before either has settled is quietly
+    // dropped -- which is what made opening at the unread divider a coin toss.
+    function applyPin() {
+        if (!root.viewPinned)
+            return;
+        root._place();
+        pinSettle.attempts = 0;
+        pinSettle.restart();
+    }
+
+    function _place() {
+        if (root.viewPin < 0)
+            messageList.positionViewAtEnd();
+        else if (root.viewPin < root.chatCore.messages.length)
+            messageList.positionViewAtIndex(root.viewPin, root.viewPinMode);
+    }
+
+    Timer {
+        id: pinSettle
+
+        property int attempts: 0
+
+        interval: 50
+        repeat: true
+        onTriggered: {
+            if (!root.viewPinned || ++pinSettle.attempts > 4) {
+                pinSettle.stop();
+                return;
+            }
+            root._place();
+        }
+    }
+
     // ------------------------------------------------------------- selection
 
     function selectPrevious() {
@@ -88,7 +156,7 @@ FocusScope {
             return;
         // From nothing, start at the newest and walk back.
         root.selectedIndex = root.selectedIndex < 0 ? count - 1 : Math.max(0, root.selectedIndex - 1);
-        messageList.positionViewAtIndex(root.selectedIndex, ListView.Contain);
+        root.pinView(root.selectedIndex, ListView.Contain);
     }
 
     function selectNext() {
@@ -96,11 +164,15 @@ FocusScope {
         if (count === 0 || root.selectedIndex < 0)
             return;
         root.selectedIndex = Math.min(count - 1, root.selectedIndex + 1);
-        messageList.positionViewAtIndex(root.selectedIndex, ListView.Contain);
+        root.pinView(root.selectedIndex, ListView.Contain);
     }
 
     function clearSelection() {
         root.selectedIndex = -1;
+        // Following the newest message again if that is already where the view
+        // is; otherwise it stays where it was left.
+        root.viewPin = -1;
+        root.viewPinned = messageList.atYEnd;
     }
 
     // --------------------------------------------------------------- actions
@@ -178,9 +250,20 @@ FocusScope {
         root.clearSelection();
     }
 
-    function replyToSelected() {
-        if (root.selectedMessage && root.chatCore.activeSupports("reply"))
-            root.replyTarget = root.selectedMessage;
+    // toggleReply answers the selected message, or takes the answer back.
+    //
+    // The same key both ways: the reply bar is a mode the composer is in, and
+    // the way out of a mode is the key that put you in it.
+    function toggleReply() {
+        if (!root.chatCore.activeSupports("reply"))
+            return;
+
+        const msg = root.selectedMessage;
+        if (!msg || (root.replyTarget && root.replyTarget.id === msg.id)) {
+            root.replyTarget = null;
+            return;
+        }
+        root.replyTarget = msg;
     }
 
     function forwardSelected() {
@@ -191,68 +274,85 @@ FocusScope {
     Connections {
         target: root.chatCore
 
+        // Opening, rather than the conversation changing: opening the one
+        // already open -- from the launcher, or from the unread cycle landing
+        // back on it -- is still an open, and still has to place the view.
+        function onChatOpened(provider, chatId) {
+            root.replyTarget = null;
+            root.selectedIndex = -1;
+            root.pendingDelete = null;
+
+            // Where it lands is decided by the page that is still on its way:
+            // the read position comes back with it. Until then, the newest
+            // message, so an opening conversation is never blank.
+            root._awaitingUnread = true;
+            root.pinView(-1);
+        }
+
+        // Anything that changes the conversation without opening one -- a
+        // declined invitation closing the view, mostly.
         function onActiveChatIdChanged() {
             root.replyTarget = null;
             root.selectedIndex = -1;
             root.pendingDelete = null;
-            // The mark is set as the conversation opens, before its messages
-            // have been asked for -- so what is known here is only whether to
-            // expect one.
-            root._awaitingUnreadJump = root.chatCore.unreadMarkTs > 0;
-            root._heldAtUnread = false;
-            Qt.callLater(() => messageList.positionViewAtEnd());
         }
 
         function onMessagesChanged() {
-            if (root._awaitingUnreadJump) {
-                const at = root.chatCore.firstUnreadIndex;
-                if (at > 0) {
-                    root._awaitingUnreadJump = false;
-                    root._heldAtUnread = true;
-                    // Beginning, so the divider is the first thing on screen
-                    // and the unread messages read downwards from it.
-                    Qt.callLater(() => messageList.positionViewAtIndex(at, ListView.Beginning));
-                    return;
-                }
-                if (root.chatCore.messages.length > 0) {
-                    // Messages arrived and none of them is behind a mark: there
-                    // is nowhere to jump to, so stop waiting for one.
-                    root._awaitingUnreadJump = false;
-                }
+            if (root._awaitingUnread && root.chatCore.messages.length > 0) {
+                root._awaitingUnread = false;
+                // Beginning, so the divider is the first thing on screen and
+                // the unread messages read downwards from it. Nothing unread
+                // means the newest message, as ever.
+                root.pinView(root.chatCore.firstUnreadIndex);
+                return;
             }
 
-            // Stay pinned to the newest message unless the user has scrolled up
-            // to read something -- including the unread mark they were put at.
-            if (messageList.atYEnd || (root.selectedIndex < 0 && !root._heldAtUnread))
-                Qt.callLater(() => messageList.positionViewAtEnd());
+            // Every push reloads the page, and the list puts itself back where
+            // it was rather than where it was told to be. By name rather than
+            // as a closure, so a burst of pushes queues one of these and not
+            // one per push.
+            Qt.callLater(root.applyPin);
         }
     }
 
     // Shortcuts rather than Keys handlers: the composer holds real focus and
     // consumes most key events, so a handler on this scope would never see them.
+    //
+    // Ctrl throughout, where these were Alt: one modifier for everything the
+    // conversation does is one thing to remember, and it is the one every other
+    // key here already used.
     Shortcut {
-        sequences: ["Alt+K"]
+        sequences: ["Ctrl+K"]
         onActivated: root.selectPrevious()
     }
 
     Shortcut {
-        sequences: ["Alt+J"]
+        sequences: ["Ctrl+J"]
         onActivated: root.selectNext()
     }
 
     Shortcut {
-        sequences: ["Alt+R"]
-        onActivated: root.replyToSelected()
+        sequences: ["Ctrl+R"]
+        onActivated: root.toggleReply()
     }
 
     Shortcut {
-        sequences: ["Alt+F"]
+        sequences: ["Ctrl+F"]
         onActivated: root.forwardSelected()
     }
 
-    // Paste is intercepted rather than left to the text field, which consumes
-    // Ctrl+V before anything wrapping it is told. The composer then handles
-    // both cases: an image is staged, text is inserted at the cursor.
+    // Opens the selected message's attachment or link. Ctrl+Enter rather than
+    // Shift+Enter, and only with something selected, so plain Enter keeps
+    // meaning send and nothing else has to be thought about while typing.
+    Shortcut {
+        sequences: ["Ctrl+Return", "Ctrl+Enter"]
+        enabled: root.selectedIndex >= 0 && !root.hasOverlay
+        onActivated: root.openSelected()
+    }
+
+    // Only fires when the composer does not hold focus, which is rare: an
+    // editable text field answers for the paste shortcut first, so the composer
+    // takes that key itself -- see pasteKeys there.
     Shortcut {
         sequences: ["Ctrl+V"]
         enabled: !root.hasOverlay
@@ -267,28 +367,39 @@ FocusScope {
         onActivated: root.copyMessage(root.selectedMessage)
     }
 
+    // Ctrl+Delete rather than plain Delete, which never reached this: an
+    // editable text field answers for Delete before the shortcut system is
+    // asked, and the composer always holds focus. Taking the key from the field
+    // instead would mean a draft that cannot be edited while a message happens
+    // to be selected, which is a worse trade than a modifier.
     Shortcut {
-        sequences: ["Shift+Delete"]
+        sequences: ["Ctrl+Shift+Delete"]
         enabled: root.selectedIndex >= 0 && !root.hasOverlay
         onActivated: root.requestDelete(root.selectedMessage, true)
     }
 
     Shortcut {
-        sequences: ["Delete"]
+        sequences: ["Ctrl+Delete"]
         enabled: root.selectedIndex >= 0 && !root.hasOverlay
         onActivated: root.requestDelete(root.selectedMessage, false)
     }
 
     // Only ever live on an unanswered invitation, so these cannot collide with
     // anything the conversation itself uses.
+    //
+    // Shifted, where the rest are not: plain Ctrl+Y is redo as far as any text
+    // field is concerned, and it never reaches here while one has focus -- as
+    // the conversation list's search box does. Both answers keep the same shape
+    // rather than only the one that had to move, and the extra key is no loss
+    // on a choice this consequential. The bar itself has both as buttons.
     Shortcut {
-        sequences: ["Alt+Y"]
+        sequences: ["Ctrl+Shift+Y"]
         enabled: root.isInvite && !root.hasOverlay
         onActivated: root.answerInvite(true)
     }
 
     Shortcut {
-        sequences: ["Alt+N"]
+        sequences: ["Ctrl+Shift+N"]
         enabled: root.isInvite && !root.hasOverlay
         onActivated: root.answerInvite(false)
     }
@@ -309,15 +420,6 @@ FocusScope {
                 root.clearSelection();
                 event.accepted = true;
                 return;
-            }
-        }
-
-        // Shift+Enter opens the selected message's attachment or link. Plain
-        // Enter always sends, because the composer always holds focus.
-        if ((event.modifiers & Qt.ShiftModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-            if (root.selectedIndex >= 0) {
-                root.openSelected();
-                event.accepted = true;
             }
         }
     }
@@ -526,11 +628,23 @@ FocusScope {
                         root.chatCore.loadOlder();
                 }
 
-                // Reaching the bottom is the user having caught up, so the
-                // view goes back to following the newest message.
+                // The user taking the view somewhere is the end of our claim on
+                // it: a message arriving must not drag them back down from what
+                // they are reading.
+                onIsUserScrollingChanged: {
+                    if (messageList.isUserScrolling)
+                        root.viewPinned = false;
+                }
+
+                // Scrolling back to the bottom is the user having caught up, so
+                // the view follows the newest message again. Only when they did
+                // the scrolling: a list momentarily reports itself at the end
+                // while its model is being replaced.
                 onAtYEndChanged: {
-                    if (atYEnd)
-                        root._heldAtUnread = false;
+                    if (messageList.atYEnd && messageList.isUserScrolling) {
+                        root.viewPin = -1;
+                        root.viewPinned = true;
+                    }
                 }
             }
 
@@ -577,10 +691,9 @@ FocusScope {
             onReplyCleared: root.replyTarget = null
             onSent: {
                 root.replyTarget = null;
-                root.clearSelection();
+                root.selectedIndex = -1;
                 // Writing is catching up, whatever was left unread above.
-                root._heldAtUnread = false;
-                Qt.callLater(() => messageList.positionViewAtEnd());
+                root.pinView(-1);
             }
         }
     }
