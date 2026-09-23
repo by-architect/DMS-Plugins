@@ -1,0 +1,15 @@
+{
+    "id": "mountManager",
+    "name": "Mount Manager",
+    "description": "Bar pill and popout for disks: every block device with its mount path and usage, mount and unmount without root, and safely power off a removable drive before unplugging it",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring"],
+    "icon": "hard_drive",
+    "component": "./MountManagerWidget.qml",
+    "settings": "./MountManagerSettings.qml",
+    "dependencies": ["lsblk", "udisksctl"],
+    "requires": ["lsblk", "udisksctl"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}

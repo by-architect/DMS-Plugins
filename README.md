@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Fifteen plugins in five shapes: **launcher** plugins that answer a trigger word
+Sixteen plugins in five shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, a **bar widget** that lives in the bar and opens a popout under itself,
 a **chat provider** that connects an outside messaging service to the DMS chat
@@ -22,6 +22,7 @@ system, and an **overlay** that replaces a piece of shell chrome.
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationLine](notificationLine/) | overlay | every notification | — |
 | [fileActions](fileActions/) | bar widget | the pill, and its popout | `fct`, or any writer of per-action status files |
+| [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
 | [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
 | [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
 | [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
@@ -460,6 +461,37 @@ operation into a directory shows up here. The full contract is in the plugin's
 README.
 
 → [fileActions/README.md](fileActions/README.md)
+
+## mountManager
+
+Every disk in the bar, with the two buttons that matter: mount it, or unmount
+it before pulling it out. No root — `udisks` and polkit already allow a
+logged-in user to do that to their own removable media.
+
+```
+   [ ⇄ 1/2 ]     two removable volumes attached, one of them mounted
+```
+
+The popout lists one row per thing that holds a filesystem — partitions,
+unlocked containers, and whole disks formatted without a partition table —
+removable ones on top. Each row shows where it is mounted, how full it is, and
+buttons to open the mount point, copy its path, mount, unmount, or power the
+whole disk off.
+
+Three deliberate refusals. **System mounts have no unmount button at all** —
+not a disabled one: `/`, `/nix/store` and `/boot` are listed with their usage,
+marked `system`, and left alone. **Locked LUKS volumes are not unlocked here**,
+so no passphrase passes through the bar; the row shows the `udisksctl unlock`
+command with a button to copy it. And **an unlocked LUKS container gets no row
+of its own**, because "crypto_LUKS, not mounted" sitting above the filesystem
+it protects is noise — the mapper row takes the partition's label instead of
+its `luks-<uuid>` name.
+
+When something fails, udisks' own sentence is what you get — "Target is busy"
+rather than an exit code, which is the difference between "it did not work" and
+"close the file manager sitting in that directory".
+
+→ [mountManager/README.md](mountManager/README.md)
 
 ---
 
