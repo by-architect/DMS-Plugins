@@ -11,6 +11,10 @@ import qs.Widgets
 // browser button -- opening one from a popout put the dialog behind the window,
 // where it could not be reached without closing the chat first.
 //
+// Taking that key is most of the work, and why pasteKeys below exists: a
+// focused text field answers for the paste shortcut before the shortcut system
+// is consulted, so nothing outside the field can be given it.
+//
 // Staged rather than sent on paste: you can add several, see what you picked,
 // remove a mistake, and write a caption before anything leaves.
 Item {
@@ -88,10 +92,9 @@ Item {
 
     // paste handles the clipboard itself, for both media and text.
     //
-    // The text field's own Ctrl+V cannot be extended: the inner input consumes
-    // the key before anything wrapping it is told, so intercepting the shortcut
-    // and doing the whole job here is the only way to stage an image. Text is
-    // then inserted by hand, which is why this reads it rather than leaving it.
+    // The text field's own paste cannot be extended -- it knows about text and
+    // nothing else -- so the whole job is done here instead, which is why this
+    // reads the text as well and inserts it by hand.
     function paste() {
         if (root.pasting)
             return;
@@ -105,7 +108,45 @@ Item {
         //
         // uri-list comes first because copying a file in a file manager also
         // offers its name as text, and attaching the file is what was meant.
-        const script = "types=$(wl-paste --list-types 2>/dev/null)\n" + "if printf '%s\\n' \"$types\" | grep -qx 'text/uri-list'; then\n" + "  wl-paste --type text/uri-list 2>/dev/null | tr -d '\\r' | grep -v '^$' | while IFS= read -r u; do\n" + "    printf 'FILE:%s\\n' \"${u#file://}\"\n" + "  done\n" + "  exit 0\n" + "fi\n" + "media=$(printf '%s\\n' \"$types\" | grep -E '^(image|video|audio|application)/' | head -1)\n" + "if [ -n \"$media\" ]; then\n" + "  ext=${media##*/}\n" + "  case \"$ext\" in jpeg) ext=jpg ;; esac\n" + "  f=$(mktemp \"${XDG_RUNTIME_DIR:-/tmp}/dms-chat-paste-XXXXXX.$ext\")\n" + "  wl-paste --type \"$media\" > \"$f\" 2>/dev/null\n" + "  if [ -s \"$f\" ]; then printf 'FILE:%s\\n' \"$f\"; exit 0; fi\n" + "  rm -f \"$f\"\n" + "fi\n" + "printf 'TEXT:%s' \"$(wl-paste --no-newline 2>/dev/null)\"\n";
+        const script = `
+types=$(wl-paste --list-types 2>/dev/null)
+
+# A file copied in a file manager, which offers its name as text as well.
+# Only file:// entries: a browser offers a uri-list for an ordinary web link
+# too, and that is text somebody meant to paste, not an attachment.
+if printf '%s\\n' "$types" | grep -qx 'text/uri-list'; then
+  uris=$(wl-paste --type text/uri-list 2>/dev/null | tr -d '\\r' | grep '^file://')
+  if [ -n "$uris" ]; then
+    printf '%s\\n' "$uris" | while IFS= read -r u; do
+      printf 'FILE:%s\\n' "\${u#file://}"
+    done
+    exit 0
+  fi
+fi
+
+# Raw bytes, as a screenshot tool or a browser's "copy image" offers.
+media=$(printf '%s\\n' "$types" | grep -E '^(image|video|audio)/' | head -1)
+
+# Some applications put their own document format on the clipboard beside the
+# text they copied. That is worth writing to a file only when there is no text
+# with it -- otherwise copying a sentence out of a word processor would arrive
+# here as an attachment nobody asked for.
+if [ -z "$media" ] && ! printf '%s\\n' "$types" | grep -q '^text/plain'; then
+  media=$(printf '%s\\n' "$types" | grep -E '^application/' | head -1)
+fi
+
+if [ -n "$media" ]; then
+  ext=\${media##*/}
+  ext=\${ext%%;*}
+  case "$ext" in jpeg) ext=jpg ;; svg+xml) ext=svg ;; esac
+  f=$(mktemp "\${XDG_RUNTIME_DIR:-/tmp}/dms-chat-paste-XXXXXX.$ext")
+  wl-paste --type "$media" > "$f" 2>/dev/null
+  if [ -s "$f" ]; then printf 'FILE:%s\\n' "$f"; exit 0; fi
+  rm -f "$f"
+fi
+
+printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
+`;
 
         Proc.runCommand("chat.paste", ["sh", "-c", script], (stdout, exitCode) => {
             root.pasting = false;
@@ -177,6 +218,25 @@ Item {
             else
                 root.insertText(text);
         });
+    }
+
+    // Where Ctrl+V is caught.
+    //
+    // Not a Shortcut, the way the conversation's other keys are: Qt asks the
+    // focused item first, an editable text field says yes to paste, and the
+    // shortcut is then never fired -- what happened instead was the field's own
+    // paste, which is fine for text and does nothing whatsoever for an image.
+    // A text field hands modified keys to its forward targets before acting on
+    // them, so this is the one place that comes first.
+    Item {
+        id: pasteKeys
+
+        Keys.onPressed: event => {
+            if (event.key !== Qt.Key_V || !(event.modifiers & Qt.ControlModifier))
+                return;
+            root.paste();
+            event.accepted = true;
+        }
     }
 
     Column {
@@ -321,6 +381,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: parent.width - 36 - Theme.spacingS
                 enabled: root.canSend
+                keyForwardTargets: [pasteKeys]
                 placeholderText: {
                     if (!root.canSend)
                         return I18n.tr("This provider cannot send messages");
@@ -329,12 +390,13 @@ Item {
                     return root.canAttach ? I18n.tr("Message, or paste an image") : I18n.tr("Message");
                 }
 
-                // Enter always sends. Shift+Enter is left unhandled here so it
-                // reaches the conversation, where it opens the selected
-                // message's attachment or link -- the text field holds focus
-                // permanently, so it is the only place those keys can arrive.
+                // Enter sends. A modifier means somewhere else: Ctrl+Enter is
+                // the conversation's, where it opens the selected message's
+                // attachment or link, and Shift+Enter is nobody's -- this is a
+                // one-line field, and sending on the chord people press for a
+                // new line is a message sent by accident.
                 Keys.onReturnPressed: event => {
-                    if (event.modifiers & Qt.ShiftModifier) {
+                    if (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) {
                         event.accepted = false;
                         return;
                     }
@@ -343,7 +405,7 @@ Item {
                 }
 
                 Keys.onEnterPressed: event => {
-                    if (event.modifiers & Qt.ShiftModifier) {
+                    if (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) {
                         event.accepted = false;
                         return;
                     }

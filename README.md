@@ -503,18 +503,21 @@ dms ipc call chats cycle                   # walk unread conversations
 Worth binding under Settings → Keyboard Shortcuts.
 
 In a conversation the text field always holds focus, so typing always goes
-there:
+there — which is also why everything else is Ctrl and one key: those are the
+chords a text field does not want for itself, and one modifier is one thing to
+remember.
 
 | | |
 |---|---|
 | `Enter` | Send |
-| `Alt+K` / `Alt+J` | Move the selection through messages |
-| `Shift+Enter` | Open the selected message's attachment or link |
+| `Ctrl+K` / `Ctrl+J` | Move the selection through messages |
+| `Ctrl+Enter` | Open the selected message's attachment or link |
 | `Ctrl+Shift+C` | Copy the selected message, or its attachment as a file |
-| `Alt+R` / `Alt+F` | Reply / forward |
-| `Delete` / `Shift+Delete` | Delete for you / for everyone, after confirming |
+| `Ctrl+R` / `Ctrl+F` | Reply, again to take the reply back / forward |
+| `Ctrl+Delete` / `Ctrl+Shift+Delete` | Delete for you / for everyone, after confirming |
 | `Ctrl+V` | Attach an image or file from the clipboard |
-| `Esc` | Close |
+| `Ctrl+Shift+Y` / `Ctrl+Shift+N` | Join / decline an invitation |
+| `Esc` | Clear the selection, then close |
 
 Attachments are pasted rather than browsed for: copy a file in a file manager,
 or an image from a screenshot tool, and paste. A pasted or typed path followed
