@@ -47,6 +47,12 @@ type persistedRoom struct {
 	InvitedBy string `json:"invitedBy,omitempty"`
 	ReadUpTo  int64  `json:"readUpTo,omitempty"`
 
+	// The newest event seen, so a room read here right after a restart can
+	// still be acknowledged upstream: the resumed sync is told what changed,
+	// and a room nobody has written in since changed nothing.
+	LastEventID string `json:"lastEventId,omitempty"`
+	LastEventTS int64  `json:"lastEventTs,omitempty"`
+
 	Tags    []string          `json:"tags,omitempty"`
 	Members map[string]string `json:"members,omitempty"`
 }
@@ -91,6 +97,8 @@ func (s *roomStore) load() map[id.RoomID]*roomInfo {
 		info.InviteTS = p.InviteTS
 		info.InvitedBy = id.UserID(p.InvitedBy)
 		info.ReadUpTo = p.ReadUpTo
+		info.LastEventID = id.EventID(p.LastEventID)
+		info.LastEventTS = p.LastEventTS
 		info.Tags = p.Tags
 		for user, name := range p.Members {
 			info.Members[id.UserID(user)] = name
@@ -116,7 +124,11 @@ func (s *roomStore) save(rooms map[id.RoomID]*roomInfo) {
 			InviteTS:  info.InviteTS,
 			InvitedBy: string(info.InvitedBy),
 			ReadUpTo:  info.ReadUpTo,
-			Tags:      info.Tags,
+
+			LastEventID: string(info.LastEventID),
+			LastEventTS: info.LastEventTS,
+
+			Tags: info.Tags,
 		}
 		// Only worth keeping when they are what names the room.
 		if len(info.Members) <= maxStoredMembers {

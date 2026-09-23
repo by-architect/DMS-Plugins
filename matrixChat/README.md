@@ -112,16 +112,23 @@ Rooms read before this bridge learned to look are caught up on once, at the next
 start — one filtered sync, recorded in `~/.local/share/dms-matrix/catchup` so no
 later start repeats it.
 
-Nothing is sent on your behalf: whether **you** send read receipts is still the
-**Send read receipts** setting below, and turning it off only stops other people
-seeing when you have read theirs.
+The other direction works too: opening a conversation here posts a read receipt
+for the newest message in it, so a room read on this machine stops being unread
+on your phone. Matrix hangs a receipt on a message rather than on a moment, so
+the receipt names the newest message the bridge has seen -- which is what any
+other client does when you open a room and read to the bottom.
+
+Nothing is sent on your behalf beyond that: whether **you** send read receipts
+is still the **Send read receipts** setting below, and turning it off leaves
+your own unread count working while other people stop seeing when you have read
+theirs.
 
 ## Invitations
 
 An invitation to a room appears as an ordinary conversation tagged **invite**,
 named after the room and saying who asked you. Open it and the composer is
-replaced by the only two answers there are: **Join** (`Alt+Y`) or **Decline**
-(`Alt+N`).
+replaced by the only two answers there are: **Join** (`Ctrl+Shift+Y`) or
+**Decline** (`Ctrl+Shift+N`).
 
 Joining enters the room and the conversation carries on as any other. Declining
 leaves the room, forgets it, and removes it here — unless there is real history
