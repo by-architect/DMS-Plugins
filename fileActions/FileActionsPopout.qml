@@ -32,7 +32,7 @@ PopoutComponent {
             buttonSize: 32
             iconColor: Theme.surfaceVariantText
             visible: FileActionsService.history.length > 0
-            tooltipText: "Clear finished"
+            tooltipText: "Hide what is already finished"
             onClicked: FileActionsService.clearHistory()
         }
     }
@@ -103,7 +103,7 @@ PopoutComponent {
 
                         StyledText {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: !FileActionsService.everPolled ? "Looking…" : (FileActionsService.dirPresent ? "No file action running" : "Nothing writes here yet")
+                            text: !FileActionsService.everPolled ? "Looking…" : (FileActionsService.dirPresent ? "No file action running" : "No live state directory")
                             font.pixelSize: Theme.fontSizeMedium
                             color: Theme.surfaceText
                         }
@@ -111,7 +111,7 @@ PopoutComponent {
                         StyledText {
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
-                            text: FileActionsService.watchDir
+                            text: FileActionsService.watchDirs.join("  ·  ")
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.outline
                             elide: Text.ElideMiddle

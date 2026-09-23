@@ -93,10 +93,14 @@ function pick(d) {
 function timeMs(v) {
     if (v === undefined || v === null || v === "")
         return NaN;
+    // Seconds or milliseconds since the epoch, both of which show up in status
+    // files, and the event log writes its `epoch` as a string of digits.
     if (typeof v === "number")
-        // Seconds or milliseconds since the epoch, both of which show up in
-        // hand-written status files.
         return v > 1e11 ? v : v * 1000;
+    if (/^\d+$/.test(String(v).trim())) {
+        var n = parseInt(String(v).trim(), 10);
+        return n > 1e11 ? n : n * 1000;
+    }
     var t = Date.parse(String(v));
     return isFinite(t) ? t : NaN;
 }
@@ -192,16 +196,22 @@ function baseName(p) {
     return i < 0 ? s : s.slice(i + 1);
 }
 
+// The wrappers that write these records: cp, mv, rm, rsync, scp, curl, wget,
+// aria2c, torrent, git-clone, trash-restore, trash-empty. Anything else still
+// gets a row, with the generic icon.
 var ICONS = [
     [/^(cp|copy|install)$/, "content_copy"],
     [/^(mv|move|rename)$/, "drive_file_move"],
-    [/^(rm|rmdir|delete|trash|shred)$/, "delete"],
+    [/^(rm|rmdir|delete|shred)$/, "delete"],
+    [/^trash-empty$/, "delete_forever"],
+    [/^trash-restore$/, "restore_from_trash"],
     [/^(rsync|sync|unison)$/, "sync"],
+    [/^(scp|sftp|ftp|upload)$/, "cloud_upload"],
+    [/^(wget|curl|aria2c?|yt-dlp|youtube-dl|download)$/, "download"],
+    [/^torrent$/, "download_for_offline"],
+    [/^git(-clone)?$/, "commit"],
     [/^(tar|zip|unzip|gzip|gunzip|7z|xz|zstd|bzip2|compress|extract)$/, "folder_zip"],
     [/^(dd|mkfs|flash|burn)$/, "save"],
-    [/^(scp|sftp|ftp|upload)$/, "cloud_upload"],
-    [/^(wget|curl|aria2|aria2c|yt-dlp|youtube-dl|download)$/, "download"],
-    [/^(git|clone|fetch|pull)$/, "commit"],
     [/^(mkdir|touch|create)$/, "create_new_folder"],
     [/^(chmod|chown|setfacl)$/, "key"]
 ];
@@ -255,20 +265,29 @@ function normalize(file, d, nowMs) {
 function titleOf(a) {
     var src = baseName(a.source);
     var dst = baseName(a.target);
-    if (src && dst)
+    // A trashed file's target is the same name inside the trash, and
+    // "newcache → newcache" says nothing twice.
+    if (src && dst && src !== dst)
         return src + " → " + dst;
-    return src || dst || a.command;
+    return src || dst || baseName(a.name) || a.command;
+}
+
+// A zero rate and "0s left" are what the first second of a transfer looks
+// like before the writer has anything to report, and they read as a stall.
+// Nothing is better than a wrong number here.
+function isZeroish(v) {
+    return !v || /^0([.,]0*)?\s*[kmgtp]?b(\/s|ps)?$/i.test(String(v).trim()) || /^0+s$/.test(String(v).trim());
 }
 
 function subtitleOf(a) {
     var parts = [];
     if (isFinite(a.bytesDone) && isFinite(a.bytesTotal) && a.bytesTotal > 0)
         parts.push(bytesText(a.bytesDone) + " of " + bytesText(a.bytesTotal));
-    else if (isFinite(a.bytesDone))
+    else if (isFinite(a.bytesDone) && a.bytesDone > 0)
         parts.push(bytesText(a.bytesDone));
-    if (a.rate)
+    if (a.rate && !isZeroish(a.rate))
         parts.push(a.rate);
-    if (a.eta)
+    if (a.eta && !isZeroish(a.eta))
         parts.push(a.eta + " left");
     return parts.join(" · ");
 }
@@ -277,10 +296,14 @@ function doneSubtitleOf(a) {
     var parts = [];
     if (a.phase === "failed" && a.error)
         parts.push(a.error);
-    else if (isFinite(a.bytesTotal) && a.bytesTotal > 0)
-        parts.push(bytesText(a.bytesTotal));
-    else if (isFinite(a.bytesDone))
-        parts.push(bytesText(a.bytesDone));
+    else {
+        if (isFinite(a.files) && a.files > 0)
+            parts.push(a.files === 1 ? "1 file" : a.files + " files");
+        if (isFinite(a.bytesTotal) && a.bytesTotal > 0)
+            parts.push(bytesText(a.bytesTotal));
+        else if (isFinite(a.bytesDone) && a.bytesDone > 0)
+            parts.push(bytesText(a.bytesDone));
+    }
     if (isFinite(a.startedMs) && isFinite(a.endedMs) && a.endedMs > a.startedMs)
         parts.push("in " + durationText((a.endedMs - a.startedMs) / 1000));
     if (a.phase === "ended" && isFinite(a.percent) && a.percent >= 0)
@@ -408,4 +431,151 @@ function mergeHistory(history, finished, limit) {
         return (isFinite(b.endedMs) ? b.endedMs : 0) - (isFinite(a.endedMs) ? a.endedMs : 0);
     });
     return merged.slice(0, limit);
+}
+
+// ------------------------------------------------------------------ history
+//
+// A live status file is deleted the moment its action ends, so the directory
+// can only ever answer "what is running". How it went is in the event log:
+// every wrapper writes one record on every exit path, including the one where
+// it was killed. That is where the finished list comes from.
+//
+// Two shapes, one parser. The state file (~/.local/state/fct.json) holds one
+// lowercase JSON record per line; `journalctl -o json` holds the same fields
+// as MATRIX_* on a journal entry. Whichever is readable, the rows are the same.
+function field(d, name) {
+    var lower = d[name];
+    if (lower !== undefined && lower !== null)
+        return lower;
+    var upper = d["MATRIX_" + name.toUpperCase()];
+    return upper === undefined || upper === null ? "" : upper;
+}
+
+function parseHistory(raw, opts) {
+    opts = opts || {};
+    var lines = String(raw || "").split("\n");
+    var starts = {};
+    var rows = [];
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line)
+            continue;
+        var d;
+        try {
+            d = JSON.parse(line);
+        } catch (e) {
+            continue;
+        }
+
+        var status = String(field(d, "status")).toLowerCase();
+        var command = str(field(d, "command")) || "action";
+        var when = timeMs(field(d, "date"));
+        if (!isFinite(when))
+            when = timeMs(field(d, "epoch"));
+        if (!isFinite(when) && d.__REALTIME_TIMESTAMP)
+            when = num(d.__REALTIME_TIMESTAMP) / 1000;
+
+        // Not by pid: each record is logged by its own short-lived process, so
+        // an action's "started" and "success" never share one. What does
+        // identify a run is what it was doing.
+        var runKey = identityOf({
+            command: command,
+            name: str(field(d, "name")),
+            source: str(field(d, "source")),
+            target: str(field(d, "target"))
+        });
+
+        // journalctl prints oldest first, so a "started" is always seen before
+        // the record that closes it.
+        if (status === "started") {
+            starts[runKey] = when;
+            continue;
+        }
+        if (status !== "success" && status !== "fail")
+            continue;
+
+        var startedMs = starts[runKey];
+        delete starts[runKey];
+
+        // `size` is megabytes by the time it is logged; `total` is a file
+        // count, not a byte count.
+        var sizeMb = num(field(d, "size"));
+
+        rows.push({
+            key: "history/" + runKey + "/" + (isFinite(when) ? when : i),
+            file: "",
+            id: command + "-" + (isFinite(when) ? when : i),
+            pid: num(d._PID),
+            command: command,
+            status: status,
+            phase: status === "fail" ? "failed" : "done",
+            paused: false,
+            percent: -1,
+            bytesDone: NaN,
+            bytesTotal: isFinite(sizeMb) ? sizeMb * 1024 * 1024 : NaN,
+            files: num(field(d, "total")),
+            rate: "",
+            eta: "",
+            currentFile: "",
+            source: str(field(d, "source")),
+            target: str(field(d, "target")),
+            name: str(field(d, "name")),
+            startedMs: isFinite(startedMs) ? startedMs : NaN,
+            endedMs: when,
+            error: str(field(d, "log")),
+            stale: false
+        });
+    }
+
+    rows.sort(function (a, b) {
+        return (isFinite(b.endedMs) ? b.endedMs : 0) - (isFinite(a.endedMs) ? a.endedMs : 0);
+    });
+    return rows;
+}
+
+// What makes two records the same run: the command and what it was pointed at.
+function identityOf(a) {
+    return [a.command || "", a.source || "", a.target || "", (a.source || a.target) ? "" : (a.name || "")].join("|");
+}
+
+// The journal is the truth about how an action ended; a row synthesized from a
+// status file that vanished is the stand-in until that record shows up (or
+// forever, if the journal cannot be read at all). Same pid, same command: one
+// row, the journal's.
+function combineHistory(loggedRows, fallbackRows, opts) {
+    opts = opts || {};
+    var cutoffMs = opts.cutoffMs || 0;
+    var limit = opts.historyLimit === undefined ? 20 : opts.historyLimit;
+    var known = {};
+    var out = [];
+    var i;
+
+    for (i = 0; i < loggedRows.length; i++) {
+        var j = loggedRows[i];
+        var k = identityOf(j);
+        // Keep the newest record per identity as the one a stand-in row is
+        // measured against, so an earlier copy of the same directory does not
+        // swallow the row for the one that just ended.
+        if (!isFinite(known[k]) || j.endedMs > known[k])
+            known[k] = j.endedMs;
+        out.push(j);
+    }
+    for (i = 0; i < fallbackRows.length; i++) {
+        var f = fallbackRows[i];
+        var seenAt = known[identityOf(f)];
+        // The journal has this run already if it recorded the same action
+        // ending after this one started; anything older is a different run.
+        if (isFinite(seenAt) && seenAt >= (isFinite(f.startedMs) ? f.startedMs : 0) - 5000)
+            continue;
+        out.push(f);
+    }
+
+    out = out.filter(function (r) {
+        return !(isFinite(r.endedMs) && r.endedMs <= cutoffMs);
+    });
+    out.sort(function (a, b) {
+        return (isFinite(b.endedMs) ? b.endedMs : 0) - (isFinite(a.endedMs) ? a.endedMs : 0);
+    });
+    return out.slice(0, limit);
 }
