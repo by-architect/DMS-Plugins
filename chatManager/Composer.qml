@@ -36,6 +36,15 @@ Item {
     readonly property bool canSend: root.chatCore.activeSupports("send")
     readonly property bool canAttach: root.chatCore.activeSupports("media")
 
+    // Whether the text field itself holds the keyboard.
+    //
+    // Reported rather than assumed: the conversation puts focus back the moment
+    // anything takes it away from here, and it cannot ask a text field whose
+    // own input is private to it. Every key in a chat is designed around this
+    // field having focus, so losing it quietly is the worst thing that can
+    // happen to the window.
+    property bool fieldFocused: false
+
     // Absolute paths waiting to be sent with the next message.
     property var staged: []
     property bool pasting: false
@@ -87,7 +96,20 @@ Item {
     }
 
     function takeFocus() {
+        // A field nobody can type into is not worth focusing, and taking the
+        // keyboard to it would strand every key that still works.
+        if (!root.canSend)
+            return;
         input.forceActiveFocus();
+    }
+
+    // releaseFocus gives the keyboard up, for when this is no longer on screen.
+    //
+    // An invisible text field keeps active focus in Qt Quick, which is the
+    // quiet half of a focus bug: whatever replaced the conversation looks
+    // focused, and every key typed at it lands in a message nobody can see.
+    function releaseFocus() {
+        input.setFocus(false);
     }
 
     // paste handles the clipboard itself, for both media and text.
@@ -382,6 +404,9 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 width: parent.width - 36 - Theme.spacingS
                 enabled: root.canSend
                 keyForwardTargets: [pasteKeys]
+
+                onFocusStateChanged: hasFocus => root.fieldFocused = hasFocus
+
                 placeholderText: {
                     if (!root.canSend)
                         return I18n.tr("This provider cannot send messages");
