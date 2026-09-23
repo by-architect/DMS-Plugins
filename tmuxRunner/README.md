@@ -17,6 +17,14 @@ with `ssh` as the session's command, instead of a shell -- so the connection
 gets tmux's detach/reattach for free, and reappears as an ordinary tmux
 session (same name, `ssh-<host>`) the next time you look.
 
+Each configured host is also probed in the background for tmux sessions
+already running *on it* -- so if `prod` already has a `deploy` session going,
+`tmux prod` lists `prod / deploy` directly instead of just an entry that
+would start a second, unrelated one. Picking it wraps the same
+ssh-in-tmux pattern as above, but tells the remote tmux to attach to that
+session by name. A plain "New session on prod" entry stays available
+alongside it for starting another one.
+
 ## Install
 
 ```sh
@@ -42,12 +50,28 @@ Plugins.
 - Right-click (or the action panel) on a real session offers "Copy session
   name" and "Kill session".
 - No sessions running at all shows a status row rather than an empty list.
-- An SSH host only shows up here while it has no matching tmux session
-  running — the session name is derived from the host (`ssh-<name>`,
-  sanitized), so reselecting the same host later reattaches to the same
-  session rather than creating a new one. Once that session exists it's
-  found and killed the same way as any other, and sshManager's own launcher
-  is untouched — this only adds hosts into tmux's own search.
+- An SSH host's plain "connect" entry only shows up here while it has no
+  matching tmux session running locally — the session name is derived from
+  the host (`ssh-<name>`, sanitized), so reselecting it later reattaches to
+  the same session rather than creating a new one. Once that session exists
+  it's found and killed the same way as any other, and sshManager's own
+  launcher is untouched — this only adds hosts into tmux's own search.
+- Remote sessions are discovered by actually connecting to each host in the
+  background — non-interactively, one host at a time, no more than every 20
+  seconds and only while the launcher is in use, since each check is a real
+  network round trip rather than a local command. Key-based hosts connect
+  straight away (and fail silently back to the plain entry if the agent or
+  default identity doesn't work, same as a normal `ssh` would). Password
+  hosts are only probed when sshManager has a password stored for them *and*
+  `sshpass` is on PATH — the password comes from sshManager's daemon and is
+  passed through the process environment, never argv, the same way
+  sshManager's own README asks any consumer to handle it. A host that can't
+  be probed for either reason just keeps showing the plain "connect" entry,
+  same as before this existed.
+- Selecting a discovered remote session opens the same interactive `ssh` (in
+  a terminal, tmux-wrapped) as the plain connect entry — it never uses a
+  stored password for that part, only the background probe does. The remote
+  side is told to `tmux attach -t <session>` instead of opening a shell.
 
 ## Settings
 
@@ -70,3 +94,7 @@ that only accepts that form.
 similar). A startup check verifies both the configured tmux binary and the
 configured terminal are on PATH before the trigger goes live, and says which
 one is missing if not.
+
+Optionally, `sshpass` — only needed to discover remote sessions on
+password-authenticated sshManager hosts. Everything else (key-based hosts,
+the plain connect entries, sshManager itself) works without it.
