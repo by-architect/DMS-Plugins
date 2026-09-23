@@ -34,7 +34,14 @@ FocusScope {
     // Holding a reference is what keeps the manager streaming state while this
     // is on screen. The shell's Ref helper only accepts a singleton, and the
     // chat core stopped being one when it moved into a plugin.
-    Component.onCompleted: root.chatCore.refCount++
+    Component.onCompleted: {
+        root.chatCore.refCount++;
+        // Built with the conversation already open -- reopening one, or a
+        // window that outlived it -- means there is no change to follow, so it
+        // is asked for outright.
+        if (root.conversationReady)
+            Qt.callLater(root.takeFocus);
+    }
     Component.onDestruction: root.chatCore.refCount--
 
     // Whether there is a conversation here to type into.
