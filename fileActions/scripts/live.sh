@@ -31,9 +31,16 @@ for d in "$@"; do
   printf 'watch:%s\n' "$d"
 done
 
+# Every header line first, in its own pass. Printing a directory's ok: line
+# next to its files would put it directly after the previous directory's last
+# file — inside that file's JSON, where it is a parse error and a lost row.
+# After this point the output is nothing but file blocks.
+for d in "$@"; do
+  [ -d "$d" ] && printf 'ok:%s\n' "$d"
+done
+
 for d in "$@"; do
   [ -d "$d" ] || continue
-  printf 'ok:%s\n' "$d"
   for f in "$d"/*.json; do
     [ -f "$f" ] || continue
     # Marker, path, then the file. Each file is parsed on its own, so one
