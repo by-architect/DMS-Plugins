@@ -29,6 +29,11 @@ PanelWindow {
     property var categories: []
     property string searchQuery: ""
 
+    // Alt+j/k moves this. Every container — all six category tiles and the
+    // flow — highlights and scrolls to this same index at once, rather than
+    // each one navigating independently.
+    property int globalRowIndex: 0
+
     readonly property bool keyboardReady: rootFocus.activeFocus
     readonly property bool searchFocused: searchField.hasFocus
 
@@ -129,6 +134,7 @@ PanelWindow {
             Keys.onPressed: event => {
                 const searchFocused = searchField.hasFocus;
                 const ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
+                const alt = (event.modifiers & Qt.AltModifier) !== 0;
                 if (searchFocused && ctrl && event.key === Qt.Key_U) {
                     win.clearSearch();
                     event.accepted = true;
@@ -136,6 +142,21 @@ PanelWindow {
                 }
                 if (searchFocused && ctrl && event.key === Qt.Key_W) {
                     win.deleteSearchWord();
+                    event.accepted = true;
+                    return;
+                }
+                // Alt+j/k never types a character, so this stays live
+                // regardless of search focus, same as the other panels'
+                // modifier combos — moves one shared row index that every
+                // container (all six categories plus the flow) highlights
+                // and scrolls to in lockstep.
+                if (alt && event.key === Qt.Key_J) {
+                    win.globalRowIndex = Math.min(win.globalRowIndex + 1, Math.max(0, win.flowItems.length - 1));
+                    event.accepted = true;
+                    return;
+                }
+                if (alt && event.key === Qt.Key_K) {
+                    win.globalRowIndex = Math.max(win.globalRowIndex - 1, 0);
                     event.accepted = true;
                     return;
                 }
@@ -191,7 +212,7 @@ PanelWindow {
                         spacing: Theme.spacingM
 
                         StyledText {
-                            text: "Esc close"
+                            text: "Alt+j/k move together · Esc close"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                             opacity: 0.8
@@ -232,6 +253,7 @@ PanelWindow {
                                 category: win.categories[index] ?? null
                                 allItems: win.sortedItems
                                 searchQuery: win.searchQuery
+                                currentRowIndex: win.globalRowIndex
                                 onSaveRequested: category => win.setCategory(index, category)
                                 onDeleteRequested: win.setCategory(index, null)
                             }
@@ -242,6 +264,7 @@ PanelWindow {
                         Layout.preferredWidth: (win.width - Theme.spacingL * 2 - Theme.spacingM) * 0.34
                         Layout.fillHeight: true
                         items: win.flowItems
+                        currentRowIndex: win.globalRowIndex
                         emptyReason: win.searchQuery ? "no matches for this search" : "no notifications yet"
                     }
                 }
