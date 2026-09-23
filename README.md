@@ -442,8 +442,9 @@ failure sentence when it failed.
 It reads the two outputs those wrappers already have, because neither one
 answers the whole question. Running actions come from the live state directory
 (`$XDG_RUNTIME_DIR/matrix/fct`, one JSON file per operation, deleted the moment
-it ends). Finished ones come from the event log — `~/.local/state/fct.json`, or
-`journalctl -t matrix-fct` when that file cannot be read — which is the only
+it ends; `matrix/dejavu` is the pre-rename name and is used only if that is
+what exists). Finished ones come from the event log — `~/.local/state/fct.json`,
+or `journalctl -t matrix-fct` when that file cannot be read — which is the only
 place that records how anything went. So the finished list is already there the
 first time the popout is opened, and survives a restart.
 
