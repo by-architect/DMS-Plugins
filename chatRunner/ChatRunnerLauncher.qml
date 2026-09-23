@@ -56,8 +56,25 @@ Item {
     // word, with anything after it searching within what is unread.
     readonly property string unreadKeyword: "unread"
 
-    readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
-    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
+    // What the launcher knows this plugin as. Every call into the shell is
+    // answered per plugin, so it is the argument to all of them.
+    readonly property string pluginId: "chatRunner"
+
+    readonly property int maxResults: pluginService ? pluginService.loadPluginData(root.pluginId, "maxResults", 40) : 40
+    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData(root.pluginId, "includeUnknown", true) : true
+
+    // requestLauncherUpdate tells the launcher to ask for the list again, once
+    // an answer it was waiting for has arrived.
+    //
+    // It is a signal with a plugin id, and emitting it without one throws --
+    // which is what used to happen, inside the reply handler, where nothing saw
+    // it but the log: the conversations were loaded and the launcher was never
+    // told, so the first search after a reload sat on "Loading conversations…"
+    // until another key was pressed.
+    function _refreshLauncher() {
+        if (root.pluginService)
+            root.pluginService.requestLauncherUpdate(root.pluginId);
+    }
 
     // Nothing subscribes to the manager from here.
     //
@@ -132,8 +149,7 @@ Item {
             root._allChats = response.result?.chats || [];
             root._loadedAt = Date.now();
 
-            if (root.pluginService)
-                root.pluginService.requestLauncherUpdate();
+            root._refreshLauncher();
         });
     }
 
@@ -168,8 +184,7 @@ Item {
             root._unreadMessages = response.result?.messages || [];
             root._unreadLoadedAt = Date.now();
 
-            if (root.pluginService)
-                root.pluginService.requestLauncherUpdate();
+            root._refreshLauncher();
         });
     }
 
