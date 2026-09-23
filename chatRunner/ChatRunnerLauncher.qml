@@ -5,9 +5,10 @@ import qs.Services
 // Every conversation, from every chat provider, in one list.
 //
 // Deliberately flat: WhatsApp, Signal, mail and anything else appear together,
-// ranked only by how well they match. Each row states which service it is on,
-// so two people with the same name -- or the same person on two services -- are
-// told apart by reading the row rather than by guessing.
+// ranked by how well they match and then by what is waiting to be read. Each
+// row states which service it is on, so two people with the same name -- or the
+// same person on two services -- are told apart by reading the row rather than
+// by guessing.
 //
 // The whole conversation list is fetched once and filtered here, rather than
 // asking the backend per keystroke. The launcher calls getItems on every
@@ -58,19 +59,14 @@ Item {
     readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
     readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
 
-    Component.onCompleted: refCounter.active = true
-
-    // Keeps the chat subscription alive while the runner exists, so provider
-    // and unread state are current without polling.
-    Loader {
-        id: refCounter
-        active: false
-        sourceComponent: Item {
-            Ref {
-                service: root.chat
-            }
-        }
-    }
+    // Nothing subscribes to the manager from here.
+    //
+    // There was a Ref holding the chat subscription open, which never worked:
+    // the shell's helper takes a singleton and the chat core stopped being one
+    // when it became a plugin, so it only ever produced a type error at
+    // startup. It is not wanted either -- a launcher that is not open has no
+    // use for a stream of state, and both lists below are fetched fresh when it
+    // is, which is also how they stay honest about what is unread.
 
     function _statusItem(icon, name, comment) {
         return [
@@ -257,6 +253,8 @@ Item {
 
     // _filter ranks locally, matching the backend's own ordering: an exact
     // identifier beats a name that merely contains the same text.
+    //
+    // Then what is waiting, then what arrived last -- see the sort below.
     function _filter(query) {
         const scored = [];
         const q = query.toLowerCase();
@@ -292,9 +290,23 @@ Item {
                 });
         }
 
+        // Unread first, newest first within it: opened with nothing typed, the
+        // list is answering "what do I have to deal with", and the answer to
+        // that starts with what somebody just said.
+        //
+        // Still behind the match score, though: typing a name and being handed
+        // somebody else because they happen to have written is not an answer to
+        // anything. With no query every row scores the same, which is what
+        // makes this the whole ordering there.
         scored.sort((a, b) => {
             if (a.score !== b.score)
                 return b.score - a.score;
+
+            const waitingA = (a.chat.unread || 0) > 0 ? 1 : 0;
+            const waitingB = (b.chat.unread || 0) > 0 ? 1 : 0;
+            if (waitingA !== waitingB)
+                return waitingB - waitingA;
+
             return (b.chat.lastTs || 0) - (a.chat.lastTs || 0);
         });
 

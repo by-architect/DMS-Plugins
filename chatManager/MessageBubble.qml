@@ -26,7 +26,7 @@ Item {
     required property var message
     property var previousMessage: null
 
-    // Set when this message carries the Alt+K/J selection.
+    // Set when this message carries the Ctrl+K/J selection.
     property bool selected: false
 
     signal replyRequested

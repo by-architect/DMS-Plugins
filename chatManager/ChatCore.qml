@@ -201,6 +201,16 @@ Item {
     // while the user is still looking at it.
     property real unreadMarkTs: 0
 
+    // The conversation whose opening page is still on its way, as
+    // "<provider> <chatId>", and whether that open wants an unread mark at all.
+    //
+    // The page answers with the read position it was fetched at, and marking
+    // the conversation read waits for that answer -- so the position is always
+    // the one from before this open, however long the page takes and whichever
+    // load ends up fetching it.
+    property string _openPending: ""
+    property bool _openAtUnread: false
+
     // The first message the user had not seen when they opened this
     // conversation, or -1. Where the view lands, and where the divider goes.
     readonly property int firstUnreadIndex: {
@@ -220,6 +230,11 @@ Item {
     // generates one, and redeclaring it is a duplicate-signal error.
     signal historyLoaded(string provider, string chatId)
     signal sendFailed(string reason)
+
+    // Opening a conversation, including the one already open. The view places
+    // itself on this rather than on activeChatId changing, which says nothing
+    // when the same conversation is opened a second time from the launcher.
+    signal chatOpened(string provider, string chatId)
 
     readonly property var activeChat: hasActiveChat ? chatByKey(activeProvider, activeChatId) : null
 
@@ -270,10 +285,16 @@ Item {
         if (!provider || !chatId)
             return;
 
-        // Only where something is actually waiting: the read position of a
-        // conversation already caught up on would mark its newest message.
+        // A first guess only, from the cached conversation list: nothing is
+        // subscribed while the window is closed, so a conversation opened from
+        // the launcher is read out of a list that may be hours old and will
+        // happily report nothing waiting. _settleOpen replaces this with the
+        // read position the page itself answers with.
         const entry = root.chatByKey(provider, chatId);
         root.unreadMarkTs = entry && (entry.unread || 0) > 0 ? (entry.readUpTo || 0) : 0;
+
+        root._openPending = provider + " " + chatId;
+        root._openAtUnread = true;
 
         root.activeProvider = provider;
         root.activeChatId = chatId;
@@ -281,10 +302,12 @@ Item {
         root.hasMoreHistory = false;
 
         // Tell the backend what is on screen, so a message the user is already
-        // looking at does not also raise a notification.
+        // looking at does not also raise a notification. Marking it read waits
+        // for the page -- see _settleOpen.
         setFocus(provider, chatId);
         loadHistory(0);
-        markRead();
+
+        root.chatOpened(provider, chatId);
     }
 
     // openChatAt opens a conversation positioned around a moment in time,
@@ -297,8 +320,11 @@ Item {
             return;
 
         // Jumping to a search result is a deliberate destination, so no unread
-        // mark: the view belongs at the message that was picked.
+        // mark: the view belongs at the message that was picked, and nothing
+        // here waits for a read position it is not going to use.
         root.unreadMarkTs = 0;
+        root._openPending = "";
+
         root.activeProvider = provider;
         root.activeChatId = chatId;
         root.messages = [];
@@ -307,6 +333,8 @@ Item {
         setFocus(provider, chatId);
         loadHistory(ts > 0 ? ts + 1 : 0);
         markRead();
+
+        root.chatOpened(provider, chatId);
     }
 
     function closeChat() {
@@ -315,6 +343,7 @@ Item {
         root.messages = [];
         root.hasMoreHistory = false;
         root.unreadMarkTs = 0;
+        root._openPending = "";
         setFocus("", "");
     }
 
@@ -368,14 +397,28 @@ Item {
         }, response => {
             root.loadingHistory = false;
 
-            // The user may have moved on while this was in flight.
-            if (provider !== root.activeProvider || chatId !== root.activeChatId)
+            // The user may have moved on while this was in flight. Whatever is
+            // on screen now asked for a page of its own and was turned away,
+            // because this one was still running -- so ask again on its behalf,
+            // rather than leaving it empty until some state push comes along.
+            if (provider !== root.activeProvider || chatId !== root.activeChatId) {
+                if (root.hasActiveChat && root.messages.length === 0)
+                    root.loadHistory(0);
                 return;
+            }
 
             if (response.error) {
                 root.log.warn("failed to load history:", response.error);
+                // Still an open, as far as the conversation is concerned: it is
+                // on screen, so it should not stay unread because its messages
+                // could not be fetched.
+                root._settleOpen(provider, chatId, before, null);
                 return;
             }
+
+            // Before the messages, so the mark is in place by the time anything
+            // reacts to them: the view reads it to decide where to land.
+            root._settleOpen(provider, chatId, before, response.result);
 
             const page = response.result?.messages || [];
             root.hasMoreHistory = response.result?.hasMore === true;
@@ -389,6 +432,28 @@ Item {
             root.messagesChanged();
             root.historyLoaded(provider, chatId);
         });
+    }
+
+    // _settleOpen finishes opening a conversation once its first page is here.
+    //
+    // Two things in one place because their order is the whole point: the page
+    // reports where the conversation had been read, and only then is it marked
+    // read. The other way round -- which is what marking read on open did --
+    // the answer describes a conversation that was already caught up, and the
+    // view has nowhere to jump to.
+    //
+    // A manager too old to report a read position leaves the guess made when
+    // the conversation was opened, which is what this used to rely on.
+    function _settleOpen(provider, chatId, before, result) {
+        if (before || root._openPending !== provider + " " + chatId)
+            return;
+        root._openPending = "";
+
+        const readUpTo = result ? result.readUpTo : undefined;
+        if (root._openAtUnread && readUpTo !== undefined)
+            root.unreadMarkTs = (result.unread || 0) > 0 ? readUpTo : 0;
+
+        root.markRead();
     }
 
     // loadOlder pages backwards from the oldest message on screen.

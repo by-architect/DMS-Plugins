@@ -4,8 +4,13 @@ Every conversation, from every chat provider, in one list.
 
 Type `c ` in the launcher, then a name, a phone number or an address. WhatsApp,
 Signal, mail, KDE Connect SMS and anything else you have installed appear
-together, ranked only by how well they match. Selecting a row opens that
+together, ranked by how well they match. Selecting a row opens that
 conversation.
+
+With nothing typed, the list is ordered by what is waiting: conversations with
+unread messages first, the one somebody wrote in last at the top. Typing puts
+the match first again — a name you asked for outranks a name that happens to
+have written — and what is unread only breaks the ties.
 
 ## Why the provider is written on every row
 

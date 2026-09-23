@@ -245,9 +245,21 @@ func handleChats(ctx context.Context, conn *models.Conn, req models.Request, m *
 	models.Respond(conn, req.ID, chatsResult{Chats: chats})
 }
 
+// historyResult is a page of a conversation, and where that conversation had
+// been read when the page was asked for.
+//
+// The read position travels with the page rather than being looked up in the
+// conversation list the shell holds: that list is only streamed while a chat
+// window is open, so a conversation opened from the launcher would be judged
+// against a cache that may be hours old -- and the unread divider would land in
+// the wrong place, or not appear at all. Requests on one connection are answered
+// in order, so this is still the position from before opening marked the
+// conversation read.
 type historyResult struct {
 	Messages []chat.Message `json:"messages"`
 	HasMore  bool           `json:"hasMore"`
+	ReadUpTo int64          `json:"readUpTo"`
+	Unread   int            `json:"unread"`
 }
 
 func handleHistory(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
@@ -279,7 +291,19 @@ func handleHistory(ctx context.Context, conn *models.Conn, req models.Request, m
 	if msgs == nil {
 		msgs = []chat.Message{}
 	}
-	models.Respond(conn, req.ID, historyResult{Messages: msgs, HasMore: hasMore})
+
+	// Missing is not an error: a conversation can be paged before its own row
+	// has been written, and a page without a read position is still a page.
+	var readUpTo int64
+	var unread int
+	if c, err := m.Store().ChatByID(ctx, provider, chatID); err == nil {
+		readUpTo = c.ReadUpTo
+		unread = c.Unread
+	}
+
+	models.Respond(conn, req.ID, historyResult{
+		Messages: msgs, HasMore: hasMore, ReadUpTo: readUpTo, Unread: unread,
+	})
 }
 
 type searchResult struct {
