@@ -1,0 +1,15 @@
+{
+    "id": "controlPanel",
+    "name": "Control Panel",
+    "description": "Fullscreen quick settings: WiFi, Bluetooth and speaker lists with on/off toggles, plus VPN/Mic/Tailscale/Keep Awake — every action reachable by a single letter",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "dankbar-widget"],
+    "icon": "tune",
+    "components": {
+        "daemon": "./ControlPanelDaemon.qml",
+        "widget": "./ControlPanelWidget.qml"
+    },
+    "permissions": ["settings_read", "settings_write"]
+}
