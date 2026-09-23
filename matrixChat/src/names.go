@@ -41,6 +41,16 @@ type roomInfo struct {
 	// tells the host that a conversation read elsewhere is not unread here.
 	ReadUpTo int64
 
+	// LastEventID is the newest event this room has shown us, and LastEventTS
+	// when it happened.
+	//
+	// Kept for the other direction: the host marks a conversation read at a
+	// moment in time, while Matrix hangs a read receipt on an event. This is
+	// what turns the one into the other, and without it reading a room here
+	// tells nobody else -- see handleMarkRead.
+	LastEventID id.EventID
+	LastEventTS int64
+
 	// Members maps a user to their display name in this room. Display names are
 	// per-room in Matrix: the same account can be "Ada" in one and "A." in
 	// another, and using the wrong one mislabels every message they send.
