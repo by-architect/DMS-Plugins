@@ -311,6 +311,33 @@ function doneSubtitleOf(a) {
     return parts.join(" · ");
 }
 
+// The header both scripts print before their payload: what they resolved, and
+// which of those paths actually exist. It is what lets the popout say "I
+// looked here" instead of implying nothing is running.
+function parseHeader(raw) {
+    var head = {
+        base: "",
+        watched: [],
+        present: [],
+        source: ""
+    };
+    var lines = String(raw || "").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf("===dejavu===") >= 0)
+            break;
+        if (line.indexOf("base:") === 0)
+            head.base = line.slice(5);
+        else if (line.indexOf("watch:") === 0)
+            head.watched.push(line.slice(6));
+        else if (line.indexOf("ok:") === 0)
+            head.present.push(line.slice(3));
+        else if (line.indexOf("source:") === 0)
+            head.source = line.slice(7);
+    }
+    return head;
+}
+
 // ---------------------------------------------------------------- ingestion
 //
 // One poll in, the whole visible state out. This is the part with the actual
@@ -402,8 +429,11 @@ function ingest(prevSeen, prevHistory, raw, opts) {
         return (isFinite(b.startedMs) ? b.startedMs : 0) - (isFinite(a.startedMs) ? a.startedMs : 0);
     });
 
+    var head = parseHeader(raw);
+
     return {
-        dirPresent: String(raw || "").indexOf("dir:missing") !== 0,
+        header: head,
+        dirPresent: head.present.length > 0,
         active: active,
         seen: nextSeen,
         history: finished.length > 0 ? mergeHistory(prevHistory || [], finished, limit) : (prevHistory || []),

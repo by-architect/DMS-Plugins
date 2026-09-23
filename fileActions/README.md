@@ -137,6 +137,40 @@ stall; the row shows what it knows and nothing else.
 plugin's to truncate, so the sweep button (and a right-click on the pill) means
 "everything older than now is no longer interesting".
 
+## When it looks idle and should not
+
+The two readers are plain shell scripts, runnable by hand — they print what
+they resolved before they print anything else:
+
+```sh
+sh scripts/live.sh          # base:, watch:, ok: … then every live status file
+sh scripts/history.sh 20    # source:, then the last 20 event-log records
+```
+
+The same answer from the running shell, which is the one that matters, since
+its environment is not your terminal's:
+
+```sh
+dms ipc call fileActions status
+```
+
+```
+runtime base: /run/user/1000
+watching:     /run/user/1000/matrix/fct  /run/user/1000/matrix/dejavu
+present:      /run/user/1000/matrix/fct
+history from: /home/neo/.local/state/fct.json
+running:      0
+finished:     20 rows
+```
+
+`dms ipc call fileActions refresh` re-reads both immediately.
+
+Both scripts resolve `$XDG_RUNTIME_DIR` and `$HOME` themselves, falling back to
+`/run/user/$(id -u)` and the passwd entry, because the shell that runs the bar
+does not necessarily carry either — and a path guessed wrong in QML looks
+exactly like "nothing is running". The popout's empty state prints the paths it
+actually looked at for the same reason.
+
 ## Settings
 
 | Setting | Default | |
@@ -151,6 +185,7 @@ plugin's to truncate, so the sweep button (and a right-click on the pill) means
 
 ## Shape
 
+`scripts/live.sh` and `scripts/history.sh` are the only things that touch the system;
 `actions.js` holds the parsing, the phase rules, the started→finished pairing
 and the history merge as pure functions over the previous snapshot, so they run
 and are tested outside quickshell. The QML above them is layout.
