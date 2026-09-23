@@ -108,13 +108,16 @@ PopoutComponent {
                             color: Theme.surfaceText
                         }
 
+                        // The resolved paths, not the configured ones: when
+                        // this is the wrong directory, seeing which one it
+                        // actually looked at is the whole answer.
                         StyledText {
                             width: parent.width
                             horizontalAlignment: Text.AlignHCenter
-                            text: FileActionsService.watchDirs.join("  ·  ")
+                            text: FileActionsService.watchDirs.length > 0 ? FileActionsService.watchDirs.join("\n") : "resolving…"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.outline
-                            elide: Text.ElideMiddle
+                            wrapMode: Text.NoWrap
                             visible: !FileActionsService.dirPresent
                         }
                     }
