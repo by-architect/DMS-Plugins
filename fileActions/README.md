@@ -39,9 +39,10 @@ This is the part worth knowing before changing anything here.
 
 **Running** actions come from the live state directory —
 `$XDG_RUNTIME_DIR/matrix/fct`, one JSON file per running operation, rewritten
-about four times a second. `$XDG_RUNTIME_DIR/matrix/dejavu` is watched as well:
-same tool, older name, and which one exists depends on the generation the
-machine booted.
+about four times a second. `$XDG_RUNTIME_DIR/matrix/dejavu` is the same
+directory under the name the tool had before it was renamed, and is used only
+when `fct` is not there — an older generation is what booted. First one that
+exists wins; one live directory is the whole truth.
 
 **Finished** actions do *not* come from there. The wrapper deletes its state
 file on every exit path — success, failure, or a Ctrl+C — so the directory can
@@ -131,7 +132,10 @@ stand-ins are the whole finished list rather than nothing.
 
 **Zeros are not shown.** `0,00kB/s · 0s left` is what the first second of a
 transfer looks like before the writer has anything to report, and it reads as a
-stall; the row shows what it knows and nothing else.
+stall; the row shows what it knows and nothing else. An action reporting 0% with
+no totals and no rate — a `git-clone` receiving objects, a copy in its first
+moments — gets an indeterminate bar rather than a `0.0%` that claims a
+measurement nobody made.
 
 **"Clear finished" hides, it does not delete.** The event log is not this
 plugin's to truncate, so the sweep button (and a right-click on the pill) means
@@ -175,7 +179,7 @@ actually looked at for the same reason.
 
 | Setting | Default | |
 |---|---|---|
-| Status directory | both `matrix/fct` and `matrix/dejavu` | where live files are |
+| Status directory | `matrix/fct`, or `matrix/dejavu` if that is what exists | where live files are |
 | Hide when nothing is running | off | remove the pill from the bar entirely while idle |
 | Refresh while active | 800 ms | how often the directory is re-read during an action |
 | Refresh while idle | 3000 ms | how often it is checked for a new one |

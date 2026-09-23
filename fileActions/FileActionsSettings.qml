@@ -9,7 +9,7 @@ PluginSettings {
     StringSetting {
         settingKey: "watchDir"
         label: "Status directory"
-        description: "Where the one-file-per-action status files are written. Empty watches both $XDG_RUNTIME_DIR/matrix/fct and .../matrix/dejavu, which is the same tool under its old name."
+        description: "Where the one-file-per-action status files are written. Empty means $XDG_RUNTIME_DIR/matrix/fct, falling back to .../matrix/dejavu, the name the tool had before it was renamed."
         placeholder: "$XDG_RUNTIME_DIR/matrix/fct"
         defaultValue: ""
     }

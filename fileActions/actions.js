@@ -245,6 +245,12 @@ function normalize(file, d, nowMs) {
         pct = (isFinite(done) && isFinite(total) && total > 0) ? (done / total) * 100 : -1;
     if (pct > 100)
         pct = 100;
+    // A writer with nothing to report yet writes zeros, not nulls — a git
+    // clone receiving objects, or a copy in its first moments. "0.0%" against
+    // an empty bar claims a measurement that does not exist; unknown is
+    // honest, and it turns into a number the moment one arrives.
+    if (pct === 0 && !(isFinite(total) && total > 0) && !(isFinite(done) && done > 0) && !str(pick(d, "rate", "speed")))
+        pct = -1;
 
     return {
         key: file,
