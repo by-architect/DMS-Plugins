@@ -2,10 +2,11 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Fourteen plugins in four shapes: **launcher** plugins that answer a trigger word
+Fifteen plugins in five shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
-keybind, a **chat provider** that connects an outside messaging service to the
-DMS chat system, and an **overlay** that replaces a piece of shell chrome.
+keybind, a **bar widget** that lives in the bar and opens a popout under itself,
+a **chat provider** that connects an outside messaging service to the DMS chat
+system, and an **overlay** that replaces a piece of shell chrome.
 
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
@@ -20,6 +21,7 @@ DMS chat system, and an **overlay** that replaces a piece of shell chrome.
 | [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationLine](notificationLine/) | overlay | every notification | — |
+| [fileActions](fileActions/) | bar widget | the pill, and its popout | — |
 | [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
 | [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
 | [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
@@ -415,6 +417,40 @@ Keybind targets for clearing the stack, and for dismissing or recalling one
 line at a time, are on its IPC handler.
 
 → [notificationLine/README.md](notificationLine/README.md)
+
+---
+
+# Bar widgets
+
+A pill in the bar with a popout under it, rather than a fullscreen panel.
+
+## fileActions
+
+Long file operations — copies, moves, syncs, downloads — reported from a
+directory of status files: one file per action, each holding that action's
+current JSON. Whatever writes those files shows up in the bar without knowing
+anything about the shell.
+
+```
+   [ ⧉ 94% +1 ]     ← newest running action, its progress, and one more behind it
+```
+
+Clicking opens the list: everything running on top, with a progress bar, rate,
+ETA and the file being worked on right now, and the last finished actions
+underneath with how they went.
+
+Two things it does that a progress bar does not. An action whose status file
+has stopped changing is flagged **stalled** rather than left sitting at a
+frozen 94% — nothing in a status file says whether the process writing it is
+still alive. And a file that disappears mid-run is reported as **ended**, not
+done, unless it was all but complete when it went, which is the ordinary case
+of a writer cleaning up after itself.
+
+The directory is `$XDG_RUNTIME_DIR/matrix/dejavu` by default and does not have
+to exist yet. Field names are matched loosely, so an existing writer usually
+needs no changes — the full contract is in the plugin's README.
+
+→ [fileActions/README.md](fileActions/README.md)
 
 ---
 

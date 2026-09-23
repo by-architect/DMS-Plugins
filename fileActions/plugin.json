@@ -1,0 +1,13 @@
+{
+    "id": "fileActions",
+    "name": "File Actions",
+    "description": "Bar pill and popout for file operations reporting progress as one status file per action: the newest running action on the bar, every running action plus the last finished ones in the popout",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring"],
+    "icon": "content_copy",
+    "component": "./FileActionsWidget.qml",
+    "settings": "./FileActionsSettings.qml",
+    "permissions": ["settings_read", "settings_write", "process"]
+}
