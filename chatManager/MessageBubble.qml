@@ -3,6 +3,7 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "links.js" as Links
 
 // One message.
 //
@@ -45,18 +46,10 @@ Item {
 
     readonly property string linkUrl: message?.linkUrl ?? ""
 
-    // The body with URLs turned into anchors.
-    //
-    // Escaped first: message text is other people's input, and StyledText would
-    // otherwise treat markup in it as markup.
-    readonly property string richText: {
-        const raw = root.text;
-        if (raw === "")
-            return "";
-
-        const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        return escaped.replace(/(https?:\/\/[^\s<]+)/g, "<a href=\"$1\" style=\"color:" + Theme.primary + "\">$1</a>");
-    }
+    // The body with URLs turned into anchors, escaped first: message text is
+    // other people's input, and StyledText would otherwise treat markup in it
+    // as markup. See links.js for what that has to survive.
+    readonly property string richText: Links.render(root.text, Theme.primary)
     readonly property bool hasLink: linkUrl !== ""
 
     // Hover is kept alive briefly after the pointer leaves. The action row sits
@@ -308,7 +301,9 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: Quickshell.execDetached(["xdg-open", root.linkUrl])
+                    // Through the same door as any other link: a preview's
+                    // target is part of the message, not something we found.
+                    onClicked: root.chatCore.openLink(root.linkUrl)
                 }
 
                 Column {
@@ -375,7 +370,7 @@ Item {
                 // Links in the body are clickable without turning the whole
                 // message into rich text.
                 textFormat: Text.StyledText
-                onLinkActivated: url => Quickshell.execDetached(["xdg-open", url])
+                onLinkActivated: url => root.chatCore.openLink(url)
 
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
