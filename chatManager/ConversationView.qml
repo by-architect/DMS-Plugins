@@ -85,9 +85,14 @@ FocusScope {
 
     // An overlay is layered over this view and had the keyboard because this
     // view lent it: closing one gives it straight back, wherever it left it.
+    // While one is up the keyboard is the overlay's, and any request still
+    // being retried is called off rather than left to fight it.
     onHasOverlayChanged: {
-        if (!hasOverlay)
-            Qt.callLater(root.takeFocus);
+        if (hasOverlay) {
+            focusSettle.stop();
+            return;
+        }
+        Qt.callLater(root.takeFocus);
     }
 
     // An invitation has no composer; answering it grows one, and the bar that
@@ -110,8 +115,42 @@ FocusScope {
     }
 
     // Focus arriving anywhere in here -- a click, a parent handing it over --
-    // belongs in the text field.
-    onActiveFocusChanged: root.keepFocus()
+    // belongs in the text field. Focus leaving the view altogether is the user
+    // putting it somewhere on purpose, which also calls off any request still
+    // being retried below.
+    onActiveFocusChanged: {
+        if (!root.activeFocus)
+            focusSettle.stop();
+        root.keepFocus();
+    }
+
+    // Asking for focus once is not enough the first time a chat is opened after
+    // a reload, which is the one time all of this is happening at once: the
+    // popout's window is being created, the compositor has not handed it the
+    // keyboard yet, and the provider that says whether this conversation can be
+    // sent to has not answered, so the text field is still disabled and cannot
+    // hold focus at all. A request made into any of that is dropped, and
+    // nothing asked again -- which is why the first chat opened after a restart
+    // came up looking ready with the keyboard pointing at nothing.
+    //
+    // So the request repeats for a moment and stops the instant it lands. It is
+    // the same shape as the settle that puts the message list where it belongs:
+    // a state that has to be reached, rather than one call and hope.
+    Timer {
+        id: focusSettle
+
+        property int attempts: 0
+
+        interval: 60
+        repeat: true
+        onTriggered: {
+            if (composer.fieldFocused || ++focusSettle.attempts > 12) {
+                focusSettle.stop();
+                return;
+            }
+            root._focus();
+        }
+    }
 
     // keepFocus puts the keyboard back in the text field when it is still ours
     // to put: something in here took it, or was handed it and did nothing with
@@ -134,11 +173,22 @@ FocusScope {
 
     // takeFocus is the way in from outside: a conversation being opened, a
     // window being shown. Inside, keepFocus above is what holds it here.
+    //
+    // It asks now and keeps asking for a moment, because on a cold start the
+    // answer is no until several other things have happened -- see focusSettle.
     function takeFocus() {
+        root._focus();
+        focusSettle.attempts = 0;
+        focusSettle.restart();
+    }
+
+    function _focus() {
         // Nothing to type into while an invitation is unanswered, or while this
         // view is not the thing on screen: focusing a hidden field would
-        // swallow the keys that do work.
-        if (!root.visible || root.isInvite)
+        // swallow the keys that do work. An overlay has the keyboard for as
+        // long as it is up, and taking it back would be taking it from the
+        // question it is asking.
+        if (!root.visible || root.isInvite || root.hasOverlay)
             return;
         composer.takeFocus();
     }
