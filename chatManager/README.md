@@ -188,6 +188,20 @@ you had not seen, under a divider.
 Needs Go. CGO is off — the SQLite driver is pure Go — so the binary runs
 anywhere.
 
+## Tests
+
+```sh
+./scripts/test
+```
+
+The manager's Go tests, a parse check over every QML file, and the QtTest suites
+in `tests/`. The QML here cannot be loaded outside DMS, so what the suites cover
+is what stands on its own and has been wrong before: the rules a message's links
+go through (`links.js`), and the key behaviour the whole keymap rests on — which
+chords a focused text field takes for itself, checked against every state a
+half-written message can be in. Each part is skipped with a note if its tool is
+missing.
+
 ## Where the messages live
 
 Each provider gets its own database:

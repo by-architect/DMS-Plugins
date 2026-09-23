@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Everything about the chat plugin that can be checked without a running shell.
+#
+#   - the manager's Go tests
+#   - every QML file parses
+#   - the QtTest suites in tests/
+#
+# The QML in here cannot be loaded outside DMS -- it imports qs.Common and the
+# rest of the shell -- so what is tested is what stands on its own: the link
+# rules a message goes through, and the key behaviour the whole keymap rests on.
+# Both were bugs before they were tests.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+plugin=$(pwd)
+failures=0
+
+step() {
+    printf '\n== %s\n' "$1"
+}
+
+find_qt_tool() {
+    local name=$1
+    local found
+    found=$(command -v "$name" 2>/dev/null) && {
+        printf '%s' "$found"
+        return 0
+    }
+    # Qt's tools are not on PATH on every distribution; NixOS keeps them in the
+    # store, Arch under /usr/lib/qt6/bin.
+    for candidate in /usr/lib/qt6/bin/"$name" /usr/lib/qt/bin/"$name"; do
+        [ -x "$candidate" ] && {
+            printf '%s' "$candidate"
+            return 0
+        }
+    done
+    found=$(find /nix/store -maxdepth 3 -type f -name "$name" -path '*qtdeclarative*/bin/*' 2>/dev/null | sort | tail -1)
+    [ -n "$found" ] && printf '%s' "$found"
+}
+
+step "go test"
+if command -v go >/dev/null 2>&1; then
+    (cd src && CGO_ENABLED=0 go test ./...)
+else
+    echo "skipped: no go in PATH"
+fi
+
+qmllint=$(find_qt_tool qmllint || true)
+step "qml parses"
+if [ -n "$qmllint" ]; then
+    # Only errors matter here: the imports cannot resolve outside the shell, so
+    # the warnings are all about qs.* being absent.
+    for component in *.qml; do
+        if "$qmllint" "$component" 2>&1 | grep -E ': Error'; then
+            echo "FAIL: $component"
+            failures=$((failures + 1))
+        fi
+    done
+    [ "$failures" -eq 0 ] && echo "ok: $(ls -1 *.qml | wc -l) files"
+else
+    echo "skipped: no qmllint found"
+fi
+
+qmltestrunner=$(find_qt_tool qmltestrunner || true)
+step "qmltest"
+if [ -n "$qmltestrunner" ]; then
+    # Where the tool lives is where its QML modules live, which is not the
+    # default import path on a distribution that keeps Qt out of /usr.
+    qml_modules="${qmltestrunner%/bin/*}/lib/qt-6/qml"
+    imports=()
+    [ -d "$qml_modules" ] && imports=(-import "$qml_modules")
+
+    log=$(mktemp "${TMPDIR:-/tmp}/dms-chat-qmltest-XXXXXX.log")
+    trap 'rm -f "$log"' EXIT
+
+    for suite in tests/tst_*.qml; do
+        if QT_QPA_PLATFORM=offscreen "$qmltestrunner" "${imports[@]}" -input "$plugin/$suite" >"$log" 2>&1; then
+            echo "ok: $suite ($(grep -c '^PASS' "$log") passed)"
+        else
+            grep -E '^(FAIL|QWARN|Totals)' "$log" || cat "$log"
+            echo "FAIL: $suite"
+            failures=$((failures + 1))
+        fi
+    done
+else
+    echo "skipped: no qmltestrunner found"
+fi
+
+printf '\n'
+if [ "$failures" -ne 0 ]; then
+    echo "FAILED: $failures"
+    exit 1
+fi
+echo "PASSED"

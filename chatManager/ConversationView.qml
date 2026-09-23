@@ -5,6 +5,7 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "links.js" as Links
 
 // The open conversation: header, messages, composer.
 FocusScope {
@@ -296,9 +297,9 @@ FocusScope {
             return;
         }
 
-        const link = (msg.text || "").match(/https?:\/\/[^\s]+/);
-        if (link)
-            Quickshell.execDetached(["xdg-open", link[0]]);
+        const link = Links.firstWebUrl(msg.text);
+        if (link !== "")
+            root.chatCore.openLink(link);
     }
 
     // copyMessage puts the message on the clipboard: an attachment goes as a
@@ -423,6 +424,12 @@ FocusScope {
     // Ctrl throughout, where these were Alt: one modifier for everything the
     // conversation does is one thing to remember, and it is the one every other
     // key here already used.
+    //
+    // Which chords are available is not a matter of taste: the composer holds
+    // focus, and a text field answers for some of them before the shortcut
+    // system is asked -- Ctrl+V and Delete always, others only while there is
+    // something to undo or delete. tests/tst_keys.qml is that list, checked
+    // against every state a half-written message can be in.
     Shortcut {
         sequences: ["Ctrl+K"]
         onActivated: root.selectPrevious()
@@ -487,21 +494,16 @@ FocusScope {
     }
 
     // Only ever live on an unanswered invitation, so these cannot collide with
-    // anything the conversation itself uses.
-    //
-    // Shifted, where the rest are not: plain Ctrl+Y is redo as far as any text
-    // field is concerned, and it never reaches here while one has focus -- as
-    // the conversation list's search box does. Both answers keep the same shape
-    // rather than only the one that had to move, and the extra key is no loss
-    // on a choice this consequential. The bar itself has both as buttons.
+    // anything the conversation itself uses. Yes and no, as the buttons on the
+    // bar say.
     Shortcut {
-        sequences: ["Ctrl+Shift+Y"]
+        sequences: ["Ctrl+Y"]
         enabled: root.isInvite && !root.hasOverlay
         onActivated: root.answerInvite(true)
     }
 
     Shortcut {
-        sequences: ["Ctrl+Shift+N"]
+        sequences: ["Ctrl+N"]
         enabled: root.isInvite && !root.hasOverlay
         onActivated: root.answerInvite(false)
     }
