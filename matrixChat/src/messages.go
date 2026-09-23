@@ -41,6 +41,10 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 		return
 	}
 
+	// The event itself, not the edit's target: a read receipt has to name
+	// something that actually happened in the timeline.
+	b.noteLastEvent(evt.RoomID, evt.ID, evt.Timestamp)
+
 	emitEvent("message", map[string]any{"message": msg})
 
 	if msg.MediaRef != "" && msg.MediaPath == "" {
@@ -276,6 +280,47 @@ func (b *bridge) setReadUpTo(roomID id.RoomID, ts int64) bool {
 	return true
 }
 
+// noteLastEvent remembers the newest event a room has shown us.
+//
+// Only ever forwards: history paging and a resumed sync both deliver older
+// events, and a read receipt for one of those would tell our other clients that
+// we have read less than we have.
+func (b *bridge) noteLastEvent(roomID id.RoomID, eventID id.EventID, ts int64) {
+	if eventID == "" || ts <= 0 {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	info := b.roomLocked(roomID)
+	if ts < info.LastEventTS {
+		return
+	}
+	info.LastEventID = eventID
+	info.LastEventTS = ts
+}
+
+// receiptTarget is the event a read receipt for this room should name, or "".
+//
+// Empty when there is nothing new to acknowledge: a room whose timeline this
+// session has never seen, or one where our own receipt already stands at or
+// past the newest event -- which is every reopening of a conversation already
+// read, and a request to the homeserver each time it is not checked.
+func (b *bridge) receiptTarget(roomID id.RoomID) id.EventID {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	info := b.rooms[roomID]
+	if info == nil || info.LastEventID == "" {
+		return ""
+	}
+	if info.ReadUpTo >= info.LastEventTS {
+		return ""
+	}
+	return info.LastEventID
+}
+
 func previewOf(msg *messageObj) string {
 	if msg.Text != "" {
 		return msg.Text
@@ -455,15 +500,27 @@ func mimeOf(name string) string {
 
 // ---------------------------------------------------------------- read
 
+// handleMarkRead tells Matrix that this conversation has been read.
+//
+// The host marks a conversation read at a moment in time and sends no message
+// id -- which is what the WhatsApp and Signal bridges are given too. Matrix
+// hangs a receipt on an event instead, so the newest event the room has shown
+// us is what the receipt names: opening a conversation and reading it to the
+// bottom is exactly what every other Matrix client acknowledges that way.
+//
+// This used to insist on a messageId the host never sends, so it returned
+// without doing anything at all -- and a conversation read here stayed unread
+// on every other client of the account.
 func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 	var params struct {
 		ChatID    string `json:"chatId"`
 		MessageID string `json:"messageId"`
+		UpTo      int64  `json:"upTo"`
 	}
 	_ = json.Unmarshal(c.Params, &params)
 
 	client := b.getClient()
-	if client == nil || params.MessageID == "" {
+	if client == nil {
 		ok(c.ID, nil)
 		return
 	}
@@ -475,9 +532,20 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 		return
 	}
 
-	if err := client.MarkRead(ctx, id.RoomID(params.ChatID), id.EventID(params.MessageID)); err != nil {
-		// Not worth surfacing: the message is read either way, and only the
-		// sender's marker is affected.
+	target := id.EventID(params.MessageID)
+	if target == "" {
+		target = b.receiptTarget(id.RoomID(params.ChatID))
+	}
+	if target == "" {
+		// Nothing to point a receipt at, or nothing new to acknowledge. The
+		// host has cleared its own count either way.
+		ok(c.ID, nil)
+		return
+	}
+
+	if err := client.MarkRead(ctx, id.RoomID(params.ChatID), target); err != nil {
+		// Not worth surfacing: the conversation is read either way, and what
+		// this affects is what our other clients think.
 		logf("debug", "could not send read receipt: %v", err)
 	}
 	ok(c.ID, nil)

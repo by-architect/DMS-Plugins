@@ -100,3 +100,63 @@ func TestOurReadReceiptIgnoresOtherPeople(t *testing.T) {
 		t.Errorf("read position = %d, want our own receipt's 5000", got)
 	}
 }
+
+// Reading a conversation here has to tell the rest of the account, or it comes
+// back unread on the phone that is sitting next to the machine it was read on.
+//
+// The host marks a conversation read at a moment in time and names no message,
+// so the receipt goes to the newest event the room has shown us.
+func TestReadReceiptNamesTheNewestEventSeen(t *testing.T) {
+	b := testBridge()
+
+	b.noteLastEvent(testRoom, id.EventID("$first"), 1000)
+	b.noteLastEvent(testRoom, id.EventID("$second"), 2000)
+	if got := b.receiptTarget(testRoom); got != id.EventID("$second") {
+		t.Errorf("receipt target = %q, want the newest event", got)
+	}
+
+	// Backfill and a resumed sync both deliver older events; acknowledging one
+	// would tell our other clients we have read less than we have.
+	b.noteLastEvent(testRoom, id.EventID("$older"), 500)
+	if got := b.receiptTarget(testRoom); got != id.EventID("$second") {
+		t.Errorf("receipt target after an older event = %q, want the newest", got)
+	}
+}
+
+// A room we have already acknowledged is not worth a request per reopening,
+// and one this session has never seen has nothing to point at.
+func TestNoReceiptWhenThereIsNothingToAcknowledge(t *testing.T) {
+	b := testBridge()
+
+	if got := b.receiptTarget(testRoom); got != "" {
+		t.Errorf("receipt target for an unseen room = %q, want none", got)
+	}
+
+	b.noteLastEvent(testRoom, id.EventID("$evt"), 2000)
+	b.setReadUpTo(testRoom, 3000)
+	if got := b.receiptTarget(testRoom); got != "" {
+		t.Errorf("receipt target for an already-read room = %q, want none", got)
+	}
+}
+
+// The newest event survives a restart, so a conversation read straight after
+// one is still acknowledged: a resumed sync is told what changed, and a room
+// nobody has written in since changed nothing.
+func TestNewestEventSurvivesARestart(t *testing.T) {
+	t.Setenv("DMS_MATRIX_DIR", t.TempDir())
+
+	b := testBridge()
+	b.noteLastEvent(testRoom, id.EventID("$evt"), 1700000000000)
+
+	store, err := newRoomStore()
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	store.save(b.snapshotRooms())
+
+	next := testBridge()
+	next.rooms = store.load()
+	if got := next.receiptTarget(testRoom); got != id.EventID("$evt") {
+		t.Errorf("receipt target after a restart = %q, want it remembered", got)
+	}
+}
