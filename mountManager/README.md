@@ -109,7 +109,9 @@ sh scripts/action.sh mount /dev/sdb1 # status:ok / status:err, then the message
 `action.sh` always exits 0 and always states the outcome on its first line, so
 the reader never has to race an exit code against the output it belongs to.
 
-From the running shell:
+From the running shell, once the widget is actually on a bar — the service is a
+QML singleton, so nothing exists to answer until a pill is instantiated, and
+`Target not found` means the widget is enabled but not placed anywhere:
 
 ```sh
 dms ipc call mountManager status     # every row, as the plugin sees it
@@ -124,6 +126,21 @@ dms ipc call mountManager refresh
 | Hide when nothing is removable | off | take the pill out of the bar while no removable device is attached |
 | Show loop devices | off | include snap/AppImage and file-backed mounts |
 | Re-read devices | 5000 ms | the backstop poll; the list is also re-read after every action and on every udev event |
+
+## Installing
+
+Symlinking is enough, but the plugins directory watcher does not notice a new
+**symlink**, so the shell has to be told to look:
+
+```sh
+ln -sfn "$PWD/mountManager" ~/.config/DankMaterialShell/plugins/mountManager
+dms ipc call plugin-scan scan
+dms ipc call plugin-scan list | grep mountManager   # mountManager unloaded widget …
+```
+
+Then enable it under **Settings → Plugins** (which is what writes
+`enabled: true`, so it survives a restart) and add it to a section under
+**Settings → Bar**. Until it is placed on a bar, nothing of it is instantiated.
 
 ## Needs
 
