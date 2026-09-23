@@ -66,11 +66,60 @@ FocusScope {
     // the overlay then, and the modal must not act on it.
     readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null
 
-    // Whatever closes an overlay puts focus back on the composer, so Escape
-    // keeps working and typing keeps landing in the text field.
+    // ------------------------------------------------------------- focus
+    //
+    // The text field holds the keyboard, always, whenever this view is on
+    // screen and there is something to type into. It is not a nicety: Enter
+    // sends, the shortcuts are chords chosen because a text field does not want
+    // them, and a message is typed without aiming first. Focus landing anywhere
+    // else means keys that go nowhere and a window that looks broken.
+    //
+    // So rather than being handed focus once, at the moment a conversation
+    // opens, the view takes it back at every point where it could have been
+    // lost: an overlay closing, an invitation being answered, the conversation
+    // becoming visible, or anything inside here quietly taking it.
+    //
+    // Focus that has left this view entirely is the one thing left alone -- the
+    // search box next door was clicked into on purpose, and a window that
+    // argues about that is worse than one that loses focus.
+
+    // An overlay is layered over this view and had the keyboard because this
+    // view lent it: closing one gives it straight back, wherever it left it.
     onHasOverlayChanged: {
         if (!hasOverlay)
-            Qt.callLater(() => root.takeFocus());
+            Qt.callLater(root.takeFocus);
+    }
+
+    // An invitation has no composer; answering it grows one, and the bar that
+    // had the keyboard is gone, so nothing else would ever put it there.
+    onIsInviteChanged: {
+        if (!isInvite)
+            Qt.callLater(root.takeFocus);
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            Qt.callLater(root.keepFocus);
+            return;
+        }
+        // Off the screen, so the keyboard cannot stay here: a hidden text field
+        // holds onto it, and what took this view's place -- a sign-in panel,
+        // search results -- would look focused while everything typed went into
+        // a message that is not on screen.
+        composer.releaseFocus();
+    }
+
+    // Focus arriving anywhere in here -- a click, a parent handing it over --
+    // belongs in the text field.
+    onActiveFocusChanged: root.keepFocus()
+
+    // keepFocus puts the keyboard back in the text field when it is still ours
+    // to put: something in here took it, or was handed it and did nothing with
+    // it. Focus that has left this view is deliberately not chased.
+    function keepFocus() {
+        if (root.hasOverlay || !root.activeFocus || composer.fieldFocused)
+            return;
+        root.takeFocus();
     }
 
     // The view can be built after the conversation was opened: a popout creates
@@ -83,10 +132,13 @@ FocusScope {
             root._awaitingUnread = root.chatCore.hasActiveChat;
     }
 
+    // takeFocus is the way in from outside: a conversation being opened, a
+    // window being shown. Inside, keepFocus above is what holds it here.
     function takeFocus() {
-        // Nothing to type into while an invitation is unanswered, and focusing
-        // a hidden field would swallow the keys that do work here.
-        if (root.isInvite)
+        // Nothing to type into while an invitation is unanswered, or while this
+        // view is not the thing on screen: focusing a hidden field would
+        // swallow the keys that do work.
+        if (!root.visible || root.isInvite)
             return;
         composer.takeFocus();
     }
@@ -687,6 +739,23 @@ FocusScope {
             width: parent.width
             visible: !root.isInvite
             replyTarget: root.replyTarget
+
+            // Anything in here that takes the keyboard gives it straight back.
+            onFieldFocusedChanged: {
+                if (!composer.fieldFocused)
+                    Qt.callLater(root.keepFocus);
+            }
+
+            // A field that cannot be typed into cannot hold the keyboard
+            // either, and until a provider has reported what it can do, this is
+            // one of those. That answer arrives over a socket, so it can easily
+            // be later than the conversation it belongs to -- and without this
+            // the window would sit there, open and ready, with nowhere for the
+            // typing to go.
+            onCanSendChanged: {
+                if (composer.canSend)
+                    Qt.callLater(root.takeFocus);
+            }
 
             onReplyCleared: root.replyTarget = null
             onSent: {

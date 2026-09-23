@@ -37,13 +37,34 @@ FocusScope {
     Component.onCompleted: root.chatCore.refCount++
     Component.onDestruction: root.chatCore.refCount--
 
+    // Whether there is a conversation here to type into.
+    readonly property bool conversationReady: root.showingConversation && root.chatCore.hasActiveChat
+
     function takeFocus() {
         // Straight to the composer: a chat opens ready to be written in, and
         // every shortcut is designed around the text field holding focus.
-        if (root.showingConversation && root.chatCore.hasActiveChat)
+        if (root.conversationReady)
             conversation.takeFocus();
         else
             root.forceActiveFocus();
+    }
+
+    // The conversation almost always arrives after the popout does -- it is
+    // opened on the next turn of the event loop, once this content exists --
+    // so whatever asked for focus as the popout appeared found nothing to give
+    // it to and left it on this scope, where typing goes nowhere. Following the
+    // conversation appearing is what makes it land in the text field.
+    onConversationReadyChanged: {
+        if (root.conversationReady)
+            Qt.callLater(root.takeFocus);
+    }
+
+    // Focus handed to this scope -- by the modal as it loads its contents, or
+    // by a click landing on nothing -- is passed on to the conversation, which
+    // is the only thing here that anybody types into.
+    onActiveFocusChanged: {
+        if (root.activeFocus && root.conversationReady)
+            Qt.callLater(root.takeFocus);
     }
 
     Keys.onEscapePressed: event => {
