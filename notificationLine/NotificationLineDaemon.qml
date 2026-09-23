@@ -216,9 +216,20 @@ PluginComponent {
     Connections {
         target: NotificationService
 
-        function onVisibleNotificationsChanged() {
+        // Both, and neither is redundant. processQueue() assigns
+        // visibleNotifications *before* it sets the new wrapper's `popup`, so
+        // the list signal arrives while the arrival still looks invisible --
+        // tracking only that would skip every notification on the way in and
+        // leave the shell's own timer running it. `popups` is a binding over
+        // the popup flags, so it fires on the transition the list signal
+        // misses.
+        function onPopupsChanged() {
             root.syncTracked();
             root.refreshFocusedScreen();
+        }
+
+        function onVisibleNotificationsChanged() {
+            root.syncTracked();
         }
     }
 
@@ -313,27 +324,29 @@ PluginComponent {
 
     // ---- queue depth -----------------------------------------------------
 
-    // NotificationService only lets four popups coexist; past that it queues,
-    // and past the limit it evicts the oldest on the spot. That eviction is
-    // what caps the stack, so it has to match the number of lines drawn.
-    property int savedMaxVisible: -1
+    // NotificationService lets four popups coexist by default and, past that
+    // limit, evicts the oldest on the spot -- no timeout involved, which is
+    // why a burst used to collapse to a handful of lines the instant it
+    // landed while the survivors kept their configured time.
+    //
+    // So the shell's limit is deliberately *not* the number of lines drawn.
+    // It is raised well clear of it, and the stack does its own trimming: a
+    // notification past the visible count is hidden, not killed, and gets its
+    // full lifetime like every other.
+    readonly property int serviceCap: Math.max(24, root.maxLines * 2)
 
-    function applyQueueDepth() {
-        if (root.savedMaxVisible < 0)
-            root.savedMaxVisible = NotificationService.maxVisibleNotifications;
-        NotificationService.maxVisibleNotifications = root.maxLines;
+    // A Binding rather than an assignment on load with a restore on unload:
+    // reloading the plugin overlaps two generations, and the outgoing one's
+    // restore can land after the incoming one has already applied its value,
+    // silently leaving the shell on whatever the older generation had saved.
+    Binding {
+        target: NotificationService
+        property: "maxVisibleNotifications"
+        value: root.serviceCap
+        restoreMode: Binding.RestoreBindingOrValue
     }
-
-    function restoreQueueDepth() {
-        if (root.savedMaxVisible >= 0)
-            NotificationService.maxVisibleNotifications = root.savedMaxVisible;
-        root.savedMaxVisible = -1;
-    }
-
-    onMaxLinesChanged: applyQueueDepth()
 
     Component.onCompleted: {
-        applyQueueDepth();
         syncSuppression();
         syncTracked();
         console.info("notificationLine: daemon ready (ipc target 'notificationLine')");
@@ -341,7 +354,6 @@ PluginComponent {
 
     Component.onDestruction: {
         releaseTiming();
-        restoreQueueDepth();
         releaseSuppression();
     }
 
@@ -398,7 +410,7 @@ PluginComponent {
         function status(): string {
             const list = root.visibleList();
             const timing = root.ownsTiming ? (root.lifetime > 0 ? root.lifetime + "s" : "urgency") : "shell";
-            return [root.position, "lines=" + list.length + "/" + root.maxLines, "timing=" + timing, "suppressed=" + root.suppressionApplied].join("\t");
+            return [root.position, "lines=" + list.length + "/" + root.maxLines, "cap=" + NotificationService.maxVisibleNotifications + "/" + root.serviceCap, "tracked=" + root.tracked.length, "timing=" + timing, "suppressed=" + root.suppressionApplied].join("\t");
         }
     }
 }

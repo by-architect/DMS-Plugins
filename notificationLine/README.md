@@ -104,16 +104,20 @@ is only useful for comparing them.
 
 ## Stack depth
 
-`NotificationService` allows four popups at a time and queues the rest. Lines
-are cheap, so the plugin raises that limit to the configured **Lines on
-screen** (6 by default, up to 12) while it is loaded, and restores the original
-when unloaded.
+`NotificationService` allows four popups at a time and, past that, **evicts
+the oldest on the spot** — no timeout involved. That is what made a burst
+collapse to a handful of lines the instant it landed while the survivors kept
+their configured time.
 
-That number is a hard cap, not a scroll window: the service evicts the oldest
-popup the moment one more arrives than fits, regardless of how much of its
-lifetime is left. With long timeouts a busy stack therefore retires old lines
-on arrival rather than on time — raise the cap or shorten the lifetime if that
-bites.
+So the shell's limit is deliberately not the number of lines drawn. The plugin
+raises it well clear of **Lines on screen** and does its own trimming instead:
+a notification past the visible count is *hidden, not killed*, keeps its full
+lifetime, and takes its place on the stack when one of the visible lines
+expires. Nothing is ever retired early by arriving in company.
+
+The trade-off is that on a very busy stack an older notification can surface a
+little after it arrived. Shorten the lifetime if you would rather a burst
+drained faster.
 
 Bottom corners stack upwards with the newest line at the bottom; top corners
 hang downwards with the newest at the top.
