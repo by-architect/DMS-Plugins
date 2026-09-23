@@ -1,12 +1,9 @@
 # File Actions
 
-A bar pill for long file operations, fed by a directory of status files: one
-file per action, each holding that action's current JSON. Whatever writes those
-files — a `cp` wrapper, a sync script, a downloader — shows up in the bar
-without knowing anything about the shell.
-
-The pill is the action that started most recently. Everything else is one click
-away.
+A bar pill for long file operations, fed by the `fct` wrappers (`cp`, `mv`,
+`rm`, `rsync`, `scp`, `curl`, `wget`, `aria2c`, `torrent`, `git-clone`,
+`trash-*`) from [MatrixProject][matrix]. The pill is the action that started
+most recently. Everything else is one click away.
 
 ```
    bar:   [ ⧉ 94% ]                     ← newest running action, progress underneath
@@ -27,27 +24,42 @@ away.
         │       1.1 GB of 9.4 GB · 41,2MB/s · 3m 20s …   │
         │                                                │
         │  Finished                                      │
-        │  ✓  oldname → newname            2m ago        │
-        │     mv · 1.18 MB · in 1m 4s                    │
-        │  ✕  old                          6m ago        │
-        │     rm failed · Permission denied              │
+        │  ✓  .cache → newcache            36m ago       │
+        │     cp · 51216 files · 5.81 GB · in 22s        │
+        │  ✕  .cache → newcache            37m ago       │
+        │     cp failed · Copying .cache/ to newcache …  │
         └────────────────────────────────────────────────┘
 ```
 
-## The directory
+[matrix]: ../../MatrixProject
 
-`$XDG_RUNTIME_DIR/matrix/dejavu` by default, changeable in settings. It does
-not have to exist — the plugin says so instead of erroring, and picks the first
-file up the moment one appears.
+## Two sources, because the wrappers have two outputs
 
-Every file in it is read as JSON on its own. One file being half-written costs
-that one row for one poll (the previous reading stays on screen), not the whole
-list.
+This is the part worth knowing before changing anything here.
 
-## The file
+**Running** actions come from the live state directory —
+`$XDG_RUNTIME_DIR/matrix/fct`, one JSON file per running operation, rewritten
+about four times a second. `$XDG_RUNTIME_DIR/matrix/dejavu` is watched as well:
+same tool, older name, and which one exists depends on the generation the
+machine booted.
 
-One action, one file, rewritten in place as it progresses. The example this was
-built against:
+**Finished** actions do *not* come from there. The wrapper deletes its state
+file on every exit path — success, failure, or a Ctrl+C — so the directory can
+only ever answer "what is running now". How something went is in the event log,
+where each wrapper writes one record per operation:
+
+1. `~/.local/state/fct.json` — one JSON record per line, preferred because it
+   is a `tail` away and needs no journal access
+2. `journalctl -t matrix-fct -t matrix-dejavu -o json` — the same fields as
+   `MATRIX_*` on a journal entry, read only if neither state file is readable
+
+Both shapes go through one parser, so the rows are identical either way.
+
+A consequence worth stating: the finished list is there the first time the
+popout is opened, even if nothing has run since the shell started, and it
+survives a shell restart. Nothing about it is kept in the plugin.
+
+## The live file
 
 ```json
 {
@@ -67,75 +79,84 @@ built against:
 }
 ```
 
-Every field is optional; a file with nothing but `command` and `status` still
-gets a row. Alternate names are accepted for each, so an existing writer
-usually needs no changes:
+Written tmp+rename, so a half-written file is never observed — but each file is
+parsed on its own anyway, so a reader that did catch one would lose that row
+for one poll rather than the whole list.
 
-| Field | Also read as | Used for |
-|---|---|---|
-| `command` | `action`, `op` | the row's icon and the word in the finished list |
-| `status` | `state` | running / finished / failed — see below |
-| `percent` | `percentage`, `progress` | the bar and the pill; falls back to `bytes_done / bytes_total` |
-| `bytes_done` | `done`, `transferred` | "5.26 GB of 5.59 GB" |
-| `bytes_total` | `total`, `size` | as above, and the size in the finished list |
-| `rate` | `speed` | shown verbatim, whatever units the writer uses |
-| `eta` | `remaining` | `0:00:18`, `4:32` and plain seconds all become "18s", "4m 32s" |
-| `source` | `src`, `from` | left half of "name → name" |
-| `target` | `dest`, `destination`, `to` | right half |
-| `current_file` | `current`, `file` | the dim third line, percent-decoded, basename only |
-| `started` | `start`, `started_at`, `begin` | ordering, and "in 1m 4s" once finished |
-| `finished` | `ended`, `completed`, `finished_at`, `end` | when it ended |
-| `error` | `message`, `reason` | the red line under a failed action |
-| `id`, `pid` | — | carried through; the file name is what identifies a row |
+Every field is optional and alternate names are accepted (`action`/`op` for
+`command`, `progress` for `percent`, `dest`/`to` for `target`, `src`/`from` for
+`source`, `speed` for `rate`, `remaining` for `eta`, `current`/`file` for
+`current_file`), so a hand-rolled writer can feed this too. `rate` is shown
+verbatim in whatever units it arrives in; `eta` accepts `0:00:18`, `4:32` or a
+plain number of seconds and comes out as "18s", "4m 32s". Timestamps may be ISO
+8601 or epoch seconds/milliseconds. `current_file` is percent-decoded and
+reduced to its basename, because a cache path otherwise fills the row.
 
-Timestamps may be ISO 8601 (`2026-09-23T19:33:43+03:00`) or epoch
-seconds/milliseconds.
+`status` is matched loosely: anything containing *fail*, *error*, *abort*,
+*cancel*, *denied* or *timeout* is a failure, *done*, *complete*, *finish*,
+*success* or *ok* is finished, and everything else — including a word this
+plugin has never seen — is still running. The `fct` wrappers only ever write
+`running` here, so this matters only for other writers.
 
-**Status** is matched loosely, because writers disagree about wording:
-anything containing *fail*, *error*, *abort*, *cancel*, *denied* or *timeout*
-is a failure; *done*, *complete*, *finish*, *success* or *ok* is finished;
-*run*, *copy*, *sync*, *pend*, *queue*, *paus* and friends are still running,
-and so is a word the plugin has never seen — an unrecognised status on a file
-that still exists is much more likely to be a state nobody thought to document
-than a finished action.
+## The event log record
 
-Delete the file when the action ends, or leave it there with a terminal
-status; both work.
+```json
+{"host":"nebuchadnezzar","date":"2026-09-23T19:34:05+03:00","service":"fct",
+ "command":"cp","status":"success","name":".cache",
+ "source":"/home/neo/Downloads/.cache/","target":"/home/neo/Downloads/newcache",
+ "total":"51216","size":"5947.9","log":null,"epoch":"1790182445"}
+```
+
+`status` is `started`, `success` or `fail`. `total` is a **file count** and
+`size` is **megabytes**, not bytes — both are already converted by the time
+they are logged. `log` carries the plain-English failure sentence, which is
+what the red line under a failed row says.
+
+A run is identified by its command plus what it was pointed at, never by pid:
+each record is written by its own short-lived process, so an action's `started`
+and `success` never share one. Pairing them is what produces "in 22s".
 
 ## What it does that a progress bar does not
 
-**Stalled actions are called stalled.** Nothing in a status file says whether
-the process writing it is still alive, so an action whose file has not changed
-for 45 seconds (configurable) turns amber and says `stalled` where the
-percentage was. A frozen `94%` is exactly what makes a dead copy look healthy.
+**Stalled actions are called stalled.** Nothing in a live file says whether the
+process writing it is still alive, so an action whose file has not changed for
+45 seconds (configurable) turns amber and says `stalled` where the percentage
+was. A frozen `94%` is exactly what makes a dead copy look healthy.
 
-**A file that disappears mid-run is reported as *ended*, not done.** Only a
-file that was at 99.5% or more when it vanished is assumed to have succeeded —
-that is the ordinary case of a writer cleaning up after itself. Anything else
-gets an amber `ended`, with the percentage it stopped at.
+**A vanished file is a stand-in row, not a verdict.** When a state file
+disappears the plugin shows an amber `ended` row with the percentage it stopped
+at — and drops it the moment the event log produces the real record for that
+run, which is normally within one poll. If the log cannot be read at all, those
+stand-ins are the whole finished list rather than nothing.
 
-**The finished list is memory only.** It is what just happened, and after a
-shell restart nothing just happened. Right-click the pill, or use the sweep
-button in the popout header, to clear it early.
+**Zeros are not shown.** `0,00kB/s · 0s left` is what the first second of a
+transfer looks like before the writer has anything to report, and it reads as a
+stall; the row shows what it knows and nothing else.
+
+**"Clear finished" hides, it does not delete.** The event log is not this
+plugin's to truncate, so the sweep button (and a right-click on the pill) means
+"everything older than now is no longer interesting".
 
 ## Settings
 
 | Setting | Default | |
 |---|---|---|
-| Status directory | `$XDG_RUNTIME_DIR/matrix/dejavu` | where the files are |
+| Status directory | both `matrix/fct` and `matrix/dejavu` | where live files are |
 | Hide when nothing is running | off | remove the pill from the bar entirely while idle |
 | Refresh while active | 800 ms | how often the directory is re-read during an action |
 | Refresh while idle | 3000 ms | how often it is checked for a new one |
+| Refresh finished list | 30000 ms | backstop only — the log is re-read the moment an action ends |
 | Stalled after | 45 s | unchanged-file threshold for the stalled flag |
 | Finished actions kept | 20 | rows under the running ones |
 
-## How it reads the directory
+## Shape
 
-One `sh` pass per poll prints a marker, each file's name and each file's
-contents; the parsing, the phase rules and the history merge all live in
-`actions.js` as pure functions over the previous snapshot, so they can be run
-and tested outside quickshell. The QML above it is layout.
+`actions.js` holds the parsing, the phase rules, the started→finished pairing
+and the history merge as pure functions over the previous snapshot, so they run
+and are tested outside quickshell. The QML above them is layout.
 
 There is one poller for the whole shell, not one per monitor:
 `FileActionsService` is a singleton, and the bar pill on every screen plus the
-popout all read the same two lists off it.
+popout all read the same two lists off it. The popout's rows are bound through
+an index rather than modelled on the array itself, so a poll updates a row in
+place instead of rebuilding it and restarting its progress animation.

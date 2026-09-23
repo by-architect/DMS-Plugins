@@ -9,8 +9,8 @@ PluginSettings {
     StringSetting {
         settingKey: "watchDir"
         label: "Status directory"
-        description: "Where the one-file-per-action status files are written. Empty means $XDG_RUNTIME_DIR/matrix/dejavu."
-        placeholder: "$XDG_RUNTIME_DIR/matrix/dejavu"
+        description: "Where the one-file-per-action status files are written. Empty watches both $XDG_RUNTIME_DIR/matrix/fct and .../matrix/dejavu, which is the same tool under its old name."
+        placeholder: "$XDG_RUNTIME_DIR/matrix/fct"
         defaultValue: ""
     }
 
@@ -41,6 +41,17 @@ PluginSettings {
         maximum: 30000
         unit: " ms"
         leftIcon: "hourglass_empty"
+    }
+
+    SliderSetting {
+        settingKey: "journalIntervalMs"
+        label: "Refresh finished list"
+        description: "How often to re-read the event log. It is also re-read the moment an action ends, so this is only a backstop for operations started elsewhere"
+        defaultValue: 30000
+        minimum: 5000
+        maximum: 300000
+        unit: " ms"
+        leftIcon: "history_toggle_off"
     }
 
     SliderSetting {

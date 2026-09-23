@@ -21,7 +21,7 @@ system, and an **overlay** that replaces a piece of shell chrome.
 | [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationLine](notificationLine/) | overlay | every notification | — |
-| [fileActions](fileActions/) | bar widget | the pill, and its popout | — |
+| [fileActions](fileActions/) | bar widget | the pill, and its popout | `fct`, or any writer of per-action status files |
 | [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
 | [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
 | [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
@@ -426,10 +426,9 @@ A pill in the bar with a popout under it, rather than a fullscreen panel.
 
 ## fileActions
 
-Long file operations — copies, moves, syncs, downloads — reported from a
-directory of status files: one file per action, each holding that action's
-current JSON. Whatever writes those files shows up in the bar without knowing
-anything about the shell.
+Long file operations — copies, moves, trashes, downloads, clones — reported
+from the `fct` wrappers: the shell-level `cp`, `mv`, `rm`, `rsync`, `scp`,
+`curl`, `wget`, `aria2c`, `torrent` and `git-clone` that log what they moved.
 
 ```
    [ ⧉ 94% +1 ]     ← newest running action, its progress, and one more behind it
@@ -437,18 +436,27 @@ anything about the shell.
 
 Clicking opens the list: everything running on top, with a progress bar, rate,
 ETA and the file being worked on right now, and the last finished actions
-underneath with how they went.
+underneath with how they went — file count, size, how long it took, and the
+failure sentence when it failed.
 
-Two things it does that a progress bar does not. An action whose status file
-has stopped changing is flagged **stalled** rather than left sitting at a
-frozen 94% — nothing in a status file says whether the process writing it is
-still alive. And a file that disappears mid-run is reported as **ended**, not
-done, unless it was all but complete when it went, which is the ordinary case
-of a writer cleaning up after itself.
+It reads the two outputs those wrappers already have, because neither one
+answers the whole question. Running actions come from the live state directory
+(`$XDG_RUNTIME_DIR/matrix/fct`, one JSON file per operation, deleted the moment
+it ends). Finished ones come from the event log — `~/.local/state/fct.json`, or
+`journalctl -t matrix-fct` when that file cannot be read — which is the only
+place that records how anything went. So the finished list is already there the
+first time the popout is opened, and survives a restart.
 
-The directory is `$XDG_RUNTIME_DIR/matrix/dejavu` by default and does not have
-to exist yet. Field names are matched loosely, so an existing writer usually
-needs no changes — the full contract is in the plugin's README.
+Two things it does that a progress bar does not. An action whose state file has
+stopped changing is flagged **stalled** rather than left sitting at a frozen
+94% — nothing in that file says whether the process writing it is still alive.
+And a file that vanishes without a log record yet shows as a provisional
+**ended** row, replaced by the real outcome as soon as the log catches up.
+
+Nothing about it is `fct`-specific beyond the defaults: field names are matched
+loosely and every field is optional, so any writer that drops a JSON file per
+operation into a directory shows up here. The full contract is in the plugin's
+README.
 
 → [fileActions/README.md](fileActions/README.md)
 
