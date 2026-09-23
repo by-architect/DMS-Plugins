@@ -31,6 +31,34 @@ FocusScope {
         searchField.forceActiveFocus();
     }
 
+    // openConversation opens one and hands it the keyboard.
+    //
+    // The focus half is not optional. Picking a conversation is picking what to
+    // write in, and leaving focus in the search box means the first thing typed
+    // filters the list instead -- and, after two characters, replaces the
+    // conversation with search results. Every way into a conversation from this
+    // window goes through here for that reason.
+    function openConversation(provider, chatId, ts) {
+        if (ts > 0)
+            root.chatCore.openChatAt(provider, chatId, ts);
+        else
+            root.chatCore.openChat(provider, chatId);
+
+        // After the open, so the conversation is on screen by the time it is
+        // asked to take focus -- a hidden field cannot hold the keyboard.
+        Qt.callLater(() => conversation.takeFocus());
+    }
+
+    // Signing in takes over the conversation pane and the keyboard with it.
+    // When it is done the panel is gone, and focus with it, so it goes back to
+    // the conversation -- unless the search box is where the user has since
+    // started typing, which is theirs.
+    onAuthProviderChanged: {
+        if (root.authProvider !== null || searchField.getActiveFocus())
+            return;
+        Qt.callLater(() => conversation.takeFocus());
+    }
+
     readonly property bool hasProviders: root.chatCore.providers.length > 0
 
     // Message search results for the current query. The chat list filters
@@ -190,7 +218,7 @@ FocusScope {
                         chat: modelData
                         selected: root.chatCore.activeProvider === modelData.provider && root.chatCore.activeChatId === modelData.id
 
-                        onActivated: root.chatCore.openChat(modelData.provider, modelData.id)
+                        onActivated: root.openConversation(modelData.provider, modelData.id, 0)
                         onArchiveToggled: root.chatCore.setArchived(modelData.provider, modelData.id, !modelData.archived)
                         onMuteToggled: root.chatCore.setMuted(modelData.provider, modelData.id, !modelData.muted)
                     }
@@ -251,11 +279,12 @@ FocusScope {
                 onHitChosen: (provider, chatId, ts) => {
                     // Clear first: the results pane is bound to the query, and
                     // leaving it set keeps the filter over the conversation the
-                    // user just asked to read.
+                    // user just asked to read -- and would keep this view from
+                    // being the one on screen to take focus.
                     searchField.text = "";
                     root.messageHits = [];
                     searchDebounce.stop();
-                    root.chatCore.openChatAt(provider, chatId, ts);
+                    root.openConversation(provider, chatId, ts);
                 }
             }
 
