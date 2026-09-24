@@ -83,16 +83,22 @@ PanelWindow {
             focus: true
 
             Keys.onEscapePressed: win.closeRequested()
+
+            // One letter per *kind* of capture, Shift for the whole screen:
+            // s/S screenshot, t/T to text, r/R record, g/G GIF. Two letters
+            // per kind (the old S/F and R/D pairs) meant remembering which
+            // arbitrary second letter belonged to which action; the Shift
+            // rule is the same for all four, so there is only one thing to
+            // remember. Toggles and format chips ignore Shift — there is no
+            // fullscreen/selected distinction for them to carry.
             Keys.onPressed: event => {
+                const full = (event.modifiers & Qt.ShiftModifier) !== 0;
                 switch (event.key) {
                 case Qt.Key_S:
-                    win.runAction(() => ScreenCatcherService.takeScreenshotSelected());
-                    break;
-                case Qt.Key_F:
-                    win.runAction(() => ScreenCatcherService.takeScreenshotFullscreen());
+                    win.runAction(() => full ? ScreenCatcherService.takeScreenshotFullscreen() : ScreenCatcherService.takeScreenshotSelected());
                     break;
                 case Qt.Key_T:
-                    win.runAction(() => ScreenCatcherService.screenshotToText());
+                    win.runAction(() => ScreenCatcherService.screenshotToText(full ? "full" : "select"));
                     break;
                 case Qt.Key_C:
                     ScreenCatcherService.setCopyToClipboard(!ScreenCatcherService.copyToClipboard);
@@ -117,15 +123,11 @@ PanelWindow {
                     break;
                 case Qt.Key_R:
                     if (!ScreenCatcherService.isRecording)
-                        win.runAction(() => ScreenCatcherService.startRecording("full"));
-                    break;
-                case Qt.Key_D:
-                    if (!ScreenCatcherService.isRecording)
-                        win.runAction(() => ScreenCatcherService.startRecording("select"));
+                        win.runAction(() => ScreenCatcherService.startRecording(full ? "full" : "select"));
                     break;
                 case Qt.Key_G:
                     if (!ScreenCatcherService.isRecording)
-                        win.runAction(() => ScreenCatcherService.recordSelectedGif());
+                        win.runAction(() => ScreenCatcherService.recordGif(full ? "full" : "select"));
                     break;
                 case Qt.Key_X:
                     if (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting)
@@ -153,12 +155,20 @@ PanelWindow {
                 event.accepted = true;
             }
 
-            // Centered card, half the window's width/height.
+            // Centered card, half the window's width — and half its height
+            // unless the columns need more. Giving each capture a Shift
+            // variant added a row to both columns, which overflowed a flat
+            // half-height card on a 1080p screen: the bottom toggle was
+            // simply cut off. The height now grows to whatever the taller
+            // column asks for, capped so the card always stays on screen.
             Rectangle {
                 id: card
+
+                readonly property real contentHeight: header.height + cardContent.spacing + Math.max(leftColumn.implicitHeight, rightColumn.implicitHeight) + Theme.spacingL * 2
+
                 anchors.centerIn: parent
                 width: win.width / 2
-                height: win.height / 2
+                height: Math.min(win.height - Theme.spacingL * 2, Math.max(win.height / 2, contentHeight))
                 radius: Theme.cornerRadius * 1.5
                 color: Theme.surfaceContainer
                 border.color: Theme.outline
@@ -207,7 +217,7 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter, or click — Esc closes")
+                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter for the selection, Shift for the whole screen — Esc closes")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting) ? Theme.error : Theme.surfaceVariantText
                             }
@@ -255,7 +265,7 @@ PanelWindow {
                             ActionRow {
                                 width: parent.width
                                 height: 40
-                                letter: "F"
+                                letter: "⇧S"
                                 icon: "fullscreen"
                                 label: "Screenshot Fullscreen"
                                 onActivated: win.runAction(() => ScreenCatcherService.takeScreenshotFullscreen())
@@ -266,8 +276,17 @@ PanelWindow {
                                 height: 40
                                 letter: "T"
                                 icon: "text_fields"
-                                label: "Screenshot to Text"
-                                onActivated: win.runAction(() => ScreenCatcherService.screenshotToText())
+                                label: "Selection to Text"
+                                onActivated: win.runAction(() => ScreenCatcherService.screenshotToText("select"))
+                            }
+
+                            ActionRow {
+                                width: parent.width
+                                height: 40
+                                letter: "⇧T"
+                                icon: "text_fields"
+                                label: "Fullscreen to Text"
+                                onActivated: win.runAction(() => ScreenCatcherService.screenshotToText("full"))
                             }
 
                             Row {
@@ -385,19 +404,19 @@ PanelWindow {
                                 height: 40
                                 visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
                                 letter: "R"
-                                icon: "screen_record"
-                                label: "Record Fullscreen"
-                                onActivated: win.runAction(() => ScreenCatcherService.startRecording("full"))
+                                icon: "crop_free"
+                                label: "Record Selected"
+                                onActivated: win.runAction(() => ScreenCatcherService.startRecording("select"))
                             }
 
                             ActionRow {
                                 width: parent.width
                                 height: 40
                                 visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
-                                letter: "D"
-                                icon: "crop_free"
-                                label: "Record Selected"
-                                onActivated: win.runAction(() => ScreenCatcherService.startRecording("select"))
+                                letter: "⇧R"
+                                icon: "screen_record"
+                                label: "Record Fullscreen"
+                                onActivated: win.runAction(() => ScreenCatcherService.startRecording("full"))
                             }
 
                             // Its own action rather than a third format chip:
@@ -410,7 +429,17 @@ PanelWindow {
                                 letter: "G"
                                 icon: "gif_box"
                                 label: "Record Selected as GIF"
-                                onActivated: win.runAction(() => ScreenCatcherService.recordSelectedGif())
+                                onActivated: win.runAction(() => ScreenCatcherService.recordGif("select"))
+                            }
+
+                            ActionRow {
+                                width: parent.width
+                                height: 40
+                                visible: !ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting
+                                letter: "⇧G"
+                                icon: "gif_box"
+                                label: "Record Fullscreen as GIF"
+                                onActivated: win.runAction(() => ScreenCatcherService.recordGif("full"))
                             }
 
                             Row {
