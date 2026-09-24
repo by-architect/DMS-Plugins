@@ -57,6 +57,10 @@ PanelWindow {
         journalDays: win.journalDays
     }
 
+    FileActionsData {
+        id: fileData
+    }
+
     Component.onCompleted: {
         sysData.refreshAll();
         rootFocus.forceActiveFocus();
@@ -83,9 +87,13 @@ PanelWindow {
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
                     sysData.refreshAll();
+                    fileData.refresh();
+                    fileData.refreshHistory();
                     event.accepted = true;
                 } else if (event.key === Qt.Key_F5) {
                     sysData.refreshAll();
+                    fileData.refresh();
+                    fileData.refreshHistory();
                     event.accepted = true;
                 } else if (event.key === Qt.Key_Q) {
                     win.closeRequested();
@@ -183,7 +191,7 @@ PanelWindow {
                         Layout.fillHeight: true
                     }
 
-                    InboundSshTile {
+                    SystemErrorsTile {
                         data: sysData
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -201,8 +209,8 @@ PanelWindow {
                         Layout.fillHeight: true
                     }
 
-                    SessionsTile {
-                        data: sysData
+                    FileActionsTile {
+                        data: fileData
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                     }

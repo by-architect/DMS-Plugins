@@ -144,6 +144,21 @@ function parseIso(value) {
     return isNaN(t) ? 0 : t;
 }
 
+// journald PRIORITY 0-3 (emerg/alert/crit/err) is the readable "this broke"
+// cut; 4 (warning) and below is left to UnitsTile / raw log tools.
+function priorityLabel(p) {
+    switch (p) {
+    case 0:
+        return "emergency";
+    case 1:
+        return "alert";
+    case 2:
+        return "critical";
+    default:
+        return "error";
+    }
+}
+
 // Truncates a host/IP for display without losing the meaningful part.
 function shortHost(host) {
     if (!host)

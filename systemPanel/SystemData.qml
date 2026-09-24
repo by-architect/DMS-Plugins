@@ -10,7 +10,7 @@ Item {
     property int journalDays: 30
     readonly property string since: "-" + journalDays + " days"
 
-    readonly property bool busy: lastLogins.busy || sshAuth.busy || boots.busy || cleanShutdowns.busy || tailscale.busy || sessions.busy || establishedSsh.busy || sudoEvents.busy || failedUnits.busy || systemState.busy || listeningPorts.busy || overview.busy
+    readonly property bool busy: lastLogins.busy || sshAuth.busy || boots.busy || cleanShutdowns.busy || tailscale.busy || sudoEvents.busy || failedUnits.busy || systemState.busy || systemErrors.busy || listeningPorts.busy || overview.busy
 
     signal refreshed
 
@@ -20,11 +20,10 @@ Item {
         boots.refresh();
         cleanShutdowns.refresh();
         tailscale.refresh();
-        sessions.refresh();
-        establishedSsh.refresh();
         sudoEvents.refresh();
         failedUnits.refresh();
         systemState.refresh();
+        systemErrors.refresh();
         listeningPorts.refresh();
         overview.refresh();
         refreshed();
@@ -342,65 +341,6 @@ Item {
     readonly property var tailscaleDevices: (tailscale.result && tailscale.result.devices) || []
     readonly property bool tailscalePresent: !tailscale.error && !!tailscale.result
 
-    // -------------------------------------------------------------- sessions
-
-    Collector {
-        id: sessions
-
-        command: ["sh", "-c", "ids=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); [ -n \"$ids\" ] || exit 0; loginctl show-session $ids -p Id -p Name -p User -p Remote -p RemoteHost -p Service -p Type -p Class -p State -p TTY -p Seat -p Timestamp -p Leader -p Active 2>/dev/null"]
-        parse: text => {
-            const blocks = Util.parseKeyValueBlocks(text);
-            return blocks.map(b => ({
-                        id: b.Id || "",
-                        user: b.Name || "",
-                        uid: b.User || "",
-                        remote: b.Remote === "yes",
-                        remoteHost: b.RemoteHost || "",
-                        service: b.Service || "",
-                        type: b.Type || "",
-                        sessionClass: b.Class || "",
-                        state: b.State || "",
-                        tty: b.TTY || "",
-                        seat: b.Seat || "",
-                        leader: b.Leader || "",
-                        active: b.Active === "yes",
-                        ts: Util.parseSystemdTimestamp(b.Timestamp || "")
-                    })).sort((a, b) => b.ts - a.ts);
-        }
-    }
-
-    readonly property var allSessions: sessions.result || []
-    readonly property var remoteSessions: allSessions.filter(s => s.remote)
-    readonly property var localSessions: allSessions.filter(s => !s.remote)
-
-    // Established inbound connections on port 22 that may not have reached a
-    // login session yet (mid-handshake, or a session systemd-logind did not track).
-    Collector {
-        id: establishedSsh
-
-        command: ["sh", "-c", "ss -tnH state established '( sport = :22 )' 2>/dev/null"]
-        parse: text => {
-            const out = [];
-            const lines = text.split("\n");
-            for (var i = 0; i < lines.length; i++) {
-                const parts = lines[i].trim().split(/\s+/).filter(p => p.length > 0);
-                if (parts.length < 4)
-                    continue;
-                const local = parts[2];
-                const peer = parts[3];
-                const cut = peer.lastIndexOf(":");
-                out.push({
-                    localAddr: local,
-                    peer: cut > 0 ? peer.substring(0, cut) : peer,
-                    peerPort: cut > 0 ? peer.substring(cut + 1) : ""
-                });
-            }
-            return out;
-        }
-    }
-
-    readonly property var inboundSsh: establishedSsh.result || []
-
     // ------------------------------------------------------------------ sudo
 
     Collector {
@@ -479,6 +419,53 @@ Item {
 
     readonly property var failedUnitList: failedUnits.result || []
     readonly property string systemdState: systemState.result || ""
+
+    // Priority 0-3 (emerg/alert/crit/err) journal entries, deduplicated by
+    // unit+message so a spinning service does not flood the tile with the
+    // same line over and over. Deliberately separate from failedUnits above:
+    // this catches errors a unit logs while technically still "active", not
+    // just units systemd has already given up on.
+    Collector {
+        id: systemErrors
+
+        command: ["journalctl", "-p", "3", "-o", "json", "--no-pager", "--since", root.since, "-n", "500", "--output-fields=MESSAGE,_SYSTEMD_UNIT,SYSLOG_IDENTIFIER,PRIORITY"]
+        parse: text => {
+            const entries = Util.parseNdjson(text);
+            const groups = {};
+            const order = [];
+            for (var i = 0; i < entries.length; i++) {
+                const e = entries[i];
+                const msg = Util.journalMessage(e);
+                const ts = Util.journalMs(e);
+                if (!msg || !ts)
+                    continue;
+
+                const unit = e._SYSTEMD_UNIT || e.SYSLOG_IDENTIFIER || "system";
+                const priority = parseInt(e.PRIORITY, 10);
+                const key = unit + " " + msg;
+
+                if (groups[key]) {
+                    groups[key].count++;
+                    if (ts > groups[key].ts)
+                        groups[key].ts = ts;
+                } else {
+                    groups[key] = {
+                        unit: unit,
+                        message: msg,
+                        priority: isNaN(priority) ? 3 : priority,
+                        ts: ts,
+                        count: 1
+                    };
+                    order.push(key);
+                }
+            }
+            const out = order.map(k => groups[k]);
+            out.sort((a, b) => b.ts - a.ts);
+            return out.slice(0, 80);
+        }
+    }
+
+    readonly property var systemErrorList: systemErrors.result || []
 
     // ----------------------------------------------------------------- ports
 
@@ -584,14 +571,14 @@ Item {
     }
     readonly property var tailscaleInfo: tailscale.result || null
 
-    readonly property bool sessionsRan: sessions.ran
-    readonly property string sessionsError: sessions.error
-
     readonly property bool sudoRan: sudoEvents.ran
     readonly property string sudoError: sudoEvents.error
 
     readonly property bool unitsRan: failedUnits.ran && systemState.ran
     readonly property string unitsError: failedUnits.error
+
+    readonly property bool systemErrorsRan: systemErrors.ran
+    readonly property string systemErrorsError: systemErrors.error
 
     readonly property bool portsRan: listeningPorts.ran
     readonly property string portsError: listeningPorts.error
