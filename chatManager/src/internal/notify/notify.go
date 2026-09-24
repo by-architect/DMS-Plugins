@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -18,11 +19,29 @@ const (
 	notifyPath      = "/org/freedesktop/Notifications"
 	notifyInterface = "org.freedesktop.Notifications"
 
-	maxSummaryLen = 29
-	maxBodyLen    = 80
+	// A guard against a pasted novel going onto the bus, not a decision about
+	// what fits on screen. How much of a notification is shown belongs to the
+	// notification daemon: it is the one that knows how wide the screen is, and
+	// whether the line can be expanded. Cutting at 29 and 80 here meant a group
+	// name and a sentence were both stubs before anything could lay them out.
+	maxSummaryRunes = 200
+	maxBodyRunes    = 2000
 
 	listenerMaxLifetime = time.Hour
 )
+
+// clip shortens a string on a character boundary.
+//
+// Slicing a Go string slices bytes, and every character outside ASCII is more
+// than one of them -- so the obvious version cuts "DOĞA SPORLARI TOPLULUĞU" in
+// the middle of a Ğ and puts half a character on the bus. Nothing sent through
+// a chat reaches this length anyway; it exists so that something pasted can't.
+func clip(value string, limit int) string {
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	return strings.TrimRight(string([]rune(value)[:limit-1]), " ") + "…"
+}
 
 type Notification struct {
 	AppName  string
@@ -46,12 +65,8 @@ func Send(n Notification) (uint32, error) {
 		n.Timeout = 5000
 	}
 
-	if len(n.Summary) > maxSummaryLen {
-		n.Summary = n.Summary[:maxSummaryLen-3] + "..."
-	}
-	if len(n.Body) > maxBodyLen {
-		n.Body = n.Body[:maxBodyLen-3] + "..."
-	}
+	n.Summary = clip(n.Summary, maxSummaryRunes)
+	n.Body = clip(n.Body, maxBodyRunes)
 
 	var actions []string
 	if n.FilePath != "" {
