@@ -3,15 +3,29 @@
 A fullscreen 3×3 system panel for Phoenix / DankMaterialShell, focused on
 answering "who has touched this machine, and is it healthy?".
 
-![The System Panel: login history, inbound SSH, tailscale, boot health, local sessions, privilege escalation, system overview, failed units and listening ports](docs/panel.png)
+![The System Panel: login history, system errors, tailscale, boot health, file actions, privilege escalation, system overview, failed units and listening ports](docs/panel.png)
 
 ## Tiles
 
 | | | |
 |---|---|---|
-| **Login History** — every successful login plus failed SSH attempts, with user, method, source host and relative time | **Inbound SSH** — live remote sessions, plus any established `:22` connection with no matching login session | **Tailscale** — every device in the tailnet, online state, address, direct/relay path, last seen |
-| **Boot Health** — recent boots with runtime, clean/unclean status, and the error lines for boots that ended badly | **Local Sessions** — systemd-logind sessions on this seat | **Privilege Escalation** — sudo activity including denied attempts |
+| **Login History** — every successful login plus failed SSH attempts, with user, method, source host and relative time | **System Errors** — priority ≤ err journal activity system-wide, deduplicated by unit + message | **Tailscale** — every device in the tailnet, online state, address, direct/relay path, last seen |
+| **Boot Health** — recent boots with runtime, clean/unclean status, and the error lines for boots that ended badly | **File Actions** — file operations in progress (cp/mv/rsync/trash), plus their recent history | **Privilege Escalation** — sudo activity including denied attempts |
 | **System Overview** — host, OS, kernel, uptime, systemd state, firewall, sshd, tailscale address | **Failed Units** — `systemctl --failed` and overall system state | **Listening Ports** — what this box exposes, and to which address |
+
+**System Errors** vs. **Failed Units**: they deliberately don't overlap. Failed
+Units is `systemctl --failed` — units systemd has already given up on. System
+Errors is the journal at priority `err` and above, system-wide — it catches a
+unit still logging errors while technically "active", kernel messages, and
+anything outside a unit entirely. Repeated identical lines collapse into one
+row with a `×N` count instead of flooding the tile.
+
+**File Actions** reuses the `fileActions` plugin's model wholesale (see
+`FileActionsData.qml`, `actions.js`, `scripts/live.sh`, `scripts/history.sh`,
+all vendored copies): a live status file under
+`$XDG_RUNTIME_DIR/matrix/{fct,dejavu}` answers "what's running now" and is
+deleted the moment an action ends, so the "Recent" section below it comes from
+the event log (`~/.local/state/fct.json`, falling back to the journal) instead.
 
 ## Data sources
 
@@ -23,8 +37,9 @@ Everything runs as the logged-in user; no root and no helper daemon.
 | Login history (failures) | `journalctl -t sshd -t sshd-session` |
 | Boot health | `journalctl --list-boots` + `journalctl -t systemd-shutdown` |
 | Tailscale | `tailscale status --json` |
-| Inbound SSH | `loginctl show-session` + `ss -tnH state established '( sport = :22 )'` |
-| Local sessions | `loginctl show-session` |
+| System errors | `journalctl -p 3 -o json`, deduplicated by unit + message |
+| File actions (live) | `scripts/live.sh` — cats `$XDG_RUNTIME_DIR/matrix/{fct,dejavu}/*.json` |
+| File actions (history) | `scripts/history.sh` — `~/.local/state/fct.json` / `dejavu.json`, falling back to `journalctl -t matrix-fct -t matrix-dejavu` |
 | Privilege escalation | `journalctl -t sudo` |
 | Failed units | `systemctl list-units --failed --output=json` |
 | Listening ports | `ss -tulnHp` |
