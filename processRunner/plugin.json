@@ -1,0 +1,20 @@
+{
+    "id": "processRunner",
+    "name": "Process Runner",
+    "description": "Search running processes sorted by CPU usage and kill them. Type 'kill <name>' to filter, or just 'kill' to see the heaviest processes.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "command-execution"],
+    "component": "./ProcessRunnerLauncher.qml",
+    "settings": "./ProcessRunnerSettings.qml",
+    "startupCheck": "./ProcessRunnerStartupCheck.qml",
+    "trigger": "kill ",
+    "icon": "memory",
+    "dependencies": ["ps", "kill"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
