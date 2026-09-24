@@ -155,9 +155,10 @@ Singleton {
     // slurp/tesseract are interactive/human-paced — the shared Proc helper's
     // default 10s timeout was firing while the user was still positioning
     // slurp, killing it and reporting a bogus error a few seconds before the
-    // (still-running) slurp surface actually got composited. Both selection
-    // paths disable the timeout entirely; fullscreen doesn't need slurp so it
-    // keeps the default.
+    // (still-running) slurp surface actually got composited. Every path that
+    // waits on slurp disables the timeout entirely, and so does OCR in either
+    // mode (tesseract on a whole 4K screen takes its time). Plain fullscreen
+    // screenshots need neither, so they keep the default.
     function takeScreenshotFullscreen() {
         Proc.runCommand("screenCatcher.shotFull", ["bash", scriptPath, "shot-full", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToPictures), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0);
     }
@@ -166,8 +167,11 @@ Singleton {
         Proc.runCommand("screenCatcher.shotSelect", ["bash", scriptPath, "shot-select", _dir(screenshotDir), _bool(copyToClipboard), _bool(notifyOnComplete), _bool(saveToPictures), imageFormat], (stdout, exitCode) => root._handleShotResult("Screenshot", stdout, exitCode), 0, Proc.noTimeout);
     }
 
-    function screenshotToText() {
-        Proc.runCommand("screenCatcher.shotOcr", ["bash", scriptPath, "shot-ocr", _bool(copyToClipboard), _bool(notifyOnComplete), ocrLang], (stdout, exitCode) => {
+    // `mode` is "select" (default) or "full" — the panel's plain letter takes
+    // the selection, Shift takes the whole screen, and every action follows
+    // the same rule rather than each one having its own letter per mode.
+    function screenshotToText(mode) {
+        Proc.runCommand("screenCatcher.shotOcr", ["bash", scriptPath, "shot-ocr", _bool(copyToClipboard), _bool(notifyOnComplete), ocrLang, mode || "select"], (stdout, exitCode) => {
             if (exitCode === 2)
                 return; // cancelled, stay quiet
             if (exitCode !== 0) {
@@ -253,8 +257,12 @@ Singleton {
         recProcess.running = true;
     }
 
+    function recordGif(mode) {
+        startRecording(mode || "select", "gif");
+    }
+
     function recordSelectedGif() {
-        startRecording("select", "gif");
+        recordGif("select");
     }
 
     // Stopping targets the *wrapper script*, not wf-recorder directly — the

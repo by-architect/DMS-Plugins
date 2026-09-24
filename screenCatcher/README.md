@@ -11,19 +11,20 @@ not where the actions live.
         │  Screen Catcher                             Esc closes ⨯│
         │                                                          │
         │  Screenshot              │  Audio                        │
-        │   [S] Selected           │   [M] Microphone           ○  │
-        │   [F] Fullscreen         │   [Y] System Audio         ○  │
-        │   [T] To Text            │  Record                       │
-        │   [1] PNG   [2] JPEG     │   [R] Fullscreen              │
-        │  Save screenshots        │   [D] Selected                │
-        │   [C] Save to Clipboard ○│   [G] Selected as GIF         │
+        │   [S]  Selected          │   [M] Microphone           ○  │
+        │   [⇧S] Fullscreen        │   [Y] System Audio         ○  │
+        │   [T]  Selection to Text │  Record                       │
+        │   [⇧T] Fullscreen → Text │   [R]  Selected               │
+        │   [1] PNG   [2] JPEG     │   [⇧R] Fullscreen             │
+        │  Save screenshots        │   [G]  Selected as GIF        │
+        │   [C] Save to Clipboard ○│   [⇧G] Fullscreen as GIF      │
         │   [P] Save to Pictures  ○│   [3] MP4   [4] MKV           │
         │   [N] Notifications     ○│  Save recordings              │
         │                          │   [B] Save to Clipboard    ○  │
         │                          │   [V] Save to Videos       ○  │
         │                          │  (while recording:) [X] Stop  │
         └────────────────────────────────────────────────────────┘
-        (half the screen's width and height, centered, dimmed backdrop)
+        (half the screen's width, centered, dimmed backdrop)
 ```
 
 ## Packages used
@@ -31,9 +32,9 @@ not where the actions live.
 | Tool | For | Required? |
 |---|---|---|
 | `grim` | screenshots | required |
-| `slurp` | region selection | required |
+| `slurp` | region selection | required — not used by the Shift (fullscreen) variants |
 | `wf-recorder` | screen recording | required |
-| `ffmpeg` | GIF conversion | required for *Record Selected as GIF* only |
+| `ffmpeg` | GIF conversion | required for the GIF actions only |
 | `tesseract` | OCR for Screenshot to Text | optional — that one action fails gracefully |
 | `wl-clipboard` (`wl-copy`) | copying screenshots/text/recordings to the clipboard | optional — skips clipboard copy |
 | `notify-send` (libnotify) | desktop notifications | optional — skips notifications |
@@ -105,31 +106,42 @@ compositor config editing needed.
 
 ## Letter shortcuts
 
-Once the panel is open, press a letter or number — no need to click:
+Once the panel is open, press a letter or number — no need to click.
+
+**The plain letter takes a selection, Shift takes the whole screen** — the
+same rule for all four kinds of capture, so there is one thing to remember
+instead of a second, arbitrary letter per action:
 
 | Key | Action | Notes |
 |---|---|---|
-| `S` | Screenshot Selected | |
-| `F` | Screenshot Fullscreen | |
-| `T` | Screenshot to Text (OCR) | |
+| `s` | Screenshot Selected | drag a region with slurp |
+| `S` | Screenshot Fullscreen | the focused monitor |
+| `t` | Selection to Text (OCR) | |
+| `T` | Fullscreen to Text (OCR) | |
+| `r` | Record Selected | only while not already recording |
+| `R` | Record Fullscreen | only while not already recording |
+| `g` | Record Selected as GIF | only while not already recording |
+| `G` | Record Fullscreen as GIF | only while not already recording |
 | `1` / `2` | Image format: PNG / JPEG | doesn't close the panel |
 | `C` | Screenshots: toggle Save to Clipboard | doesn't close the panel |
 | `P` | Screenshots: toggle Save to Pictures | doesn't close the panel |
 | `N` | Toggle Desktop Notifications | doesn't close the panel |
 | `M` | Toggle Microphone | doesn't close the panel |
 | `Y` | Toggle System Audio | doesn't close the panel |
-| `R` | Record Fullscreen | only while not already recording |
-| `D` | Record Selected | only while not already recording |
-| `G` | Record Selected as GIF | only while not already recording |
 | `3` / `4` | Record format: MP4 / MKV | only while not already recording |
 | `B` | Recordings: toggle Save to Clipboard | doesn't close the panel |
 | `V` | Recordings: toggle Save to Videos | doesn't close the panel |
 | `X` | Stop Recording | also cancels one still waiting on a selection |
 | `Esc` | Close panel | recording (if any) keeps running in the background |
 
-Every letter has a visible badge next to its row/toggle/chip, so it's
-discoverable without memorizing this table. Clicking works identically to
-pressing the key.
+Toggles, format chips and `X` ignore Shift — there is no
+selected/fullscreen distinction for them to carry, so `C` and `Shift+C` do
+the same thing.
+
+Every letter has a visible badge next to its row/toggle/chip (the Shift
+variants show `⇧S`, `⇧T`, `⇧R`, `⇧G`), so it's discoverable without memorizing
+this table. Clicking works identically to pressing the key: both the plain and
+the Shift variant of every capture have their own clickable row.
 
 **Where captures go** is two independent choices per kind, because wanting a
 screenshot on the clipboard is routine while wanting a whole video on it is
@@ -146,7 +158,7 @@ behind on disk. Turning *both* off for the same kind would mean capturing into
 the void, so the file is kept in that case; silently discarding what you just
 captured is never the helpful reading of two toggles being off.
 
-**GIF is its own action** (`G`, Record Selected as GIF), not a format chip. A
+**GIF is its own action** (`g` selected, `G` fullscreen), not a format chip. A
 GIF chip left selected quietly turns the next ordinary recording into a GIF,
 which is exactly the kind of surprise a mode you have to remember to switch
 back off produces. MP4 and MKV record natively (wf-recorder muxes straight to
@@ -205,10 +217,12 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `status` | Reports panel open/closed + recording state (`idle`, `starting`, `recording:<mode>:<elapsed>`) |
 | `shotSelected` | Screenshot Selected — works even with the panel closed |
 | `shotFullscreen` | Screenshot Fullscreen |
-| `shotText` | Screenshot to Text |
+| `shotText` | Selection to Text (OCR) |
+| `shotTextFullscreen` | Fullscreen to Text (OCR) |
 | `recordFullscreen` | Start Record Fullscreen (uses the current format chip) |
 | `recordSelected` | Start Record Selected (uses the current format chip) |
 | `recordSelectedGif` | Start Record Selected as GIF (ignores the format chip) |
+| `recordFullscreenGif` | Start Record Fullscreen as GIF (ignores the format chip) |
 | `stop` | **The stop command** — stops whatever recording is running (or cancels one still waiting on a selection), or no-ops if nothing is |
 | `micToggle` | Toggle microphone capture on/off |
 | `sysAudioToggle` | Toggle system-audio capture on/off |

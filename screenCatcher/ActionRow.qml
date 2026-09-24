@@ -24,8 +24,10 @@ StyledRect {
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.spacingS
 
+        // Square for a bare letter, widened for a Shift one ("⇧S"), so the
+        // two-character keycaps are not squeezed against their own border.
         Rectangle {
-            width: 20
+            width: Math.max(20, keycap.implicitWidth + 8)
             height: 20
             radius: 4
             anchors.verticalCenter: parent.verticalCenter
@@ -34,6 +36,7 @@ StyledRect {
             border.width: 1
 
             StyledText {
+                id: keycap
                 anchors.centerIn: parent
                 text: root.letter
                 font.pixelSize: Theme.fontSizeSmall

@@ -305,19 +305,29 @@ shot-full | shot-select)
     ;;
 
 shot-ocr)
-    clipboard="$1"; NOTIFY="$2"; lang="${3:-eng}"
+    # `mode` is select (default) or full, mirroring shot-select/shot-full:
+    # reading the text off a whole screen is as reasonable a thing to want as
+    # reading it off a dragged box.
+    clipboard="$1"; NOTIFY="$2"; lang="${3:-eng}"; mode="${4:-select}"
 
     require grim || { echo "ERROR grim-not-found"; notify "Screenshot to text failed" "grim is not installed"; exit 1; }
-    require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot to text failed" "slurp is not installed"; exit 1; }
     require tesseract || { echo "ERROR tesseract-not-found"; notify "Screenshot to text failed" "tesseract is not installed"; exit 1; }
 
-    select_region || { echo "CANCELLED"; exit 2; }
+    geo_args=()
+    if [ "$mode" = "full" ]; then
+        out=$(detect_output)
+        [ -n "$out" ] && geo_args=(-o "$out")
+    else
+        require slurp || { echo "ERROR slurp-not-found"; notify "Screenshot to text failed" "slurp is not installed"; exit 1; }
+        select_region || { echo "CANCELLED"; exit 2; }
+        geo_args=(-g "$REGION")
+    fi
 
     tmpfile=$(mktemp --suffix=.png)
     trap 'rm -f "$tmpfile"' EXIT
 
-    if ! grim -g "$REGION" "$tmpfile"; then
-        notify "Screenshot to text failed" "grim could not capture the selection"
+    if ! grim "${geo_args[@]}" "$tmpfile"; then
+        notify "Screenshot to text failed" "grim could not capture the screen"
         echo "ERROR grim-failed"
         exit 1
     fi

@@ -79,7 +79,12 @@ PluginComponent {
         }
 
         function shotText(): string {
-            ScreenCatcherService.screenshotToText();
+            ScreenCatcherService.screenshotToText("select");
+            return "OK";
+        }
+
+        function shotTextFullscreen(): string {
+            ScreenCatcherService.screenshotToText("full");
             return "OK";
         }
 
@@ -94,9 +99,15 @@ PluginComponent {
         }
 
         // GIF is its own action rather than a format you switch to and forget
-        // to switch back from — it always records a selected region.
+        // to switch back from; like every other capture it comes in a selected
+        // and a fullscreen flavour.
         function recordSelectedGif(): string {
-            ScreenCatcherService.recordSelectedGif();
+            ScreenCatcherService.recordGif("select");
+            return "OK";
+        }
+
+        function recordFullscreenGif(): string {
+            ScreenCatcherService.recordGif("full");
             return "OK";
         }
 
