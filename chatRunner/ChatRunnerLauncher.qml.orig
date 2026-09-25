@@ -1,0 +1,616 @@
+import QtQuick
+import qs.Common
+import qs.Services
+
+// Every conversation, from every chat provider, in one list.
+//
+// Deliberately flat: WhatsApp, Signal, mail and anything else appear together,
+// ranked by how well they match and then by what is waiting to be read. Each
+// row states which service it is on, so two people with the same name -- or the
+// same person on two services -- are told apart by reading the row rather than
+// by guessing.
+//
+// The whole conversation list is fetched once and filtered here, rather than
+// asking the backend per keystroke. The launcher calls getItems on every
+// character and expects an answer immediately, so anything asynchronous shows a
+// "searching" placeholder in place of results that were on screen a moment
+// earlier.
+Item {
+    id: root
+
+    property var pluginService: null
+
+    // The chat system is a plugin now, not a shell service. Its daemon holds
+    // the only connection to the manager, so everything chat-related is reached
+    // through it rather than through a ChatService singleton that stock DMS
+    // does not have.
+    readonly property var chatDaemon: {
+        const instances = root.pluginService?.pluginDaemonInstances ?? ({});
+        return instances["chatManager"] ?? null;
+    }
+    readonly property var chat: root.chatDaemon?.chat ?? null
+
+    // Every known conversation, including contacts with no messages yet.
+    property var _allChats: []
+    property bool _loading: false
+    property real _loadedAt: 0
+
+    // How long the fetched list is trusted before refreshing. Conversations
+    // change as messages arrive, but not fast enough to matter while typing.
+    readonly property int staleAfterMs: 15000
+
+    // What is waiting, fetched separately from the conversation list: it has to
+    // be fresher, and it carries the unread messages themselves so a search can
+    // match their text rather than only the conversation's name.
+    property var _unreadChats: []
+    property var _unreadMessages: []
+    property bool _unreadLoading: false
+    property real _unreadLoadedAt: 0
+
+    // Shorter than the conversation list's: unread is the thing that changes
+    // while you are looking at it, and a stale answer here sends you into a
+    // conversation you have already read.
+    readonly property int unreadStaleAfterMs: 5000
+
+    // The word that turns the runner into an unread list. Typed as a first
+    // word, with anything after it searching within what is unread.
+    readonly property string unreadKeyword: "unread"
+
+<<<<<<< HEAD
+    // What the launcher knows this plugin as. Every call into the shell is
+    // answered per plugin, so it is the argument to all of them.
+    readonly property string pluginId: "chatRunner"
+
+    readonly property int maxResults: pluginService ? pluginService.loadPluginData(root.pluginId, "maxResults", 40) : 40
+    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData(root.pluginId, "includeUnknown", true) : true
+
+    // requestLauncherUpdate tells the launcher to ask for the list again, once
+    // an answer it was waiting for has arrived.
+    //
+    // It is a signal with a plugin id, and emitting it without one throws --
+    // which is what used to happen, inside the reply handler, where nothing saw
+    // it but the log: the conversations were loaded and the launcher was never
+    // told, so the first search after a reload sat on "Loading conversations…"
+    // until another key was pressed.
+    function _refreshLauncher() {
+        if (root.pluginService)
+            root.pluginService.requestLauncherUpdate(root.pluginId);
+    }
+=======
+    // The word that turns it into a place to send something to, rather than a
+    // place to open. Typed by hand, or arrived at by picking "Share to a chat"
+    // in the clipboard runner, which opens the launcher on exactly this.
+    readonly property string shareKeyword: "share"
+
+    // What is waiting to be sent: either a handoff left in this plugin's own
+    // state by whoever asked for the share, or the clipboard read here when
+    // the word was typed on its own.
+    property var _share: null
+    property bool _shareLoading: false
+
+    // A handoff describes something the user did a moment ago, not a standing
+    // intention. An old one is an old clipboard, and sending that sends the
+    // wrong thing to a real person, so it is read as absent instead.
+    readonly property int shareExpiresMs: 120000
+
+    readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
+    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
+>>>>>>> a450fbb (#0 Share whatever is on the clipboard straight into a chat)
+
+    // Nothing subscribes to the manager from here.
+    //
+    // There was a Ref holding the chat subscription open, which never worked:
+    // the shell's helper takes a singleton and the chat core stopped being one
+    // when it became a plugin, so it only ever produced a type error at
+    // startup. It is not wanted either -- a launcher that is not open has no
+    // use for a stream of state, and both lists below are fetched fresh when it
+    // is, which is also how they stay honest about what is unread.
+
+    function _statusItem(icon, name, comment) {
+        return [
+            {
+                "id": "chatRunner:status",
+                "name": name,
+                "icon": "material:" + icon,
+                "comment": comment,
+                "categories": ["Chats"],
+                "_preScored": 10000
+            }
+        ];
+    }
+
+    function getItems(query) {
+        const q = (query || "").trim();
+
+        if (!root.chat)
+            return root._statusItem("chat_bubble", "Chat is unavailable", "Enable the Chat Manager plugin to search your conversations");
+
+        if (!root.chat.available)
+            return root._statusItem("chat_bubble", "Chat is unavailable", "The chat manager is not running, or no provider is enabled");
+
+        // "unread" on its own, or as the first word, lists only what is
+        // waiting -- and searches inside it rather than across everything.
+        const unreadQuery = root._unreadQuery(q);
+        if (unreadQuery !== null) {
+            root._ensureUnreadLoaded();
+            return root._unreadItems(unreadQuery);
+        }
+
+        // "share" the same way: the rows are the same conversations, but
+        // picking one sends into it instead of opening it.
+        const shareQuery = root._keywordQuery(q, root.shareKeyword);
+        if (shareQuery !== null) {
+            root._ensureShare();
+            return root._shareItems(shareQuery);
+        }
+
+        root._ensureLoaded();
+
+        if (root._allChats.length === 0) {
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
+        }
+
+        return root._toItems(root._filter(q), q);
+    }
+
+    // _ensureLoaded fetches the full list, including conversations with no
+    // messages, so someone never written to can still be found.
+    function _ensureLoaded() {
+        if (root._loading)
+            return;
+        if (root._allChats.length > 0 && (Date.now() - root._loadedAt) < root.staleAfterMs)
+            return;
+
+        if (!root.chat)
+            return;
+
+        root._loading = true;
+        // Through the plugin's own link. The chat backend is no longer mounted
+        // in the DMS daemon, so asking DMSService for it gets "unknown method".
+        root.chat.link.sendRequest("chat.chats", {
+            "all": true,
+            "limit": 5000
+        }, response => {
+            root._loading = false;
+            if (response.error)
+                return;
+
+            root._allChats = response.result?.chats || [];
+            root._loadedAt = Date.now();
+
+            root._refreshLauncher();
+        });
+    }
+
+    // _keywordQuery returns what is being searched for within the mode a first
+    // word names, or null when the query is not in that mode at all.
+    function _keywordQuery(query, keyword) {
+        const lower = query.toLowerCase();
+        if (lower === keyword)
+            return "";
+        if (lower.indexOf(keyword + " ") === 0)
+            return query.slice(keyword.length + 1).trim();
+        return null;
+    }
+
+    // ------------------------------------------------------------- unread
+
+    function _unreadQuery(query) {
+        return root._keywordQuery(query, root.unreadKeyword);
+    }
+
+    function _ensureUnreadLoaded() {
+        if (root._unreadLoading || !root.chat)
+            return;
+        if (root._unreadLoadedAt > 0 && (Date.now() - root._unreadLoadedAt) < root.unreadStaleAfterMs)
+            return;
+
+        root._unreadLoading = true;
+        root.chat.link.sendRequest("chat.unread", {
+            "limit": 500
+        }, response => {
+            root._unreadLoading = false;
+            if (response.error)
+                return;
+
+            root._unreadChats = response.result?.chats || [];
+            root._unreadMessages = response.result?.messages || [];
+            root._unreadLoadedAt = Date.now();
+
+            root._refreshLauncher();
+        });
+    }
+
+    // _unreadMessagesFor is what is waiting in one conversation, newest first.
+    function _unreadMessagesFor(chat) {
+        const out = [];
+        for (let i = 0; i < root._unreadMessages.length; i++) {
+            const msg = root._unreadMessages[i];
+            if (msg.provider === chat.provider && msg.chatId === chat.id)
+                out.push(msg);
+        }
+        return out;
+    }
+
+    function _unreadItems(query) {
+        if (root._unreadChats.length === 0) {
+            return root._unreadLoading && root._unreadLoadedAt === 0 ? root._statusItem("hourglass_empty", "Looking for unread messages…", "") : root._statusItem("mark_email_read", "Nothing unread", "Everything has been read");
+        }
+
+        const lower = query.toLowerCase();
+        const items = [];
+
+        for (let i = 0; i < root._unreadChats.length && items.length < root.maxResults; i++) {
+            const chat = root._unreadChats[i];
+            if (root.isHidden(chat))
+                continue;
+
+            const waiting = root._unreadMessagesFor(chat);
+
+            // With a query, the conversation matches on its own name or on the
+            // text of something unread in it -- searching unread messages is
+            // the point of this mode, not searching names that happen to have
+            // unread messages.
+            let matched = null;
+            if (lower !== "") {
+                const byName = root._score(chat, lower, query.replace(/\D/g, "")) > 0;
+                for (let j = 0; j < waiting.length && !matched; j++) {
+                    if ((waiting[j].text || "").toLowerCase().indexOf(lower) !== -1)
+                        matched = waiting[j];
+                }
+                if (!matched && !byName)
+                    continue;
+            }
+
+            // The matching message where there is one, so the row shows why it
+            // is in the list; otherwise the newest thing waiting.
+            const shown = matched || (waiting.length > 0 ? waiting[0] : null);
+
+            items.push({
+                "id": "chatRunner:unread:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                "comment": root._unreadComment(chat, shown),
+                "categories": ["Chats"],
+                "keywords": chat.handles || [],
+                "_preScored": 10000 - items.length,
+                "chatProvider": chat.provider,
+                "chatId": chat.id
+            });
+        }
+
+        if (items.length === 0)
+            return root._statusItem("search_off", "No unread message matches \"" + query + "\"", "Type unread on its own to see everything waiting");
+
+        return items;
+    }
+
+    function _unreadComment(chat, message) {
+        const parts = [chat.unread + " unread"];
+
+        if (message) {
+            const who = message.senderName || "";
+            const text = message.text || "";
+            if (text !== "")
+                parts.push(who !== "" && chat.isGroup ? who + ": " + text : text);
+        }
+        parts.push(root._providerName(chat.provider));
+
+        return parts.join("  ·  ");
+    }
+
+    // _filter ranks locally, matching the backend's own ordering: an exact
+    // identifier beats a name that merely contains the same text.
+    //
+    // Then what is waiting, then what arrived last -- see the sort below.
+    function _filter(query) {
+        const scored = [];
+        const q = query.toLowerCase();
+        const digits = query.replace(/\D/g, "");
+
+        for (let i = 0; i < root._allChats.length; i++) {
+            const chat = root._allChats[i];
+
+            if (!root.includeUnknown && !chat.lastTs)
+                continue;
+
+            // The same hidden-tag setting the conversation list uses, so the
+            // two agree about what exists.
+            if (root.isHidden(chat))
+                continue;
+
+            if (q === "") {
+                // No query: recent conversations only, so the list opens on
+                // what you were just doing rather than the whole address book.
+                if (chat.lastTs)
+                    scored.push({
+                        "chat": chat,
+                        "score": 1
+                    });
+                continue;
+            }
+
+            const score = root._score(chat, q, digits);
+            if (score > 0)
+                scored.push({
+                    "chat": chat,
+                    "score": score
+                });
+        }
+
+        // Unread first, newest first within it: opened with nothing typed, the
+        // list is answering "what do I have to deal with", and the answer to
+        // that starts with what somebody just said.
+        //
+        // Still behind the match score, though: typing a name and being handed
+        // somebody else because they happen to have written is not an answer to
+        // anything. With no query every row scores the same, which is what
+        // makes this the whole ordering there.
+        scored.sort((a, b) => {
+            if (a.score !== b.score)
+                return b.score - a.score;
+
+            const waitingA = (a.chat.unread || 0) > 0 ? 1 : 0;
+            const waitingB = (b.chat.unread || 0) > 0 ? 1 : 0;
+            if (waitingA !== waitingB)
+                return waitingB - waitingA;
+
+            return (b.chat.lastTs || 0) - (a.chat.lastTs || 0);
+        });
+
+        return scored.slice(0, root.maxResults).map(entry => entry.chat);
+    }
+
+    // isHidden defers to the provider's own filter settings, so the runner and
+    // the conversation list agree about what exists.
+    function isHidden(chat) {
+        return root.chat ? root.chat.isChatHidden(chat) : false;
+    }
+
+    function _score(chat, lowerQuery, digits) {
+        const name = (chat.name || "").toLowerCase();
+
+        if (chat.id === lowerQuery)
+            return 90;
+        if (name !== "" && name === lowerQuery)
+            return 70;
+
+        // Handles are what make a phone number or an address match; the id is
+        // never picked apart, because its shape belongs to the provider.
+        const handles = chat.handles || [];
+        for (let i = 0; i < handles.length; i++) {
+            const handle = handles[i].toLowerCase();
+            if (handle === lowerQuery)
+                return 80;
+            if (digits.length >= 7) {
+                const handleDigits = handles[i].replace(/\D/g, "");
+                if (handleDigits !== "" && handleDigits.indexOf(digits) !== -1)
+                    return 60;
+            }
+            if (handle.indexOf(lowerQuery) !== -1)
+                return 50;
+        }
+
+        if (name !== "") {
+            if (name.indexOf(lowerQuery) === 0)
+                return 40;
+            if (name.indexOf(lowerQuery) !== -1)
+                return 20;
+        }
+
+        return 0;
+    }
+
+    function _toItems(entries, query) {
+        if (!entries || entries.length === 0)
+            return root._statusItem("search_off", query === "" ? "No conversations yet" : "No conversation matches \"" + query + "\"", "Try a name, a phone number, or an address");
+
+        const items = [];
+        for (let i = 0; i < entries.length; i++) {
+            const chat = entries[i];
+            const providerName = root._providerName(chat.provider);
+
+            items.push({
+                "id": "chatRunner:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                // The service is part of the row, not a tooltip: it is the only
+                // thing distinguishing two rows with the same name.
+                "comment": root._comment(chat, providerName),
+                "categories": ["Chats"],
+                "keywords": chat.handles || [],
+                // Preserve this ranking; the launcher's own scorer would
+                // otherwise drop matches made on a phone number.
+                "_preScored": 10000 - i,
+                "chatProvider": chat.provider,
+                "chatId": chat.id
+            });
+        }
+        return items;
+    }
+
+    function _comment(chat, providerName) {
+        const parts = [providerName];
+
+        if (chat.unread > 0)
+            parts.push(chat.unread + " unread");
+        else if (!chat.lastTs)
+            parts.push("no messages yet");
+
+        const handles = chat.handles || [];
+        if (handles.length > 0)
+            parts.push(handles[0]);
+
+        return parts.join("  ·  ");
+    }
+
+    function _providerName(providerId) {
+        const provider = root.chat ? root.chat.providerById(providerId) : null;
+        return provider ? provider.name : providerId;
+    }
+
+    // -------------------------------------------------------------- share
+
+    // _ensureShare settles on what is about to be sent.
+    //
+    // A handoff wins while it is fresh, because it is the more specific answer:
+    // the clipboard runner has already worked out that a copied image is a file
+    // on disk, which a plain clipboard read here could not tell. Typed by hand
+    // with no handoff waiting, the clipboard's text is the obvious subject.
+    function _ensureShare() {
+        const pending = root.pluginService && typeof root.pluginService.loadPluginState === "function" ? root.pluginService.loadPluginState("chatRunner", "pendingShare", null) : null;
+
+        const now = Date.now();
+        if (pending && (now - (pending.ts || 0)) < root.shareExpiresMs && (!root._share || (pending.ts || 0) > (root._share.ts || 0))) {
+            root._share = pending;
+            return;
+        }
+
+        if (root._share && (now - (root._share.ts || 0)) < root.shareExpiresMs)
+            return;
+
+        root._share = null;
+        root._readClipboard();
+    }
+
+    // Only the clipboard's text. Turning a copied image into a file on disk is
+    // the clipboard runner's job, and picking "Share to a chat" there is the
+    // route that carries a file here.
+    function _readClipboard() {
+        if (root._shareLoading)
+            return;
+        if (typeof DMSService === "undefined" || !DMSService.isConnected)
+            return;
+
+        root._shareLoading = true;
+        DMSService.sendRequest("clipboard.paste", null, function (response) {
+            root._shareLoading = false;
+
+            const text = (response.result && response.result.text) || "";
+            if (response.error || text.trim().length === 0)
+                return;
+
+            root._share = {
+                "kind": "text",
+                "text": text,
+                "label": root._flatten(text),
+                "ts": Date.now()
+            };
+
+            if (root.pluginService)
+                root.pluginService.requestLauncherUpdate();
+        });
+    }
+
+    function _shareItems(query) {
+        if (!root._share) {
+            return root._shareLoading ? root._statusItem("hourglass_empty", "Reading the clipboard…", "") : root._statusItem("content_paste_off", "Nothing to share", "Copy something first, or pick \"Share to a chat\" in the clipboard runner");
+        }
+
+        root._ensureLoaded();
+
+        if (root._allChats.length === 0) {
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
+        }
+
+        const entries = root._filter(query);
+        const items = [];
+
+        for (let i = 0; i < entries.length; i++) {
+            const chat = entries[i];
+            if (!root._canReceiveShare(chat))
+                continue;
+
+            items.push({
+                "id": "chatRunner:share:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                "comment": "Send " + root._shareLabel() + "  ·  " + root._providerName(chat.provider),
+                "categories": ["Chats"],
+                "keywords": chat.handles || [],
+                "_preScored": 10000 - i,
+                "chatProvider": chat.provider,
+                "chatId": chat.id,
+                // What tells executeItem to send rather than open. The two
+                // modes list the same conversations and would otherwise be
+                // indistinguishable by the time a row comes back.
+                "shareTarget": true
+            });
+        }
+
+        if (items.length === 0)
+            return root._statusItem("search_off", query === "" ? "Nowhere to send this" : "No conversation matches \"" + query + "\"", "Try a name, a phone number, or an address");
+
+        return items;
+    }
+
+    // A conversation on a provider that cannot take this is not offered, rather
+    // than offered and failing after the launcher has closed.
+    function _canReceiveShare(chat) {
+        if (!root.chat || typeof root.chat.supports !== "function")
+            return true;
+        if (!root.chat.supports(chat.provider, "send"))
+            return false;
+        return root._share.kind !== "file" || root.chat.supports(chat.provider, "media");
+    }
+
+    function _shareLabel() {
+        const label = root._share.label || (root._share.kind === "file" ? root._share.path : root._share.text) || "";
+        const flat = root._flatten(label);
+        return root._share.kind === "file" ? "the file " + flat : "\"" + flat + "\"";
+    }
+
+    function _flatten(text) {
+        const flat = (text || "").replace(/\s+/g, " ").trim();
+        return flat.length > 60 ? flat.substring(0, 57) + "…" : flat;
+    }
+
+    // Sending says what happened, because nothing else will: the launcher has
+    // closed by then and the conversation it went into is not on screen.
+    function _sendShare(item) {
+        const payload = root._share;
+        if (!payload || !root.chat)
+            return;
+
+        if (typeof root.chat.sendTo !== "function") {
+            ToastService.showError("Message not sent", "This needs a newer Chat Manager plugin");
+            return;
+        }
+
+        const text = payload.kind === "file" ? (payload.caption || "") : (payload.text || "");
+        const attachments = payload.kind === "file" && payload.path ? [payload.path] : [];
+
+        // Cleared before the answer comes back: the handoff has been acted on
+        // either way, and leaving it would offer the same clipboard again as
+        // though nothing had been done with it.
+        root._clearShare();
+
+        root.chat.sendTo(item.chatProvider, item.chatId, text, attachments, error => {
+            if (error) {
+                ToastService.showError("Not sent to " + item.name, error);
+                return;
+            }
+            ToastService.showInfo("Sent to " + item.name, payload.label || "");
+        });
+    }
+
+    function _clearShare() {
+        root._share = null;
+        if (root.pluginService && typeof root.pluginService.removePluginStateKey === "function")
+            root.pluginService.removePluginStateKey("chatRunner", "pendingShare");
+    }
+
+    function executeItem(item) {
+        if (!item || !item.chatProvider || !item.chatId)
+            return;
+
+        if (item.shareTarget) {
+            root._sendShare(item);
+            return;
+        }
+
+        // The popout, not the full window: picking a row here means "read this
+        // conversation", and the sidebar would just be the list you came from.
+        root.chatDaemon?.openChatPopout(item.chatProvider, item.chatId);
+    }
+}
