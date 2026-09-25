@@ -155,6 +155,39 @@ the app is still launchable.
 
 Open in nvim (via a temp file), search the web for it, save it to downloads.
 
+## Share to a chat
+
+The first row, whatever you copied, is **Share to a chat…** — as long as the
+[Chat Manager][chatmanager] plugin is installed and running. Picking it hands
+the clipboard to the [chat runner][chatrunner] and reopens the launcher on its
+share list:
+
+```
+clip                         →  Share to a chat…   ·  Send this text to a conversation
+                                yt-dlp: download video
+                                …
+
+(pick it)                    →  c share
+                                Ada Lovelace       ·  Send "https://…"  ·  WhatsApp
+                                #release           ·  Send "https://…"  ·  Matrix
+```
+
+Pick the conversation and it is sent. There is no compose step — the clipboard
+*is* the message — and a notification says where it went.
+
+A **file** is sent as an attachment rather than as its path, and that includes a
+copied image, because by then the plugin has already written it out to the cache
+as a real file. A folder cannot be attached, so it travels as its path, like any
+other text. Conversations on a provider that cannot take what is being sent are
+left out of the list rather than offered and failing.
+
+The handoff expires after two minutes. A share list opened later is describing a
+clipboard you have moved on from, and sending that to a real person is the one
+mistake here that cannot be taken back.
+
+[chatmanager]: ../chatManager/README.md
+[chatrunner]: ../chatRunner/README.md
+
 ## How things run
 
 Everything runs through **zsh**, detached, with **no terminal**. Anything slow

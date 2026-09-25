@@ -241,6 +241,11 @@ Contacts you have never written to are listed too, so you can start a
 conversation from here; turn that off in settings if you'd rather see only
 chats with history.
 
+Type `c unread` and the list becomes what you have not got to yet, searched by
+the text of the waiting messages themselves. Type `c share` and the same
+conversations are listed to **send** the clipboard into rather than to open —
+which is also where the clipboard runner's *Share to a chat…* lands you.
+
 Needs at least one chat provider enabled under **Settings → Chats** — see the
 chat section below. With none, the runner says so rather than showing an empty
 list.
@@ -274,6 +279,11 @@ a regex, and so on — so `includes youtube.com` under **Link** never fires for
 any other site. File actions can also be narrowed by extension.
 
 ![One action in the settings: what it applies to, which extensions, its filters, and the command template](clipboardRunner/docs/action-editor.png)
+
+The first row is **Share to a chat…**, which hands whatever you copied to the
+[chat runner](#chatrunner--c-name-number-or-address) and reopens the launcher on
+its conversation list: pick someone and it is sent. Text goes as a message, a
+file as an attachment, a copied image as the file it was written out to.
 
 Everything runs through zsh, detached, with no terminal, and posts a
 notification when it finishes. Copying is not a trigger: nothing runs until you

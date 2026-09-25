@@ -45,6 +45,35 @@ For working through them without the launcher, bind a key to
 `dms ipc call chats unread`, which steps to the next unread conversation each
 time it is pressed.
 
+## Sending something, rather than opening something
+
+Type `c share` and the same conversations are listed, but picking one **sends**
+into it instead of opening it:
+
+```
+c share             →  Ada Lovelace   ·  Send "https://example.com/…"  ·  WhatsApp
+                       #release       ·  Send "https://example.com/…"  ·  Matrix
+```
+
+What gets sent is whatever is on the clipboard, and anything after the word
+searches the conversations as usual: `c share ada` goes straight to the person
+you meant. There is no compose step — the clipboard is the message — and a
+notification afterwards says where it went.
+
+Most of the time you arrive here without typing it: the [clipboard
+runner][clipboardrunner] offers **Share to a chat…** for whatever you copied,
+and picking it opens the launcher on exactly this list. That route also carries
+**files** — a copied image included, which it has already written out to disk —
+and those are sent as attachments. Typed by hand, `c share` reads the
+clipboard's text and nothing else.
+
+A conversation whose provider cannot take what is being sent is not listed,
+rather than listed and failing after the launcher has closed. A handoff from the
+clipboard runner expires after two minutes, because by then it describes a
+clipboard you have moved on from.
+
+[clipboardrunner]: ../clipboardRunner/README.md
+
 ## What it can find
 
 Matching happens in the backend, so this plugin knows nothing about any
@@ -54,6 +83,7 @@ particular service:
 |---|---|
 | `Ada` | a conversation name |
 | `unread` | only conversations with something waiting |
+| `share` | every conversation, to send the clipboard into one |
 | `+90 555 123 45 67` | a phone number, in any formatting |
 | `ada@example.com` | an email address |
 | `whatsappChat:1847…@lid` | an exact conversation |

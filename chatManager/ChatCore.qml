@@ -247,13 +247,19 @@ Item {
         return null;
     }
 
-    // Whether the open conversation's provider supports a feature. The UI hides
-    // affordances rather than offering ones that will fail.
-    function activeSupports(capability) {
-        const provider = providerById(root.activeProvider);
+    // Whether a provider supports a feature. The UI hides affordances rather
+    // than offering ones that will fail.
+    function supports(providerId, capability) {
+        const provider = providerById(providerId);
         if (!provider || !provider.capabilities)
             return false;
         return provider.capabilities.indexOf(capability) !== -1;
+    }
+
+    // The same question about the open conversation, which is what nearly every
+    // caller inside the window is asking.
+    function activeSupports(capability) {
+        return root.supports(root.activeProvider, capability);
     }
 
     // ------------------------------------------------------------ commands
@@ -574,6 +580,37 @@ Item {
         ToastService.showInfo(I18n.tr("Attachment copied"));
     }
 
+    // sendTo sends into a conversation that is not the open one, and says
+    // whether it worked rather than reporting it itself.
+    //
+    // sendText above is for the conversation on screen and takes its target
+    // from the view; this is for everything that picks a destination instead --
+    // forwarding, and the launcher sharing the clipboard into a chat.
+    function sendTo(targetProvider, targetChatId, text, attachments, callback) {
+        const files = attachments || [];
+        if (!available || (!text && files.length === 0)) {
+            if (callback)
+                callback("nothing to send");
+            return;
+        }
+
+        const params = {
+            "provider": targetProvider,
+            "chatId": targetChatId
+        };
+        if (text)
+            params.text = text;
+        if (files.length > 0)
+            params.attachments = files;
+
+        root.link.sendRequest("chat.send", params, response => {
+            if (response.error)
+                root.log.warn("send failed:", response.error);
+            if (callback)
+                callback(response.error || "");
+        });
+    }
+
     // forward re-sends a message's text into another conversation.
     //
     // Sent as a fresh message rather than a provider-native forward: the
@@ -581,14 +618,9 @@ Item {
     function forward(targetProvider, targetChatId, text) {
         if (!available || !text)
             return;
-        root.link.sendRequest("chat.send", {
-            "provider": targetProvider,
-            "chatId": targetChatId,
-            "text": text
-        }, response => {
-            if (response.error) {
-                root.log.warn("forward failed:", response.error);
-                ToastService.showError(I18n.tr("Message not forwarded"), response.error);
+        root.sendTo(targetProvider, targetChatId, text, [], error => {
+            if (error) {
+                ToastService.showError(I18n.tr("Message not forwarded"), error);
                 return;
             }
             ToastService.showInfo(I18n.tr("Message forwarded"));

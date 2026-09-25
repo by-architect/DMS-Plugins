@@ -56,25 +56,24 @@ Item {
     // word, with anything after it searching within what is unread.
     readonly property string unreadKeyword: "unread"
 
-    // What the launcher knows this plugin as. Every call into the shell is
-    // answered per plugin, so it is the argument to all of them.
-    readonly property string pluginId: "chatRunner"
+    // The word that turns it into a place to send something to, rather than a
+    // place to open. Typed by hand, or arrived at by picking "Share to a chat"
+    // in the clipboard runner, which opens the launcher on exactly this.
+    readonly property string shareKeyword: "share"
 
-    readonly property int maxResults: pluginService ? pluginService.loadPluginData(root.pluginId, "maxResults", 40) : 40
-    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData(root.pluginId, "includeUnknown", true) : true
+    // What is waiting to be sent: either a handoff left in this plugin's own
+    // state by whoever asked for the share, or the clipboard read here when
+    // the word was typed on its own.
+    property var _share: null
+    property bool _shareLoading: false
 
-    // requestLauncherUpdate tells the launcher to ask for the list again, once
-    // an answer it was waiting for has arrived.
-    //
-    // It is a signal with a plugin id, and emitting it without one throws --
-    // which is what used to happen, inside the reply handler, where nothing saw
-    // it but the log: the conversations were loaded and the launcher was never
-    // told, so the first search after a reload sat on "Loading conversations…"
-    // until another key was pressed.
-    function _refreshLauncher() {
-        if (root.pluginService)
-            root.pluginService.requestLauncherUpdate(root.pluginId);
-    }
+    // A handoff describes something the user did a moment ago, not a standing
+    // intention. An old one is an old clipboard, and sending that sends the
+    // wrong thing to a real person, so it is read as absent instead.
+    readonly property int shareExpiresMs: 120000
+
+    readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
+    readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
 
     // Nothing subscribes to the manager from here.
     //
@@ -115,6 +114,14 @@ Item {
             return root._unreadItems(unreadQuery);
         }
 
+        // "share" the same way: the rows are the same conversations, but
+        // picking one sends into it instead of opening it.
+        const shareQuery = root._keywordQuery(q, root.shareKeyword);
+        if (shareQuery !== null) {
+            root._ensureShare();
+            return root._shareItems(shareQuery);
+        }
+
         root._ensureLoaded();
 
         if (root._allChats.length === 0) {
@@ -153,17 +160,21 @@ Item {
         });
     }
 
+    // _keywordQuery returns what is being searched for within the mode a first
+    // word names, or null when the query is not in that mode at all.
+    function _keywordQuery(query, keyword) {
+        const lower = query.toLowerCase();
+        if (lower === keyword)
+            return "";
+        if (lower.indexOf(keyword + " ") === 0)
+            return query.slice(keyword.length + 1).trim();
+        return null;
+    }
+
     // ------------------------------------------------------------- unread
 
-    // _unreadQuery returns what is being searched for within the unread list,
-    // or null when this is an ordinary search.
     function _unreadQuery(query) {
-        const lower = query.toLowerCase();
-        if (lower === root.unreadKeyword)
-            return "";
-        if (lower.indexOf(root.unreadKeyword + " ") === 0)
-            return query.slice(root.unreadKeyword.length + 1).trim();
-        return null;
+        return root._keywordQuery(query, root.unreadKeyword);
     }
 
     function _ensureUnreadLoaded() {
@@ -416,9 +427,166 @@ Item {
         return provider ? provider.name : providerId;
     }
 
+    // -------------------------------------------------------------- share
+
+    // _ensureShare settles on what is about to be sent.
+    //
+    // A handoff wins while it is fresh, because it is the more specific answer:
+    // the clipboard runner has already worked out that a copied image is a file
+    // on disk, which a plain clipboard read here could not tell. Typed by hand
+    // with no handoff waiting, the clipboard's text is the obvious subject.
+    function _ensureShare() {
+        const pending = root.pluginService && typeof root.pluginService.loadPluginState === "function" ? root.pluginService.loadPluginState("chatRunner", "pendingShare", null) : null;
+
+        const now = Date.now();
+        if (pending && (now - (pending.ts || 0)) < root.shareExpiresMs && (!root._share || (pending.ts || 0) > (root._share.ts || 0))) {
+            root._share = pending;
+            return;
+        }
+
+        if (root._share && (now - (root._share.ts || 0)) < root.shareExpiresMs)
+            return;
+
+        root._share = null;
+        root._readClipboard();
+    }
+
+    // Only the clipboard's text. Turning a copied image into a file on disk is
+    // the clipboard runner's job, and picking "Share to a chat" there is the
+    // route that carries a file here.
+    function _readClipboard() {
+        if (root._shareLoading)
+            return;
+        if (typeof DMSService === "undefined" || !DMSService.isConnected)
+            return;
+
+        root._shareLoading = true;
+        DMSService.sendRequest("clipboard.paste", null, function (response) {
+            root._shareLoading = false;
+
+            const text = (response.result && response.result.text) || "";
+            if (response.error || text.trim().length === 0)
+                return;
+
+            root._share = {
+                "kind": "text",
+                "text": text,
+                "label": root._flatten(text),
+                "ts": Date.now()
+            };
+
+            if (root.pluginService)
+                root.pluginService.requestLauncherUpdate();
+        });
+    }
+
+    function _shareItems(query) {
+        if (!root._share) {
+            return root._shareLoading ? root._statusItem("hourglass_empty", "Reading the clipboard…", "") : root._statusItem("content_paste_off", "Nothing to share", "Copy something first, or pick \"Share to a chat\" in the clipboard runner");
+        }
+
+        root._ensureLoaded();
+
+        if (root._allChats.length === 0) {
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
+        }
+
+        const entries = root._filter(query);
+        const items = [];
+
+        for (let i = 0; i < entries.length; i++) {
+            const chat = entries[i];
+            if (!root._canReceiveShare(chat))
+                continue;
+
+            items.push({
+                "id": "chatRunner:share:" + chat.provider + ":" + chat.id,
+                "name": chat.name || chat.id,
+                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                "comment": "Send " + root._shareLabel() + "  ·  " + root._providerName(chat.provider),
+                "categories": ["Chats"],
+                "keywords": chat.handles || [],
+                "_preScored": 10000 - i,
+                "chatProvider": chat.provider,
+                "chatId": chat.id,
+                // What tells executeItem to send rather than open. The two
+                // modes list the same conversations and would otherwise be
+                // indistinguishable by the time a row comes back.
+                "shareTarget": true
+            });
+        }
+
+        if (items.length === 0)
+            return root._statusItem("search_off", query === "" ? "Nowhere to send this" : "No conversation matches \"" + query + "\"", "Try a name, a phone number, or an address");
+
+        return items;
+    }
+
+    // A conversation on a provider that cannot take this is not offered, rather
+    // than offered and failing after the launcher has closed.
+    function _canReceiveShare(chat) {
+        if (!root.chat || typeof root.chat.supports !== "function")
+            return true;
+        if (!root.chat.supports(chat.provider, "send"))
+            return false;
+        return root._share.kind !== "file" || root.chat.supports(chat.provider, "media");
+    }
+
+    function _shareLabel() {
+        const label = root._share.label || (root._share.kind === "file" ? root._share.path : root._share.text) || "";
+        const flat = root._flatten(label);
+        return root._share.kind === "file" ? "the file " + flat : "\"" + flat + "\"";
+    }
+
+    function _flatten(text) {
+        const flat = (text || "").replace(/\s+/g, " ").trim();
+        return flat.length > 60 ? flat.substring(0, 57) + "…" : flat;
+    }
+
+    // Sending says what happened, because nothing else will: the launcher has
+    // closed by then and the conversation it went into is not on screen.
+    function _sendShare(item) {
+        const payload = root._share;
+        if (!payload || !root.chat)
+            return;
+
+        if (typeof root.chat.sendTo !== "function") {
+            ToastService.showError("Message not sent", "This needs a newer Chat Manager plugin");
+            return;
+        }
+
+        const text = payload.kind === "file" ? (payload.caption || "") : (payload.text || "");
+        const attachments = payload.kind === "file" && payload.path ? [payload.path] : [];
+
+        // Cleared before the answer comes back: the handoff has been acted on
+        // either way, and leaving it would offer the same clipboard again as
+        // though nothing had been done with it.
+        root._clearShare();
+
+        root.chat.sendTo(item.chatProvider, item.chatId, text, attachments, error => {
+            if (error) {
+                ToastService.showError("Not sent to " + item.name, error);
+                return;
+            }
+            ToastService.showInfo("Sent to " + item.name, payload.label || "");
+        });
+    }
+
+    function _clearShare() {
+        root._share = null;
+        if (root.pluginService && typeof root.pluginService.removePluginStateKey === "function")
+            root.pluginService.removePluginStateKey("chatRunner", "pendingShare");
+    }
+
     function executeItem(item) {
         if (!item || !item.chatProvider || !item.chatId)
             return;
+
+        if (item.shareTarget) {
+            root._sendShare(item);
+            return;
+        }
+
         // The popout, not the full window: picking a row here means "read this
         // conversation", and the sidebar would just be the list you came from.
         root.chatDaemon?.openChatPopout(item.chatProvider, item.chatId);

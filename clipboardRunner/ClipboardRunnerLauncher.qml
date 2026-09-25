@@ -37,6 +37,21 @@ Item {
             "cache": cacheDir
         })
 
+    // Sharing goes through the chat runner: it already lists every conversation
+    // from every provider, and a second conversation picker living here would
+    // be the same list with its own bugs. The chat manager is a plugin of its
+    // own, so the row is offered only when that plugin is loaded and its
+    // manager is running -- otherwise it is a row that can only fail.
+    readonly property var chatDaemon: {
+        const instances = root.pluginService?.pluginDaemonInstances ?? ({});
+        return instances["chatManager"] ?? null;
+    }
+    readonly property bool canShare: root.chatDaemon?.chat?.available ?? false
+
+    // The word that puts the chat runner into its share list. Written out here
+    // as well because the handoff is a launcher query, which is text.
+    readonly property string shareKeyword: "share"
+
     // getItems() has to answer synchronously, and the shell currently has no
     // hook for a launcher plugin to say "my list changed" -- neither
     // itemsChanged nor PluginService.requestLauncherUpdate is connected to
@@ -211,7 +226,9 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
     }
 
     function getItems(query) {
-        if (actions.length === 0)
+        // Sharing needs no actions of its own, so an empty action list is a
+        // hint rather than the whole answer once the chat runner is there.
+        if (actions.length === 0 && !canShare)
             return [_statusItem("settings", "No clipboard actions yet", "Add one in Settings → Plugins → Clipboard Runner")];
 
         // Only reachable before the first read has landed -- typing another
@@ -227,18 +244,12 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
         const matched = Clipboard.matchAll(actions, detail);
         const kind = Clipboard.groupLabel(detail.type).toLowerCase();
 
-        if (matched.length === 0)
-            return [_statusItem("filter_alt_off", "No " + kind + " action matches this", _clip())];
-
         const q = (query || "").trim().toLowerCase();
         const filtered = q.length === 0 ? matched : matched.filter(a => {
             return (a.name || "").toLowerCase().includes(q) || (a.command || "").toLowerCase().includes(q);
         });
 
-        if (filtered.length === 0)
-            return [_statusItem("search_off", "No action matches \"" + query + "\"", _clip())];
-
-        return filtered.map((a, i) => ({
+        const rows = filtered.map((a, i) => ({
             id: "clip:" + detail.type + ":" + i + ":" + (a.name || ""),
             name: a.name || a.command || "Unnamed action",
             icon: a.icon || ("material:" + Clipboard.groupIcon(detail.type)),
@@ -247,10 +258,120 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
             categories: ["Clipboard"],
             actionEntry: a
         }));
+
+        // Sharing is offered whatever is on the clipboard and whatever the
+        // actions say, because it is not filtered by content type: a chat
+        // takes a link, a colour or a file just as happily. First, so it is
+        // one keystroke away rather than somewhere under the actions.
+        const share = _shareItem(q);
+        if (share)
+            rows.unshift(share);
+
+        if (actions.length === 0)
+            rows.push(_statusItem("settings", "No clipboard actions yet", "Add one in Settings → Plugins → Clipboard Runner"));
+
+        if (rows.length === 0) {
+            return matched.length === 0 ? [_statusItem("filter_alt_off", "No " + kind + " action matches this", _clip())] : [_statusItem("search_off", "No action matches \"" + query + "\"", _clip())];
+        }
+
+        return rows;
+    }
+
+    // The row that hands the clipboard to the chat runner. Null when the chat
+    // manager is not there to hand it to, or when the query is clearly after
+    // something else.
+    function _shareItem(query) {
+        if (!canShare || !detail)
+            return null;
+        if (query.length > 0 && !"share to a chat send message conversation".includes(query))
+            return null;
+
+        const payload = _sharePayload();
+        return {
+            id: "clip:share",
+            name: "Share to a chat…",
+            icon: "material:forum",
+            comment: (payload && payload.kind === "file" ? "Send this file to a conversation" : "Send this text to a conversation") + "  ·  " + _clip(),
+            action: "execute",
+            categories: ["Clipboard"],
+            keywords: ["share", "chat", "send", "message"]
+        };
+    }
+
+    // What sharing would actually send. A file is sent as an attachment; a
+    // folder cannot be attached, so it travels as its path, like any other
+    // text.
+    function _sharePayload() {
+        if (!detail)
+            return null;
+
+        if (detail.type === "path" && !detail.isDir)
+            return {
+                "kind": "file",
+                "path": detail.path,
+                "label": detail.basename || detail.path,
+                "ts": Date.now()
+            };
+
+        return {
+            "kind": "text",
+            "text": detail.text,
+            "label": _clip(),
+            "ts": Date.now()
+        };
+    }
+
+    // The handoff itself.
+    //
+    // The clipboard is left in the chat runner's own state rather than passed
+    // as a query, because the query is what the user sees and types over --
+    // and a file path or a paragraph of text does not belong in a search box.
+    function _share() {
+        const payload = _sharePayload();
+        if (!payload || !pluginService) {
+            _toast("Nothing to share", readError);
+            return;
+        }
+
+        pluginService.savePluginState("chatRunner", "pendingShare", payload);
+        shareHandoff.restart();
+    }
+
+    // The launcher closes itself the moment an item runs, so reaching another
+    // runner means opening it again once that has happened rather than
+    // rewriting the query in place.
+    Timer {
+        id: shareHandoff
+        interval: 80
+        repeat: false
+        onTriggered: root._openChatRunner()
+    }
+
+    function _openChatRunner() {
+        const trigger = pluginService && typeof pluginService.getPluginTrigger === "function" ? pluginService.getPluginTrigger("chatRunner") : null;
+        // An empty trigger is a chat runner set to answer without one, which
+        // the keyword alone reaches; null is a runner the shell does not know
+        // about, where its shipped trigger is the best guess left.
+        const prefix = (trigger === null || trigger === undefined) ? "c " : trigger;
+        const query = prefix + root.shareKeyword + " ";
+
+        if (typeof PopoutService !== "undefined" && typeof PopoutService.openDankLauncherV2WithQuery === "function") {
+            PopoutService.openDankLauncherV2WithQuery(query);
+            return;
+        }
+        Quickshell.execDetached(["dms", "ipc", "call", "spotlight", "openQuery", query]);
     }
 
     function executeItem(item) {
-        if (!item || !item.actionEntry || !detail)
+        if (!item || !detail)
+            return;
+
+        if (item.id === "clip:share") {
+            _share();
+            return;
+        }
+
+        if (!item.actionEntry)
             return;
 
         const entry = item.actionEntry;
