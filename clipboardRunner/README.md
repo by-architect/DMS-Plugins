@@ -188,6 +188,27 @@ mistake here that cannot be taken back.
 [chatmanager]: ../chatManager/README.md
 [chatrunner]: ../chatRunner/README.md
 
+## Send to a KDE Connect device
+
+Below the chat row comes one **Send to <device>** row for every KDE Connect
+device that is paired and in reach right now:
+
+```
+clip                         →  Share to a chat…
+                                Send to Pixel 8      ·  Open this link over KDE Connect
+                                Send to Galaxy Tab   ·  Open this link over KDE Connect
+                                yt-dlp: download video
+```
+
+A file goes as the file, a copied image included; a link goes as a link, which
+the device opens; anything else, a folder's path among it, goes as text. A
+notification says whether it arrived.
+
+The devices come from `kdeconnect-cli`, asked again on every copy and every few
+seconds while you type, so a phone that just joined the network turns up on the
+next keystroke. Without `kdeconnect-cli`, or with nothing in reach, there are
+simply no device rows.
+
 ## How things run
 
 Everything runs through **zsh**, detached, with **no terminal**. Anything slow

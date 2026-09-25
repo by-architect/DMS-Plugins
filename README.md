@@ -284,6 +284,8 @@ The first row is **Share to a chat…**, which hands whatever you copied to the
 [chat runner](#chatrunner--c-name-number-or-address) and reopens the launcher on
 its conversation list: pick someone and it is sent. Text goes as a message, a
 file as an attachment, a copied image as the file it was written out to.
+Below it, one **Send to <device>** row per reachable KDE Connect device sends
+the same thing to your phone or tablet instead.
 
 Everything runs through zsh, detached, with no terminal, and posts a
 notification when it finishes. Copying is not a trigger: nothing runs until you

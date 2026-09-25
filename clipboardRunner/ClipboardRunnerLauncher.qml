@@ -52,6 +52,14 @@ Item {
     // as well because the handoff is a launcher query, which is text.
     readonly property string shareKeyword: "share"
 
+    // KDE Connect devices that are paired and reachable right now, each as
+    // {id, name}. Kept cached for the same reason as the clipboard below:
+    // getItems() cannot wait on kdeconnect-cli. Without kdeconnect-cli, or
+    // with no device in reach, this is empty and no device rows appear.
+    property var kdeDevices: []
+    property bool listingDevices: false
+    property double devicesListedAt: 0
+
     // getItems() has to answer synchronously, and the shell currently has no
     // hook for a launcher plugin to say "my list changed" -- neither
     // itemsChanged nor PluginService.requestLauncherUpdate is connected to
@@ -68,6 +76,7 @@ Item {
         _seed();
         _loadSettings();
         _readClipboard();
+        _listDevices();
     }
     onPluginServiceChanged: {
         _seed();
@@ -88,7 +97,10 @@ Item {
         id: readDebounce
         interval: 150
         repeat: false
-        onTriggered: root._readClipboard()
+        onTriggered: {
+            root._readClipboard();
+            root._listDevices();
+        }
     }
 
     Connections {
@@ -218,6 +230,34 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
         });
     }
 
+    // A phone drops off the network and comes back all day, so the list is
+    // asked for again on every copy and, at most every few seconds, while the
+    // runner is being typed into.
+    function _listDevices() {
+        if (listingDevices)
+            return;
+        listingDevices = true;
+        devicesListedAt = Date.now();
+        Proc.runCommand("clipboardRunner.kdeDevices", ["kdeconnect-cli", "--list-available", "--id-name-only"], function (output, exitCode) {
+            root.listingDevices = false;
+            const found = [];
+            if (exitCode === 0) {
+                for (const line of (output || "").split("\n")) {
+                    const match = line.trim().match(/^(\S+)\s+(.+)$/);
+                    if (match && !/devices? found$/.test(line.trim()))
+                        found.push({
+                            "id": match[1],
+                            "name": match[2]
+                        });
+                }
+            }
+            if (JSON.stringify(found) === JSON.stringify(root.kdeDevices))
+                return;
+            root.kdeDevices = found;
+            root._refreshLauncher();
+        });
+    }
+
     function _fail(message) {
         reading = false;
         detail = null;
@@ -228,7 +268,10 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
     function getItems(query) {
         // Sharing needs no actions of its own, so an empty action list is a
         // hint rather than the whole answer once the chat runner is there.
-        if (actions.length === 0 && !canShare)
+        if (Date.now() - devicesListedAt > 5000)
+            _listDevices();
+
+        if (actions.length === 0 && !canShare && kdeDevices.length === 0)
             return [_statusItem("settings", "No clipboard actions yet", "Add one in Settings → Plugins → Clipboard Runner")];
 
         // Only reachable before the first read has landed -- typing another
@@ -263,6 +306,10 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
         // actions say, because it is not filtered by content type: a chat
         // takes a link, a colour or a file just as happily. First, so it is
         // one keystroke away rather than somewhere under the actions.
+        // One row per KDE Connect device, straight after the chat row for the
+        // same reason.
+        rows.unshift(..._deviceItems(q));
+
         const share = _shareItem(q);
         if (share)
             rows.unshift(share);
@@ -296,6 +343,55 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
             categories: ["Clipboard"],
             keywords: ["share", "chat", "send", "message"]
         };
+    }
+
+    function _deviceItems(query) {
+        if (!detail)
+            return [];
+
+        const payload = _devicePayload();
+        return kdeDevices.filter(d => {
+            return query.length === 0 || ("send to " + d.name + " kde connect phone device share").toLowerCase().includes(query);
+        }).map(d => ({
+                    id: "clip:kde:" + d.id,
+                    name: "Send to " + d.name,
+                    icon: "material:smartphone",
+                    comment: payload.what + " over KDE Connect  ·  " + _clip(),
+                    action: "execute",
+                    categories: ["Clipboard"],
+                    keywords: ["share", "send", "kde", "phone", d.name],
+                    kdeDevice: d
+                }));
+    }
+
+    // What a device gets. A file goes as the file and a link as a link, which
+    // the phone opens; a folder cannot be sent, so like anything else it goes
+    // as text.
+    function _devicePayload() {
+        if (detail.type === "path" && !detail.isDir)
+            return {
+                "what": "Send this file",
+                "args": ["--share", detail.path]
+            };
+        if (detail.type === "url")
+            return {
+                "what": "Open this link",
+                "args": ["--share", detail.text]
+            };
+        return {
+            "what": "Send this text",
+            "args": ["--share-text", detail.text]
+        };
+    }
+
+    function _sendToDevice(device) {
+        const payload = _devicePayload();
+        Proc.runCommand("clipboardRunner.kdeShare." + device.id, ["kdeconnect-cli", "--device", device.id].concat(payload.args), function (output, exitCode) {
+            if (exitCode === 0)
+                root._toast("Sent to " + device.name, root._clip());
+            else if (typeof ToastService !== "undefined")
+                ToastService.showError("Could not send to " + device.name, (output || "").trim() || ("kdeconnect-cli exited with " + exitCode));
+        });
     }
 
     // What sharing would actually send. A file is sent as an attachment; a
@@ -368,6 +464,11 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
 
         if (item.id === "clip:share") {
             _share();
+            return;
+        }
+
+        if (item.kdeDevice) {
+            _sendToDevice(item.kdeDevice);
             return;
         }
 
