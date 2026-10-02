@@ -296,8 +296,9 @@ copy anything else                   then  clip  →  translate, define, pastebi
 
 ![Converting what was just copied, then archiving the results, without leaving the launcher](clipboardRunner/docs/demo.gif)
 
-51 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
-links, aria2c for magnets, clone / `pm create` / fork for GitHub, ffmpeg and
+56 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
+links, aria2c for magnets, clone / `pm create` / fork for GitHub and GitLab
+(https or ssh addresses), ffmpeg and
 imagemagick conversions for audio, video and images, libreoffice for documents,
 framework detection and `adb install` for APKs, AppImage installation, 7z and
 tar for folders and archives, colour conversions, and a virus scan. They are seeded into your list as ordinary

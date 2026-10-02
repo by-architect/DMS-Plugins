@@ -41,6 +41,9 @@ var FUNC_COLOR_RE = /^(rgb|rgba|hsl|hsla)\(\s*[^()\n]*\)$/i;
 var SCHEME_URL_RE = /^[a-zA-Z][a-zA-Z0-9+.\-]*:\/\/\S+$/;
 var BARE_WWW_RE = /^www\.\S+\.\S+$/;
 var MAIL_MAGNET_RE = /^(mailto|magnet):\S+$/i;
+// The scp-style address git uses over ssh, git@github.com:owner/repo.git. It
+// has no scheme, so without this it would be filed as plain text.
+var SCP_GIT_RE = /^[\w.\-]+@[\w.\-]+:[^\s:\/][^\s:]*\/\S*$/;
 
 // A clipboard entry belongs to exactly one group. file:// is claimed by the
 // file group rather than the link group, because what you want to do with it
@@ -52,7 +55,7 @@ function classify(text) {
         return "path";
     if (HEX_RE.test(text) || FUNC_COLOR_RE.test(text))
         return "color";
-    if (SCHEME_URL_RE.test(text) || BARE_WWW_RE.test(text) || MAIL_MAGNET_RE.test(text))
+    if (SCHEME_URL_RE.test(text) || BARE_WWW_RE.test(text) || MAIL_MAGNET_RE.test(text) || SCP_GIT_RE.test(text))
         return "url";
     return "text";
 }
