@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Common
+import qs.Widgets
 import "actions.js" as Actions
 
 // File operations in progress plus their recent history, ported from the
