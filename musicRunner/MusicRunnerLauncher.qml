@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Common
 import qs.Services
 
 // Launcher provider backed by `mpc`, MPD's command-line client. Searches up to
@@ -131,14 +132,28 @@ Item {
         "q": "queue", "queue": "queue", "now": "queue", "nowplaying": "queue", "playing": "queue"
     })
 
+    // The prefix on its own ("mpd q", "mpd l") is a scope with nothing typed
+    // yet, which browses that category. It can't be told apart by a trailing
+    // space: the launcher trims the text after the trigger before handing it
+    // over, so "mpd q " arrives here as a bare "q" - and was being searched
+    // as a one-letter query ("Keep typing…") instead. Only the short
+    // prefixes count bare: they're too short to be searches of their own,
+    // while a bare long alias like "music" or "now" is a real word someone
+    // may be looking for, so that stays an ordinary search.
+    //
+    // hasOwnProperty, not _scopeAliases[...]: a first word like
+    // "constructor" would otherwise hit Object.prototype and be taken for a
+    // scope.
     function _parseScope(text) {
-        const m = text.match(/^(\S+)\s+([\s\S]*)$/);
+        const m = text.match(/^(\S+)(?:\s+([\s\S]*))?$/);
         if (!m)
             return null;
-        const scope = _scopeAliases[m[1].toLowerCase()];
-        if (!scope)
+        const alias = m[1].toLowerCase();
+        if (!Object.prototype.hasOwnProperty.call(_scopeAliases, alias))
             return null;
-        return { scope: scope, rest: m[2] };
+        if (m[2] === undefined && alias.length > 2)
+            return null;
+        return { scope: _scopeAliases[alias], rest: m[2] || "" };
     }
 
     function getItems(query) {
@@ -184,7 +199,7 @@ Item {
         // several single-line rows instead of one row spanning several
         // lines.
         const groups = [];
-        const cached = _queryCacheGet(scope + " " + q);
+        const cached = _queryCacheGet(_queryKey(scope, q));
         const lower = q.toLowerCase();
 
         if (activeSongs && cached)
@@ -265,12 +280,14 @@ Item {
             action: () => root._runKindAction(item, a.id)
         }));
 
+        // Proc.dmsBin, not a bare "dms": the shell hands its children
+        // $DMS_EXECUTABLE, but doesn't always have dms itself on PATH.
         if (item.mpdKind === "song" || item.mpdKind === "queue") {
             actions.push({
                 icon: "content_copy",
                 text: "Copy file path",
                 action: () => {
-                    Quickshell.execDetached(["dms", "cl", "copy", item.mpdEntry.file]);
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", item.mpdEntry.file]);
                     root._toast("Copied", item.mpdEntry.file);
                 }
             });
@@ -279,7 +296,7 @@ Item {
                 icon: "content_copy",
                 text: "Copy name",
                 action: () => {
-                    Quickshell.execDetached(["dms", "cl", "copy", item.mpdEntry.name]);
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", item.mpdEntry.name]);
                     root._toast("Copied", item.mpdEntry.name);
                 }
             });
@@ -356,7 +373,7 @@ Item {
     }
 
     function _maybeStartQuery(scope, text, settled) {
-        if (_queryCacheGet(scope + " " + text))
+        if (_queryCacheGet(_queryKey(scope, text)))
             return;
         if (!settled) {
             _desiredScope = scope;
@@ -400,7 +417,7 @@ Item {
             // resumes, or the "MPD not connected" row is retried) instead of
             // permanently showing an empty result for that query string.
             if (_queryPendingText.length >= _minChars && !_queryHadError)
-                _queryCachePut(_queryPendingScope + " " + _queryPendingText, _queryAccum);
+                _queryCachePut(_queryKey(_queryPendingScope, _queryPendingText), _queryAccum);
             _notify();
             return;
         }
@@ -435,6 +452,19 @@ Item {
     // Keyed by "scope text" (e.g. "songs kanye" vs "all kanye") so a scoped
     // query and an unscoped one for the same text don't collide - they can
     // search different categories.
+    //
+    // Built in this one place because the three sites that use it - the
+    // write when a fetch finishes, the "already cached?" check before
+    // starting one, and the read in getItems() - have to agree to the byte.
+    // When they were each written out by hand, the read used a different
+    // separator from the other two, so every finished search was cached
+    // under a key nothing ever looked up: songs, artists and albums never
+    // appeared, and the row sat on "Searching MPD…" for good. A space is
+    // unambiguous here since no scope name contains one.
+    function _queryKey(scope, text) {
+        return scope + " " + text;
+    }
+
     function _queryCacheGet(key) {
         return Object.prototype.hasOwnProperty.call(_queryCache, key) ? _queryCache[key] : null;
     }
@@ -685,7 +715,7 @@ Item {
             const albumArtist = parts[1] || "";
             const artist = parts[2] || "";
             const displayArtist = albumArtist || artist;
-            const key = album + " " + displayArtist;
+            const key = album + "\u0000" + displayArtist;
             if (album.length === 0 || seen[key])
                 continue;
             seen[key] = true;

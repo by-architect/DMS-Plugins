@@ -23,9 +23,17 @@ row with a `×N` count instead of flooding the tile.
 **File Actions** reuses the `fileActions` plugin's model wholesale (see
 `FileActionsData.qml`, `actions.js`, `scripts/live.sh`, `scripts/history.sh`,
 all vendored copies): a live status file under
-`$XDG_RUNTIME_DIR/matrix/{fct,dejavu}` answers "what's running now" and is
-deleted the moment an action ends, so the "Recent" section below it comes from
-the event log (`~/.local/state/fct.json`, falling back to the journal) instead.
+`$XDG_RUNTIME_DIR/matrix/fct` (or `matrix/dejavu`, the pre-rename name, when
+that is the one that exists) answers "what's running now" and is deleted the
+moment an action ends, so the "Recent" section below it comes from the event
+log (`~/.local/state/fct.json`, falling back to the journal) instead.
+
+The vendored copies have to be kept in step with `fileActions` by hand. They
+had fallen behind its fix for a header line landing inside a status file's
+JSON: with both `fct` and `dejavu` present, the second directory's `ok:` line
+was printed straight after the first directory's last file, that file failed
+to parse, and a copy in flight was missing from the tile. `actions.js` and
+`scripts/live.sh` are byte-identical to the `fileActions` ones again.
 
 ## Data sources
 
@@ -38,12 +46,12 @@ Everything runs as the logged-in user; no root and no helper daemon.
 | Boot health | `journalctl --list-boots` + `journalctl -t systemd-shutdown` |
 | Tailscale | `tailscale status --json` |
 | System errors | `journalctl -p 3 -o json`, deduplicated by unit + message |
-| File actions (live) | `scripts/live.sh` — cats `$XDG_RUNTIME_DIR/matrix/{fct,dejavu}/*.json` |
+| File actions (live) | `scripts/live.sh` — cats `$XDG_RUNTIME_DIR/matrix/fct/*.json` (or `matrix/dejavu`, whichever exists first) |
 | File actions (history) | `scripts/history.sh` — `~/.local/state/fct.json` / `dejavu.json`, falling back to `journalctl -t matrix-fct -t matrix-dejavu` |
 | Privilege escalation | `journalctl -t sudo` |
 | Failed units | `systemctl list-units --failed --output=json` |
 | Listening ports | `ss -tulnHp` |
-| Overview | `hostname`, `uname`, `/proc/uptime`, `/etc/os-release`, `systemd-analyze`, `systemctl is-active` |
+| Overview | `hostname`, `uname`, `/proc/uptime`, `/etc/os-release`, `systemd-analyze`, `systemctl is-active` (the firewall counts as active when any of `firewall`, `nftables`, `iptables` is) |
 
 Failed logins come from the journal rather than `lastb`, because `/var/log/btmp`
 is root-only. Nothing is lost — sshd records invalid users and failed auth there.
@@ -54,11 +62,11 @@ boot history does not fan out into dozens of processes.
 
 ## Install
 
-The plugin is not installed automatically. Symlink `plugins/systemPanel` into
+The plugin is not installed automatically. Symlink `systemPanel` into
 `~/.config/DankMaterialShell/plugins/` and enable it:
 
 ```sh
-ln -sfn "$PWD/plugins/systemPanel" ~/.config/DankMaterialShell/plugins/systemPanel
+ln -sfn "$PWD/systemPanel" ~/.config/DankMaterialShell/plugins/systemPanel
 SHELL_PATH=$(quickshell list --all | grep -oE '/run/user/[0-9]+/danklinux-shell/[a-f0-9]+' | head -1)
 quickshell -p "$SHELL_PATH" ipc call plugin-scan scan
 quickshell -p "$SHELL_PATH" ipc call plugins enable systemPanel
@@ -83,7 +91,7 @@ Inside the panel: **Esc** or **q** closes, **Ctrl+R** / **F5** refreshes.
 | Key | Default | Meaning |
 |---|---|---|
 | `autoRefresh` | `true` | Re-run every collector every 30s while open |
-| `journalDays` | `30` | How far back to read the journal for failed logins and sudo activity |
+| `journalDays` | `30` | How far back to read the journal for failed logins, system errors and sudo activity |
 
 ## Implementation notes
 

@@ -34,9 +34,10 @@ type errInfo struct {
 	Message string `json:"message,omitempty"`
 }
 
-// chatObj and messageObj mirror the shapes in docs/CHAT-PLUGINS.md. Fields the
-// bridge has nothing to say about are omitted so the host keeps whatever it
-// already knows -- a partial update must never blank an earlier one.
+// chatObj and messageObj mirror wireChat and wireMessage in the Chat Manager's
+// host/protocol.go. Fields the bridge has nothing to say about are omitted so
+// the host keeps whatever it already knows -- a partial update must never
+// blank an earlier one.
 type chatObj struct {
 	ID         string `json:"id"`
 	Name       string `json:"name,omitempty"`
@@ -47,6 +48,11 @@ type chatObj struct {
 	Archived   bool   `json:"archived,omitempty"`
 	Muted      bool   `json:"muted,omitempty"`
 	AvatarPath string `json:"avatarPath,omitempty"`
+	// ReadUpTo is how far this conversation has been read on another device,
+	// in milliseconds. The host only ever moves its own read position forward
+	// with it, and it is what keeps a message already read on the phone from
+	// staying unread here, or being announced.
+	ReadUpTo int64 `json:"readUpTo,omitempty"`
 	// Handles are the reachable identifiers for this conversation -- for
 	// Signal, the phone number, the username and the account UUID. Sent
 	// explicitly because the id is opaque: nothing in the host parses it.
@@ -142,7 +148,7 @@ func fail(id int, code, format string, args ...any) {
 }
 
 // logf writes a diagnostic to stderr, which the host tails into its log and
-// surfaces in `dms chat tail`.
+// keeps the last lines of in the provider's status.
 //
 // Never bare text on stdout -- that stream is protocol. This is the single
 // easiest way to break a bridge.

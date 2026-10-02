@@ -11,8 +11,9 @@ import "wallhaven.js" as Wallhaven
 // The fullscreen surface. Must come from a LazyLoader, never be declared
 // inline inside the PluginComponent — an inline PanelWindow never becomes a
 // layer surface. The daemon keeps the loader permanently active and this
-// window's own `open` property maps/unmaps it, so search results and the
-// local folder scan persist across opens instead of being rebuilt every time.
+// window's own `open` property maps/unmaps it, so Wallhaven search results
+// persist across opens instead of being rebuilt every time. (The local folder
+// is rescanned once per open — see onOpenChanged.)
 PanelWindow {
     id: win
 
@@ -87,8 +88,17 @@ PanelWindow {
     // Local's filter is already live, so Enter there just hands focus back
     // to the grid. Either way, focus returns to panel mode so Ctrl+hjkl
     // navigation works immediately without an extra unfocus step.
+    //
+    // Only a new query (or an empty grid, e.g. to retry after an error) is
+    // worth a new request. Ctrl+Enter typed with the field still focused —
+    // which is how every open starts — arrives here first: the text field
+    // fires accepted for Return whatever the modifiers, then lets the key
+    // carry on up to the panel's handler (confirmed in a Qt 6.11 test). So
+    // re-searching here emptied the grid a moment before the apply looked for
+    // the selected result, and Ctrl+Enter reloaded the results instead of
+    // applying one.
     function handleSearchAccepted() {
-        if (activeTab === 0)
+        if (activeTab === 0 && (searchQuery !== wallhavenActiveQuery || wallhavenItems.length === 0))
             searchWallhaven(searchQuery);
         focusAnchor.forceActiveFocus();
     }
@@ -106,6 +116,9 @@ PanelWindow {
     property bool wallhavenLoadingMore: false
     property string wallhavenError: ""
     property bool wallhavenApplying: false
+    // Bumped by every fresh search; a response carrying an older number
+    // belongs to a query the user has already moved on from.
+    property int wallhavenGeneration: 0
 
     // page 1 replaces the results; every later page appends. A fresh search,
     // the auto-prefetch chain below it, and Space-to-load-more all funnel
@@ -113,7 +126,16 @@ PanelWindow {
     // initial fill-the-screen sequence (as opposed to a user-triggered
     // load-more) — only those keep fetching until wallhavenPrefetchPages;
     // a manual Space press always fetches exactly one more page.
+    //
+    // Each request gets its own Proc entry (an empty id makes Proc mint one
+    // and clean it up afterwards) and checks the generation it was sent
+    // under. With one shared id Proc keeps only the newest callback, so when
+    // a second search went out before the first came back, the first
+    // response was handed to the second search's callback and became its
+    // page 1, the second's real page 1 was appended to it as page 2, and the
+    // grid showed the old query's wallpapers mixed into the new one's.
     function fetchWallhavenPage(page, append, autoChain) {
+        const generation = wallhavenGeneration;
         if (append)
             wallhavenLoadingMore = true;
         else
@@ -121,7 +143,9 @@ PanelWindow {
         wallhavenError = "";
         wallhavenPage = page;
         const url = Wallhaven.searchUrl(wallhavenActiveQuery, page);
-        Proc.runCommand("wallpaperSearch:wallhaven", ["curl", "-s", url], (output, exitCode) => {
+        Proc.runCommand(null, ["curl", "-s", url], (output, exitCode) => {
+            if (generation !== wallhavenGeneration)
+                return;
             wallhavenLoading = false;
             wallhavenLoadingMore = false;
             if (exitCode !== 0) {
@@ -160,8 +184,13 @@ PanelWindow {
     }
 
     function searchWallhaven(query) {
+        wallhavenGeneration++;
         wallhavenActiveQuery = query;
         wallhavenItems = [];
+        // A load-more still in flight for the previous query is now ignored
+        // when it lands, so it will never clear its own flag — and a stuck
+        // flag would block Space for good.
+        wallhavenLoadingMore = false;
         fetchWallhavenPage(1, false, true);
     }
 
@@ -188,15 +217,33 @@ PanelWindow {
         // mkdir and the download run as one shell command (not
         // Paths.mkdir()'s fire-and-forget execDetached) so the directory is
         // guaranteed to exist before curl tries to write into it.
-        Proc.runCommand("wallpaperSearch:download", ["sh", "-c", `mkdir -p '${dir}' && curl -sL '${item.full}' --output '${dest}'`], (output, exitCode) => {
+        //
+        // Everything variable goes in as a positional parameter, never into
+        // the script text. The URL and id come straight from Wallhaven's
+        // response and the folder from a free-text setting; spliced in
+        // between single quotes, a quote in any of them ended the quoting
+        // early — a folder like "John's Wallpapers" broke every download, and
+        // whatever followed a quote in the response would have run as shell.
+        //
+        // --fail keeps an HTTP error body (a 404, the rate limiter's 429)
+        // from being saved under an image name and applied as the wallpaper;
+        // the download lands in a .part file that only takes the real name
+        // once complete, so a dropped connection never leaves a truncated
+        // "wallpaper" behind for the Local tab to list. curl's own limits are
+        // the real bound: Proc's default 10s timeout killed full-resolution
+        // downloads on an ordinary connection, and it only killed the shell —
+        // curl carried on as an orphan after the "download failed" toast.
+        Proc.runCommand("wallpaperSearch:download", ["sh", "-c", 'mkdir -p "$1" && curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$3.part" "$2" && mv -f "$3.part" "$3" || { rm -f "$3.part"; exit 1; }', "sh", dir, item.full, dest], (output, exitCode) => {
             wallhavenApplying = false;
             if (exitCode !== 0) {
                 ToastService.showError("Wallpaper download failed");
                 return;
             }
+            // The Local tab's list predates this file; rescan on next look.
+            localScanned = false;
             SessionData.setWallpaper(dest);
             ToastService.showInfo("Wallpaper applied", item.key);
-        });
+        }, 0, 615000);
     }
 
     // ------------------------------------------------------------ local tab
@@ -229,6 +276,10 @@ PanelWindow {
                 localAll = [];
                 return;
             }
+            // An unchanged folder keeps its list, and with it the selection,
+            // instead of jumping back to the first image on every open.
+            if (lines.length === localAll.length && lines.every((path, i) => path === localAll[i].full))
+                return;
             localAll = lines.map(path => ({
                         key: path,
                         name: path.split("/").pop(),
@@ -305,6 +356,15 @@ PanelWindow {
     onOpenChanged: {
         if (open) {
             loadSettings();
+            // The window outlives every close, so the scan from the first
+            // open was all the Local tab ever showed: a different folder
+            // picked in settings, or wallpapers added to it since, did not
+            // appear until the shell restarted. Marking the scan stale makes
+            // the next look at the tab rescan — straight away if it is the
+            // tab showing. (Wallhaven results still persist across opens.)
+            localScanned = false;
+            if (activeTab === 1)
+                scanLocal();
             searchBar.field.forceActiveFocus();
         }
     }

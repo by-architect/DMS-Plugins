@@ -10,8 +10,8 @@ StyledRect {
     id: row
 
     property var device: null
-    readonly property bool busy: device ? MountService.isBusy(device.path) : false
-    readonly property string busyVerb: device ? MountService.busyVerb(device.path) : ""
+    readonly property bool busy: device ? MountService.isRowBusy(device) : false
+    readonly property string busyVerb: device ? MountService.rowBusyVerb(device) : ""
     readonly property color accent: {
         if (!device)
             return Theme.surfaceVariantText;

@@ -63,6 +63,15 @@ Singleton {
     readonly property var current: active.length > 0 ? active[0] : null
     readonly property int activeCount: active.length
 
+    // How many bar pills are reading this. A singleton outlives every one of
+    // them -- it stays in the engine after the plugin is disabled or its last
+    // pill removed -- so both readers are tied to there being a reader, rather
+    // than running live.sh every few seconds and the history every half
+    // minute until the shell restarts. Each pill counts itself in on creation
+    // and out on destruction.
+    property int consumers: 0
+    readonly property bool watching: consumers > 0
+
     // path -> { raw, lastChangeMs, phase, endedMs, action }
     property var _seen: ({})
     // Rows for actions whose file vanished before the journal caught up, and
@@ -114,7 +123,7 @@ Singleton {
     Timer {
         interval: root.activeCount > 0 ? root.activeIntervalMs : root.idleIntervalMs
         repeat: true
-        running: true
+        running: root.watching
         triggeredOnStart: true
         onTriggered: root.refresh()
     }
@@ -172,7 +181,7 @@ Singleton {
     Timer {
         interval: root.journalIntervalMs
         repeat: true
-        running: true
+        running: root.watching
         triggeredOnStart: true
         onTriggered: root.refreshHistory()
     }

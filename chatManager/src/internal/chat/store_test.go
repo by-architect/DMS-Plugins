@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -534,4 +535,143 @@ func TestUnreadMessages(t *testing.T) {
 	hits, err = store.UnreadMessages(ctx, 50)
 	require.NoError(t, err)
 	assert.Empty(t, hits)
+}
+
+// InsertMessages says which messages the store had never seen, which is what
+// keeps a redelivered message from being counted, or announced, twice.
+func TestInsertMessagesReportsWhatIsNew(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	first := []Message{
+		{Provider: prov, ChatID: "c1", ID: "a", TS: 100, Kind: KindText, Text: "one"},
+		{Provider: prov, ChatID: "c1", ID: "b", TS: 200, Kind: KindText, Text: "two"},
+	}
+	fresh, err := store.InsertMessages(ctx, first)
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true, true}, fresh)
+
+	again := []Message{
+		{Provider: prov, ChatID: "c1", ID: "b", TS: 200, Kind: KindText, Text: "two"},
+		{Provider: prov, ChatID: "c1", ID: "c", TS: 300, Kind: KindText, Text: "three"},
+	}
+	fresh, err = store.InsertMessages(ctx, again)
+	require.NoError(t, err)
+	assert.Equal(t, []bool{false, true}, fresh, "only the message the store had not seen is new")
+
+	// The same id in another conversation is a different message.
+	fresh, err = store.InsertMessages(ctx, []Message{
+		{Provider: prov, ChatID: "c2", ID: "a", TS: 400, Kind: KindText, Text: "elsewhere"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true}, fresh)
+}
+
+// A message older than where the conversation has been read was already seen,
+// on a phone or in another client, and must not raise the badge.
+func TestTouchChatDoesNotCountWhatWasAlreadyRead(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.TouchChat(ctx, prov, "c1", "Chat", "hi", 100, false, false))
+	require.NoError(t, store.SetReadUpTo(ctx, prov, "c1", 500))
+
+	require.NoError(t, store.TouchChat(ctx, prov, "c1", "", "old", 400, false, true))
+	c, err := store.ChatByID(ctx, prov, "c1")
+	require.NoError(t, err)
+	assert.Equal(t, 0, c.Unread, "a message from before the read mark is not unread")
+
+	require.NoError(t, store.TouchChat(ctx, prov, "c1", "", "new", 600, false, true))
+	c, err = store.ChatByID(ctx, prov, "c1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, c.Unread, "a message after the read mark is")
+}
+
+// UnreadTotal is what a provider's badge says, archived conversations aside.
+func TestUnreadTotalSkipsArchived(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	for _, c := range []Chat{
+		{Provider: prov, ID: "a", Name: "A", LastTS: 100, Unread: 2},
+		{Provider: prov, ID: "b", Name: "B", LastTS: 200, Unread: 3},
+		{Provider: prov, ID: "c", Name: "C", LastTS: 300, Unread: 7},
+	} {
+		require.NoError(t, store.UpsertChat(ctx, c))
+	}
+	require.NoError(t, store.SetArchived(ctx, prov, "c", true))
+
+	n, err := store.UnreadTotal(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+}
+
+// The conversation list asks "when did I last write here" of every row. It has
+// to be answered from an index, or listing five thousand conversations reads
+// every message in every one of them.
+func TestMyLastTSIsAnsweredFromAnIndex(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	rows, err := store.db.QueryContext(ctx, `EXPLAIN QUERY PLAN `+chatSelect+` WHERE c.last_ts > 0`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		plan = append(plan, detail)
+	}
+	require.NoError(t, rows.Err())
+
+	found := false
+	for _, step := range plan {
+		if strings.Contains(step, "idx_msg_mine") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected the subquery to use idx_msg_mine, plan was:\n%s", strings.Join(plan, "\n"))
+}
+
+// A conversation announced before any message, with no word on unread, starts
+// at nothing waiting -- not at minus one, which made its badge undercount for
+// as long as it lived.
+func TestUpsertChatWithoutUnreadStartsAtZero(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.UpsertChat(ctx, Chat{Provider: prov, ID: "c1", Name: "Ada", LastTS: 100, Unread: -1}))
+	c, err := store.ChatByID(ctx, prov, "c1")
+	require.NoError(t, err)
+	assert.Zero(t, c.Unread)
+
+	require.NoError(t, store.TouchChat(ctx, prov, "c1", "", "hi", 200, false, true))
+	c, err = store.ChatByID(ctx, prov, "c1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, c.Unread, "the first message makes one")
+
+	require.NoError(t, store.UpsertChat(ctx, Chat{Provider: prov, ID: "c1", Name: "Ada L", Unread: -1}))
+	c, err = store.ChatByID(ctx, prov, "c1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, c.Unread, "a later update with no word on unread leaves the count alone")
+}
+
+// A database left with the old minus-one rows is repaired when it is opened.
+func TestOpeningRepairsNegativeUnread(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "h.db")
+	store, err := OpenHistory(path)
+	require.NoError(t, err)
+	_, err = store.db.Exec(`INSERT INTO chats (provider, id, name, unread) VALUES ('p', 'c', 'C', -1)`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = OpenHistory(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+
+	c, err := store.ChatByID(context.Background(), "p", "c")
+	require.NoError(t, err)
+	assert.Zero(t, c.Unread)
 }

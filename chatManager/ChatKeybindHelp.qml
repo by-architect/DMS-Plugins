@@ -107,6 +107,18 @@ StyledRect {
                 {
                     "keys": I18n.tr("Type in the search box"),
                     "text": I18n.tr("Filters conversations, and searches message text after two characters")
+                },
+                {
+                    "keys": "↑ / ↓",
+                    "text": I18n.tr("Move through the conversations listed, without leaving the search box")
+                },
+                {
+                    "keys": "Enter",
+                    "text": I18n.tr("Open the conversation the arrows are on -- the best match, as you type")
+                },
+                {
+                    "keys": "↑ / ↓  ·  Enter",
+                    "text": I18n.tr("Choose where a forward goes, or which conversation a name meant")
                 }
             ]
         }

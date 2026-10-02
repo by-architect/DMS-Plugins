@@ -12,7 +12,12 @@ QtObject {
         const psBin = SettingsData.getPluginSetting("processRunner", "psBin", "ps");
         const killBin = SettingsData.getPluginSetting("processRunner", "killBin", "kill");
 
-        const script = 'command -v -- "$1" >/dev/null 2>&1 || { echo "missing:$1"; exit 1; }; ' + 'command -v -- "$2" >/dev/null 2>&1 || { echo "missing:$2"; exit 2; }';
+        // kill can't go through `command -v` like ps does: that reports the
+        // shell's own builtin, so a bare "kill" always passed - even with
+        // nothing at all on PATH - and the one case this check is here for
+        // went straight through. Instead PATH is walked for an actual
+        // executable file (or an absolute path is tested directly).
+        const script = 'command -v -- "$1" >/dev/null 2>&1 || { echo "missing:$1"; exit 1; }; ' + 'case "$2" in */*) [ -f "$2" ] && [ -x "$2" ] && exit 0 ;; ' + '*) set -f; IFS=:; for d in $PATH; do [ -f "$d/$2" ] && [ -x "$d/$2" ] && exit 0; done ;; esac; ' + 'echo "missing:$2"; exit 2';
 
         Proc.runCommand("processRunner.depCheck", ["sh", "-c", script, "sh", psBin, killBin], (stdout, exitCode) => {
             if (exitCode === 0) {

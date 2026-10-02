@@ -249,7 +249,10 @@ Item {
                 icon: "content_copy",
                 text: "Copy connection string",
                 action: () => {
-                    Quickshell.execDetached(["dms", "cl", "copy", "ssh://" + dest + (h.port && h.port !== "22" ? ":" + h.port : "")]);
+                    // Proc.dmsBin, not a bare "dms": the shell hands its
+                    // children $DMS_EXECUTABLE, but doesn't always have dms
+                    // itself on PATH.
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", "ssh://" + dest + (h.port && h.port !== "22" ? ":" + h.port : "")]);
                     root._toast("Copied", dest);
                 }
             }];
@@ -264,7 +267,7 @@ Item {
                 icon: "content_copy",
                 text: "Copy session name",
                 action: () => {
-                    Quickshell.execDetached(["dms", "cl", "copy", entry.name]);
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", entry.name]);
                     root._toast("Copied", entry.name);
                 }
             },
@@ -272,9 +275,22 @@ Item {
                 icon: "delete",
                 text: "Kill session",
                 action: () => {
-                    Quickshell.execDetached([root.tmuxBin, "kill-session", "-t", entry.name]);
-                    root._toast("Killed session", entry.name);
-                    root._refresh();
+                    // "=" makes tmux take the name exactly. A bare -t also
+                    // accepts a unique prefix, so killing a session that had
+                    // already exited since the list was read ("dev") killed
+                    // whichever other one starts the same way ("dev2")
+                    // instead of failing. Run through Proc rather than fired
+                    // and forgotten, so the toast says what tmux actually
+                    // did, and the list is re-read once the kill has landed -
+                    // refreshing alongside it raced the kill and usually
+                    // still listed the session that was just killed.
+                    Proc.runCommand(null, [root.tmuxBin, "kill-session", "-t", "=" + entry.name], (output, exitCode) => {
+                        if (exitCode === 0)
+                            root._toast("Killed session", entry.name);
+                        else if (typeof ToastService !== "undefined")
+                            ToastService.showError("Could not kill session", entry.name + " (tmux exited with code " + exitCode + ")");
+                        root._refresh();
+                    }, 0);
                 }
             }
         ];
@@ -312,10 +328,25 @@ Item {
         interval: 5000
         repeat: false
         onTriggered: {
-            if (!listProcess.running)
+            if (root._exitDone)
                 return;
-            root._timedOut = true;
-            listProcess.running = false;
+            if (listProcess.running) {
+                root._timedOut = true;
+                listProcess.running = false;
+                return;
+            }
+            // Not running, and no exit ever reported: the binary couldn't be
+            // started at all (a wrong tmux path in settings, or tmux gone).
+            // Quickshell sends no exited signal for that, so this is the only
+            // place the fetch can end - otherwise _fetchInFlight stays set
+            // for good, every later refresh returns early, and the list sits
+            // on "Loading tmux sessions…" (or the last list it got) even
+            // after the path is fixed.
+            root._fetchInFlight = false;
+            root._everFetched = true;
+            root._lastFetchAt = Date.now();
+            root._fetchError = "Could not start '" + root.tmuxBin + "'. Check the tmux binary in this plugin's settings.";
+            root._notify();
         }
     }
 
@@ -468,10 +499,20 @@ Item {
         interval: 7000
         repeat: false
         onTriggered: {
-            if (!remoteProbeProcess.running)
+            if (remoteProbeProcess._exitDone)
                 return;
             root._remoteProbeTimedOut = true;
-            remoteProbeProcess.running = false;
+            if (remoteProbeProcess.running) {
+                remoteProbeProcess.running = false;
+                return;
+            }
+            // Never started (no ssh binary to run): no exit is coming, so
+            // finish the probe here as a failure, the same way the local
+            // fetch does - otherwise _remoteProbeInFlight stays set and no
+            // host is ever probed again.
+            remoteProbeProcess._exitDone = true;
+            remoteProbeProcess._stdoutDone = true;
+            root._maybeFinalizeRemoteProbe();
         }
     }
 
@@ -609,10 +650,18 @@ Item {
             const parts = line.split("|");
             if (parts.length < 3)
                 continue;
+            // Read from the right: the last two fields are numbers tmux
+            // wrote, and the name is whatever is left. tmux keeps a "|" in a
+            // session name (it only rewrites ":" and "."), and the Create
+            // row will happily make one, so splitting from the left listed a
+            // session "a|b" as "a" with "b windows" - and attach, copy and
+            // kill all then went to "a".
+            const attached = parts.pop();
+            const windows = parts.pop();
             sessions.push({
-                name: parts[0],
-                windows: parts[1],
-                attached: parts[2] === "1"
+                name: parts.join("|"),
+                windows: windows,
+                attached: attached === "1"
             });
         }
         return sessions;

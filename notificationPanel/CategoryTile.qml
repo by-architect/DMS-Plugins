@@ -19,6 +19,8 @@ Rectangle {
     // highlighted row in lockstep everywhere at once rather than navigating
     // one container at a time.
     property int currentRowIndex: -1
+    // The window's clock, handed on to every card's age stamp.
+    property real nowMs: 0
 
     onCurrentRowIndexChanged: RowNav.scrollRowIntoView(catFlick, catRepeater, currentRowIndex)
 
@@ -155,15 +157,21 @@ Rectangle {
                 color: Theme.surfaceVariantText
             }
 
+            // Counted, not modelled on the array itself. Every keystroke in a
+            // condition reassigns editConditions, and a Repeater over a JS
+            // array tears down and rebuilds every row when the array changes
+            // -- the text field being typed in included, so it lost the
+            // keyboard after each character and the next one landed on the
+            // panel, where `q` closes it. Bound through the index, a row is
+            // only rebuilt when a condition is added or removed.
             Repeater {
-                model: root.editConditions
+                model: root.editConditions.length
 
                 FilterCondition {
                     required property int index
-                    required property var modelData
 
                     width: editorCol.width
-                    condition: modelData
+                    condition: root.editConditions[index] ?? root.blankCondition()
                     removable: root.editConditions.length > 1
                     onChanged: next => root.updateCondition(index, next)
                     onRemoveRequested: root.removeCondition(index)
@@ -311,6 +319,7 @@ Rectangle {
 
                             item: modelData
                             isCurrent: index === root.currentRowIndex
+                            nowMs: root.nowMs
                             onRemoveRequested: NotificationService.removeFromHistory(modelData.id)
                         }
                     }

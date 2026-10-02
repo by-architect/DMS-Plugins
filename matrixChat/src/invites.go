@@ -191,14 +191,18 @@ func inviteMessageID(roomID id.RoomID) string {
 
 // inviteLine is what the invitation says in the conversation list.
 func (b *bridge) inviteLine(roomID id.RoomID) string {
+	// Read under the lock: noteInvite writes InvitedBy from the sync loop.
 	b.mu.RLock()
-	info := b.rooms[roomID]
+	var inviter id.UserID
+	if info := b.rooms[roomID]; info != nil {
+		inviter = info.InvitedBy
+	}
 	b.mu.RUnlock()
 
-	if info == nil || info.InvitedBy == "" {
+	if inviter == "" {
 		return "You have been invited to this room"
 	}
-	return b.senderName(roomID, info.InvitedBy) + " invited you to this room"
+	return b.senderName(roomID, inviter) + " invited you to this room"
 }
 
 // pendingInvites lists the rooms we have been invited to and not answered.

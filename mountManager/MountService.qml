@@ -44,6 +44,15 @@ Singleton {
     property string error: ""
     property bool everRead: false
 
+    // How many bar pills are reading this. A singleton outlives every one of
+    // them -- it stays in the engine after the plugin is disabled or its last
+    // pill removed -- so the poll and the udev stream are tied to there being
+    // a reader, rather than running lsblk every few seconds, and holding a
+    // udevadm child open, until the shell restarts. Each pill counts itself
+    // in on creation and out on destruction.
+    property int consumers: 0
+    readonly property bool watching: consumers > 0
+
     // device path -> the verb currently running on it, so a row can show what
     // it is doing and refuse to be told twice.
     property var busy: ({})
@@ -54,6 +63,26 @@ Singleton {
 
     function busyVerb(path) {
         return busy[path] !== undefined ? busy[path] : "";
+    }
+
+    // What a row is in the middle of: its own action, or its disk's eject.
+    //
+    // An eject is filed under the whole disk, since it powers all of it off,
+    // while a row is usually a partition on it -- so asking after the row's
+    // own path alone showed nothing during an eject, and left the row's mount
+    // and unmount buttons live under it, contrary to "refuse to be told twice".
+    function rowBusyVerb(row) {
+        if (!row)
+            return "";
+        if (busy[row.path] !== undefined)
+            return busy[row.path];
+        if (row.diskPath && busy[row.diskPath] !== undefined)
+            return busy[row.diskPath];
+        return "";
+    }
+
+    function isRowBusy(row) {
+        return rowBusyVerb(row) !== "";
     }
 
     function _setBusy(path, verb) {
@@ -104,7 +133,7 @@ Singleton {
     Timer {
         interval: root.refreshIntervalMs
         repeat: true
-        running: true
+        running: root.watching
         triggeredOnStart: true
         onTriggered: root.refresh()
     }
@@ -116,7 +145,7 @@ Singleton {
         id: udevProc
 
         command: ["udevadm", "monitor", "--udev", "--subsystem-match=block"]
-        running: root.watchUdev
+        running: root.watchUdev && root.watching
 
         stdout: SplitParser {
             onRead: udevDebounce.restart()
@@ -202,14 +231,20 @@ Singleton {
     }
 
     function mount(row) {
+        if (isRowBusy(row))
+            return;
         _run("mount", row.path, Mounts.titleOf(row));
     }
 
     function unmount(row) {
+        if (isRowBusy(row))
+            return;
         _run("unmount", row.path, Mounts.titleOf(row));
     }
 
     function eject(row) {
+        if (isRowBusy(row))
+            return;
         _run("eject", row.diskPath || row.path, Mounts.titleOf(row));
     }
 
@@ -222,7 +257,9 @@ Singleton {
     function copyText(text, what) {
         if (!text)
             return;
-        Quickshell.execDetached(["dms", "cl", "copy", text]);
+        // Proc.dmsBin, not a bare "dms": the shell hands its children
+        // $DMS_EXECUTABLE, but does not always have dms itself on PATH.
+        Quickshell.execDetached([Proc.dmsBin, "cl", "copy", text]);
         ToastService.showInfo("Copied " + (what || "path"), text);
     }
 

@@ -71,6 +71,13 @@ Plugins.
   sshManager's own README asks any consumer to handle it. A host that can't
   be probed for either reason just keeps showing the plain "connect" entry,
   same as before this existed.
+- DMS also asks launcher plugins for results on plain searches typed
+  *without* a trigger, unless the plugin is switched off under **Settings →
+  Launcher → Plugin visibility**. Left on, anything typed into the launcher
+  lists matching sessions and hosts, adds a `Create "<whatever you typed>"`
+  row, and counts as "in use" for the SSH probes above — not just
+  `tmux <query>`. Switching Tmux Runner off there keeps all of that behind
+  the trigger.
 - Selecting a discovered remote session opens an interactive `ssh` directly
   (in a terminal, **not** tmux-wrapped like the plain connect entry) — it
   never uses a stored password for that part, only the background probe

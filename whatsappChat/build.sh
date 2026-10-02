@@ -20,5 +20,6 @@ echo "building the WhatsApp bridge (this may take a minute the first time)..."
 
 echo "built: $(pwd)/bin/whatsapp-chat-bridge"
 echo
-echo "Now enable WhatsApp under Settings -> Chats, and scan the QR code with"
-echo "WhatsApp on your phone (Settings -> Linked devices -> Link a device)."
+echo "Now enable WhatsApp Chat (and Chat Manager) under Settings -> Plugins, open the"
+echo "chat window, and scan the QR code it shows with WhatsApp on your phone"
+echo "(Settings -> Linked devices -> Link a device)."

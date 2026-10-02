@@ -6,9 +6,9 @@ import qs.Widgets
 
 // Confirmation before deleting a message.
 //
-// Deleting is bound to Delete and Shift+Delete, which are easy keys to hit by
-// mistake, and neither kind of delete can be undone. Deleting for everyone is
-// worse still: it reaches other people's devices.
+// Deleting is bound to Ctrl+Delete and Ctrl+Shift+Delete, which sit right
+// beside the keys that edit a draft, and neither kind of delete can be undone.
+// Deleting for everyone is worse still: it reaches other people's devices.
 StyledRect {
     id: root
 

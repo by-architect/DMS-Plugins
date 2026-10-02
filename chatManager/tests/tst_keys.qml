@@ -23,9 +23,18 @@ Item {
     property string lastFired: ""
     property int sends: 0
 
-    // Everything the conversation binds. All of these must arrive, in every
-    // state, without touching what is being typed.
-    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+Y", "Ctrl+N", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
+    // Everything the conversation binds while a message can be written. All of
+    // these must arrive, in every state, without touching what is being typed.
+    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
+
+    // The two answers to an invitation. An invitation has no composer -- the
+    // field is hidden, and the keyboard with it -- so these never compete with
+    // a text field, and are checked the way they are used: with nothing being
+    // typed. They must stay invitation-only, too. Under some keyboard schemes
+    // Ctrl+Y is Redo, which a focused field claims before any shortcut is asked
+    // -- the Windows scheme does, and it is the one this test platform uses,
+    // which is how this suite came to fail on a key that works.
+    readonly property var inviteKeys: ["Ctrl+Y", "Ctrl+N"]
 
     // What the field keeps for itself, whatever the window would like. Bound
     // here so the test shows it rather than assuming it: this is the reason
@@ -48,7 +57,7 @@ Item {
         })
 
     Repeater {
-        model: window.keymap.concat(window.fieldKeeps)
+        model: window.keymap.concat(window.inviteKeys).concat(window.fieldKeeps)
 
         delegate: Item {
             id: binding
@@ -189,6 +198,29 @@ Item {
                     verify(!press(chord).fired, chord + " reached a shortcut while " + states[s].name + ", which the window does not rely on");
                 }
             }
+        }
+
+        // On an invitation the composer is gone, and the answers arrive.
+        //
+        // Gone takes two steps, and the test shows why: a hidden field keeps
+        // the keyboard in Qt Quick, so hiding the composer alone leaves every
+        // key going into a box nobody can see. ConversationView releases it
+        // as an invitation appears, which is the second step here.
+        function test_invitation_answers_arrive_without_a_composer() {
+            composer.visible = false;
+            verify(field.activeFocus, "Qt now takes the keyboard from a hidden field; ConversationView's release is no longer needed");
+
+            field.focus = false;
+            verify(!field.activeFocus);
+
+            for (let k = 0; k < window.inviteKeys.length; k++) {
+                const chord = window.inviteKeys[k];
+                window.lastFired = "";
+                keyClick(window.chords[chord][0], window.chords[chord][1]);
+                compare(window.lastFired, chord, chord + " never arrived on an invitation");
+            }
+
+            composer.visible = true;
         }
 
         // Which is why the composer is handed the key instead.

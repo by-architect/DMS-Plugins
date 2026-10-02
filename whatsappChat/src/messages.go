@@ -84,19 +84,67 @@ func (b *bridge) convertWebMessage(chat types.JID, web *waWeb.WebMessageInfo) *m
 		msg.Status = "read"
 	}
 
-	if participant := key.GetParticipant(); participant != "" && !msg.FromMe {
+	// A group message names its author in one of two places, in the order
+	// whatsmeow's own ParseWebMessage looks: checking only the key left some
+	// backfilled group messages with no sender at all.
+	participant := web.GetParticipant()
+	if participant == "" {
+		participant = key.GetParticipant()
+	}
+	if participant != "" && !msg.FromMe {
 		if jid, err := types.ParseJID(participant); err == nil {
 			msg.SenderID = jid.String()
 			msg.SenderName = b.contactName(jid, web.GetPushName())
 		}
 	}
 
-	b.fillContent(msg, web.GetMessage())
+	// Unwrapped here, not only inside fillContent: history arrives still in
+	// its ephemeral, view-once or document-with-caption wrapper (live messages
+	// come unwrapped by whatsmeow), and remembering the wrapper replaced the
+	// unwrapped copy fillContent had just stored -- so the attachment of every
+	// such backfilled message failed to download.
+	wa := unwrapMessage(web.GetMessage())
+	b.fillContent(msg, wa)
 	if msg.Kind == "" {
 		return nil
 	}
-	b.remember(msg.ID, web.GetMessage(), msg.MediaMime)
+	b.remember(msg.ID, wa, msg.MediaMime)
 	return msg
+}
+
+// unwrapMessage takes off the containers WhatsApp puts around a message body:
+// disappearing, view-once, document-with-caption, edited and the rest. The
+// same set, in the same order, as whatsmeow's UnwrapRaw applies to live
+// messages, so a backfilled message ends up shaped like a live one.
+func unwrapMessage(wa *waE2E.Message) *waE2E.Message {
+	if inner := wa.GetDeviceSentMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetBotInvokeMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetEphemeralMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetViewOnceMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetViewOnceMessageV2().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetViewOnceMessageV2Extension().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetLottieStickerMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetDocumentWithCaptionMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	if inner := wa.GetEditedMessage().GetMessage(); inner != nil {
+		wa = inner
+	}
+	return wa
 }
 
 // fillContent maps a WhatsApp message body onto kind, text and media fields.
@@ -106,18 +154,7 @@ func (b *bridge) convertWebMessage(chat types.JID, web *waWeb.WebMessageInfo) *m
 // beyond what WhatsApp already pushed.
 func (b *bridge) fillContent(msg *messageObj, wa *waE2E.Message) {
 	// Unwrap the containers WhatsApp uses for ephemeral and view-once media.
-	if e := wa.GetEphemeralMessage(); e.GetMessage() != nil {
-		wa = e.GetMessage()
-	}
-	if v := wa.GetViewOnceMessage(); v.GetMessage() != nil {
-		wa = v.GetMessage()
-	}
-	if v := wa.GetViewOnceMessageV2(); v.GetMessage() != nil {
-		wa = v.GetMessage()
-	}
-	if d := wa.GetDocumentWithCaptionMessage(); d.GetMessage() != nil {
-		wa = d.GetMessage()
-	}
+	wa = unwrapMessage(wa)
 
 	switch {
 	case wa.GetConversation() != "":
@@ -345,16 +382,23 @@ func (b *bridge) autoDownload(msg messageObj) {
 		return
 	}
 
-	// Only the fields that changed; everything else the host already has.
-	emitEvent("message", map[string]any{"message": messageObj{
+	// Only the fields that changed, plus the caption and file name: the host
+	// redraws the conversation's preview line from whatever arrives, and
+	// without them a captioned photo's line turned into a bare "Photo".
+	//
+	// Sent as a batch of one rather than as a message event: this is the same
+	// message again, not a new one, and only a message event can notify.
+	emitEvent("messages", map[string]any{"messages": []messageObj{{
 		ID:        msg.ID,
 		ChatID:    msg.ChatID,
 		TS:        msg.TS,
 		FromMe:    msg.FromMe,
 		Kind:      msg.Kind,
+		Text:      msg.Text,
+		FileName:  msg.FileName,
 		MediaPath: path,
 		MediaMime: handle.mime,
-	}})
+	}}})
 }
 
 // writeMedia stores attachment bytes in the directory the host provided.
@@ -786,11 +830,31 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 		return
 	}
 
-	// WhatsApp wants the specific message ids, which the host does not send.
-	// Marking the conversation read at a timestamp is the closest honest
-	// equivalent, and is what the official clients do on chat open.
-	if err := client.MarkRead(ctx, nil, time.UnixMilli(params.UpTo), chat, types.EmptyJID); err != nil {
-		logf("debug", "read receipt not accepted: %v", err)
+	// WhatsApp marks messages read by id, and the host sends only how far the
+	// conversation has been read. This used to pass no ids at all, which
+	// whatsmeow refuses ("no message IDs specified") -- so no receipt ever
+	// went out: the phone kept the conversation unread and senders never saw
+	// it read. The ids are the incoming messages remembered as they arrived.
+	upTo := params.UpTo
+	if upTo <= 0 {
+		upTo = time.Now().UnixMilli()
+	}
+	refs := b.takeUnread(params.ChatID, upTo)
+
+	// One receipt per sender: in a group each one names whose messages it is
+	// about. In a direct conversation there is only the one sender.
+	bySender := map[types.JID][]types.MessageID{}
+	var order []types.JID
+	for _, ref := range refs {
+		if _, seen := bySender[ref.sender]; !seen {
+			order = append(order, ref.sender)
+		}
+		bySender[ref.sender] = append(bySender[ref.sender], ref.id)
+	}
+	for _, sender := range order {
+		if err := client.MarkRead(ctx, bySender[sender], time.Now(), chat, sender); err != nil {
+			logf("debug", "read receipt not accepted: %v", err)
+		}
 	}
 
 	ok(c.ID, nil)

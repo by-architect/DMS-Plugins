@@ -158,6 +158,11 @@ behind on disk. Turning *both* off for the same kind would mean capturing into
 the void, so the file is kept in that case; silently discarding what you just
 captured is never the helpful reading of two toggles being off.
 
+File names go down to the second (`Screenshot_20260924_133710.png`), so a
+second capture inside the same second is numbered (`…_2.png`) instead of
+silently overwriting the first, which is what a shortcut pressed twice used to
+do.
+
 **GIF is its own action** (`g` selected, `G` fullscreen), not a format chip. A
 GIF chip left selected quietly turns the next ordinary recording into a GIF,
 which is exactly the kind of surprise a mode you have to remember to switch
@@ -231,8 +236,8 @@ quickshell -p <shell-path> ipc call screenCatcher <action>
 | `videoClipboardToggle` | Recordings: toggle Save to Clipboard |
 | `videosToggle` | Recordings: toggle Save to Videos (keep the file) |
 | `notifyToggle` | Toggle desktop notifications on/off |
-| `setImageFormat <png\|jpeg>` | Set the screenshot format, e.g. `ipc call screenCatcher setImageFormat jpeg` |
-| `setRecordFormat <mp4\|mkv>` | Set the recording format (GIF is its own action, not a format) |
+| `setImageFormat <png\|jpeg>` | Set the screenshot format, e.g. `ipc call screenCatcher setImageFormat jpeg`. Anything else (`jpg` included) is refused with `INVALID`, not saved |
+| `setRecordFormat <mp4\|mkv>` | Set the recording format (GIF is its own action, not a format). Anything else is refused with `INVALID` |
 
 `stop` is the one worth binding on its own: it's a global "kill whatever's
 recording" hotkey that doesn't require the panel to be open at all.
@@ -256,6 +261,16 @@ Stopping sends `SIGTERM` to the wrapper script (not `SIGINT` — see below),
 which lets it finalize the output file properly rather than leaving a corrupt
 video.
 
+Once `wf-recorder` has finished, the script says `STOPPED` and ignores any
+further stop: what is left — the GIF palette passes, the clipboard copy — runs
+to the end. The clock freezes and the panel's `X` row reads *Converting to
+GIF…* / *Saving…* until the file is done. A second stop used to kill the script
+mid-conversion: ffmpeg carried on as an orphan, the intermediate mp4 stayed
+behind, and the toast said the recording had failed while the GIF was still
+being written. A stop that lands while the recording is still being set up
+(slurp, output detection, the audio mix) reports a cancelled recording rather
+than a failed one.
+
 ## How it works
 
 All the actual work — `grim`, `slurp`, `wf-recorder`, `ffmpeg`, `tesseract`,
@@ -263,7 +278,7 @@ PipeWire audio orchestration (`pw-dump`, `pw-loopback`), output detection
 (`hyprctl`) — lives in `bin/screen-catcher.sh`, not in QML.
 `ScreenCatcherService.qml` (a singleton) starts it as a `Quickshell.Io.Process`
 and, for recordings, keeps a handle to it so it can send `SIGTERM` to stop.
-The script reports progress back over stdout (`STARTED <path>`,
+The script reports progress back over stdout (`STARTED <path>`, `STOPPED`,
 `SAVED <path>`, `COPIED <name>`, `CANCELLED`, `TEXT <text>`, `EMPTY`), which
 the singleton parses line-by-line to drive the UI — being a singleton means
 the panel, the bar pill, and every IPC call all read and drive the exact same
@@ -323,6 +338,26 @@ when notifications are off). Both shapes are handled now, and a recording made
 with System Audio on was confirmed to come out with a real AAC audio stream in
 it.
 
+**Mic + system audio left its mix running after every recording.**
+`setup_mix_audio()` printed the mix device and was called through `$(...)`,
+which runs it in a subshell — so the pids of the three `pw-loopback`
+processes it started were collected in a copy of `$mix_pids` that died with
+the subshell, and `teardown_mix_audio` had nothing to kill. All three outlived
+every recording made with both toggles on (reproduced with stub binaries):
+the microphone stayed open, the `screen_catcher_mix` sink stayed in the device
+list, and each later recording stacked another trio on top. The function now
+assigns `$MIX_DEV` the way `set_target()` assigns `$TARGET`, and an `EXIT`
+trap tears the mix down on every way out of the script, including a stop that
+lands mid-setup. The same path also ignored the *Microphone device* and
+*System audio device* settings — it only ever looked up the defaults — and
+uses them now.
+
+**Screenshot to Text only claims the clipboard when the text got there.** It
+used to notify "Text copied to clipboard" with the clipboard toggle off, and
+with `wl-copy` missing. Now the toggle-off case says "Text recognized" (the
+toast carries the text, with DMS's own copy button), and a requested copy
+that fails is reported as a failure, the same as a clipboard-only screenshot.
+
 **`StdioCollector.text` is read-only, and assigning to it killed recording.**
 `startRecording()` used to clear the stderr collector (`recStderr.text = ""`)
 one line before `recProcess.running = true`. That assignment throws
@@ -380,10 +415,10 @@ process needs to stay alive and be signaled, so it's the one long-lived
 | Default screenshot format | PNG | Also panel chips `1`/`2` |
 | Default recording format | MP4 | Also panel chips `3`/`4` |
 | OCR language | `eng` | Tesseract language code |
-| GIF frame rate | 20 fps | Applies to *Record Selected as GIF* |
+| GIF frame rate | 20 fps | Applies to both GIF actions, selected and fullscreen |
 | GIF width | 1920 px | Max width; height scales to match, never upscaled past the source |
-| Microphone device | auto | PipeWire/Pulse source name override |
-| System audio device | auto | PipeWire/Pulse monitor source name override |
+| Microphone device | auto | PipeWire/Pulse source name override, also used when mixing with system audio |
+| System audio device | auto | PipeWire/Pulse monitor source name override (`<sink>.monitor`), also used when mixing with the mic |
 
 Mic/System Audio on-off state lives in the panel only (not the settings
 page), since it's something you're likely to flip per-recording. Everything

@@ -20,9 +20,18 @@ FocusScope {
 
     signal closeRequested
 
-    // Reached through PopoutService rather than by walking up the parent chain,
-    // which breaks whenever the modal's internal structure changes.
-    readonly property var popout: PopoutService.chatPopout
+    // Whether the popout is open, for the composer's drafts.
+    property bool onScreen: true
+
+    // The popout this is the body of, handed in by it rather than found by
+    // walking up the parent chain, which breaks whenever the modal's internal
+    // structure changes.
+    //
+    // It used to be read from PopoutService.chatPopout, which only the forked
+    // shell had. Stock DMS has no such property, so this was always undefined:
+    // a name matching two people opened neither and never asked which, a name
+    // matching nobody said nothing, and a candidate clicked did nothing.
+    property var popout: null
     readonly property var candidates: popout?.candidates ?? []
     readonly property string resolveError: popout?.resolveError ?? ""
     readonly property bool resolving: popout?.resolving ?? false
@@ -31,18 +40,15 @@ FocusScope {
 
     readonly property bool showingConversation: !resolving && candidates.length === 0 && resolveError === ""
 
-    // Holding a reference is what keeps the manager streaming state while this
-    // is on screen. The shell's Ref helper only accepts a singleton, and the
-    // chat core stopped being one when it moved into a plugin.
+    // Whether the manager streams state to this is the daemon's business: it
+    // follows the popout being open, see ChatManagerDaemon.
     Component.onCompleted: {
-        root.chatCore.refCount++;
         // Built with the conversation already open -- reopening one, or a
         // window that outlived it -- means there is no change to follow, so it
         // is asked for outright.
         if (root.conversationReady)
             Qt.callLater(root.takeFocus);
     }
-    Component.onDestruction: root.chatCore.refCount--
 
     // Whether there is a conversation here to type into.
     readonly property bool conversationReady: root.showingConversation && root.chatCore.hasActiveChat
@@ -77,6 +83,33 @@ FocusScope {
     Keys.onEscapePressed: event => {
         root.closeRequested();
         event.accepted = true;
+    }
+
+    // The candidate the keyboard is on, when a query matched several. The
+    // popout is reached from a keybind, so choosing who was meant should not
+    // need the mouse either.
+    property int candidateIndex: 0
+    onCandidatesChanged: root.candidateIndex = 0
+
+    Keys.onPressed: event => {
+        if (root.resolving || root.candidates.length === 0)
+            return;
+        switch (event.key) {
+        case Qt.Key_Down:
+        case Qt.Key_Up:
+            root.candidateIndex = Math.max(0, Math.min(root.candidates.length - 1, root.candidateIndex + (event.key === Qt.Key_Down ? 1 : -1)));
+            candidateList.positionViewAtIndex(root.candidateIndex, ListView.Contain);
+            event.accepted = true;
+            break;
+        case Qt.Key_Return:
+        case Qt.Key_Enter: {
+            const chosen = root.candidates[root.candidateIndex];
+            if (chosen)
+                root.popout?.openResolved(chosen.provider, chosen.chatId);
+            event.accepted = true;
+            break;
+        }
+        }
     }
 
     DankSpinner {
@@ -148,6 +181,7 @@ FocusScope {
         }
 
         DankListView {
+            id: candidateList
             width: parent.width
             height: parent.height - parent.spacing * 3 - matchCount.height - Theme.fontSizeLarge * 1.4
             clip: true
@@ -156,9 +190,11 @@ FocusScope {
 
             delegate: ChatCandidateRow {
                 required property var modelData
+                required property int index
 
                 width: ListView.view.width
                 candidate: modelData
+                highlighted: index === root.candidateIndex
 
                 onChosen: root.popout?.openResolved(modelData.provider, modelData.chatId)
             }
@@ -173,6 +209,7 @@ FocusScope {
         id: conversation
         anchors.fill: parent
         anchors.margins: Theme.spacingS
+        onScreen: root.onScreen
         visible: root.showingConversation && root.chatCore.hasActiveChat
     }
 

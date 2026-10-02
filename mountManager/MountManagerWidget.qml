@@ -30,7 +30,12 @@ PluginComponent {
     }
 
     onHasRemovableChanged: applyIdleVisibility()
-    Component.onCompleted: applyIdleVisibility()
+    // Counted in and out, so the service only polls while a pill exists.
+    Component.onCompleted: {
+        MountService.consumers++;
+        applyIdleVisibility();
+    }
+    Component.onDestruction: MountService.consumers = Math.max(0, MountService.consumers - 1)
 
     Connections {
         target: MountService

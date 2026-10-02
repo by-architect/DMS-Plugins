@@ -50,6 +50,35 @@ The daemon surface declares `IpcHandler { target: "chats" }`, so a keybind bound
 to `dms ipc call chats toggle` works exactly as it did when the shell provided
 that target itself.
 
+```sh
+dms ipc call chats toggle                   # the window, with the conversation list
+dms ipc call chats popout "Ada"             # one conversation, by name, number or address
+dms ipc call chats conversation whatsappChat "<id>"   # by provider and id
+dms ipc call chats unread                   # the next conversation with something waiting
+dms ipc call chats status                   # is the manager up, and what is enabled
+```
+
+`popout` asks which one you meant, in the popout itself, when a name matches
+more than one conversation -- with the arrows and Enter, like every list here.
+
+## Notifications open their conversation
+
+Clicking a chat notification opens that conversation in the popout; one that
+stands for several conversations at once opens the window. The manager raises
+every notification with a `default` action and remembers which conversation
+each one is about, then listens on the session bus for the notification server
+answering. A click is told to every connected shell as a `chat.open` event,
+since it arrives from the notification server rather than through any request.
+
+## Drafts
+
+What is typed into a conversation stays with that conversation. Switching to
+another one files it away, along with any staged attachment, and brings back
+whatever was waiting there -- so Enter never sends a message meant for one
+person to another. A message that fails to send is put back in the field, or
+into its conversation's draft if you have moved on. Drafts live in memory: they
+survive closing the window, not restarting the shell.
+
 ## Providers
 
 A chat provider — Matrix, WhatsApp, Signal — is **its own plugin**, installed
@@ -78,8 +107,9 @@ DMS as invalid, which is what the daemon surface provides.
 
 ### Invitations
 
-One addition to the contract as `docs/CHAT-PLUGINS.md` describes it, for services
-where a conversation can arrive as an invitation you have not answered.
+One addition to the contract as the fork's `docs/CHAT-PLUGINS.md` described it --
+the host's side of it is `src/internal/host/protocol.go` -- for services where a
+conversation can arrive as an invitation you have not answered.
 
 A provider declares the `invites` capability, publishes such a conversation with
 `"invite"` among its `tags`, and answers two calls:
@@ -123,6 +153,11 @@ messages themselves. It can therefore only ever settle a disagreement in the
 direction of *already seen*, which is the direction that matters: a
 conversation read on a phone this morning should not be waiting here this
 afternoon.
+
+Unread is counted from what actually arrives. A message the store has seen
+before -- bridges redeliver on reconnect, and a sync resends what came in live --
+is not counted again and does not notify again, and one older than where the
+conversation has been read is not counted at all.
 
 Opening a conversation reads that position back out of the answer that carries
 its messages -- `chat.history` replies with `readUpTo` and `unread` alongside the
@@ -221,6 +256,21 @@ back.
 
 ## Resource cost
 
-The manager only streams state while the window is open. Closing it unsubscribes,
-so a shell sitting idle all day with chats closed does no work per arriving
-message beyond what the bridge and the store already do.
+The manager only streams state while the window or the popout is open. Closing
+them unsubscribes, so a shell sitting idle all day with chats closed does no work
+per arriving message beyond what the bridge and the store already do.
+
+A conversation that is open is refreshed on every push, and the refresh is
+merged into what is on screen rather than replacing it: older pages you scrolled
+back to stay, the selection follows its message, and a push that changed nothing
+in this conversation changes nothing on screen.
+
+## Requests that wait on a provider
+
+Everything the shell asks goes down one socket, and most of it is a quick read
+of the store, answered in the order it arrived. What waits on a provider --
+sending, fetching an attachment, signing in, switching a provider on -- is
+answered on a lane of its own, so a photo being uploaded does not freeze
+switching conversation or the launcher's lookups. Requests on the same lane
+still keep their order: two messages sent into one conversation never overtake
+each other.

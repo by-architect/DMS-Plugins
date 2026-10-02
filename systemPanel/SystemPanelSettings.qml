@@ -16,7 +16,7 @@ PluginSettings {
     SliderSetting {
         settingKey: "journalDays"
         label: "Journal window"
-        description: "How far back to read the journal for failed logins and sudo activity"
+        description: "How far back to read the journal for failed logins, system errors and sudo activity"
         defaultValue: 30
         minimum: 1
         maximum: 180

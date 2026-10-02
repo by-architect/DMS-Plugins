@@ -6,16 +6,17 @@ import Quickshell
 import qs.Common
 import "links.js" as Links
 
-// Client for the chat subsystem in the DMS backend.
+// Client for the chat manager process, bin/chat-managerd.
 //
 // Everything real happens in Go: providers are external bridge processes the
-// daemon supervises, and the message store, media cache and notifications all
-// live there (see docs/CHAT-PLUGINS.md). This service is a view onto that --
-// it holds no message state of its own beyond what is currently on screen.
+// manager supervises, and the message store, media cache and notifications all
+// live there (see src/internal/host/protocol.go). This is a view onto that -- it holds
+// no message state of its own beyond what is currently on screen, and the
+// drafts nobody has sent yet.
 //
-// Refcounted rather than always-on: most users have no chat plugins installed,
-// and there is no reason to hold a subscription open for them. Attach a
-// Ref { service: ChatService } wherever chat data is being displayed.
+// Refcounted rather than always-on: state is only streamed while something is
+// on screen to show it. The daemon surface sets refCount from whether the
+// window or the popout is open.
 Item {
     id: root
 
@@ -232,6 +233,11 @@ Item {
     signal historyLoaded(string provider, string chatId)
     signal sendFailed(string reason)
 
+    // An older page arrived above what was on screen, `count` messages of it.
+    // The view uses it to stay on the message the reader was looking at,
+    // rather than jumping to the top of what just loaded.
+    signal olderLoaded(int count)
+
     // Opening a conversation, including the one already open. The view places
     // itself on this rather than on activeChatId changing, which says nothing
     // when the same conversation is opened a second time from the launcher.
@@ -373,23 +379,54 @@ Item {
         }, null);
     }
 
+    // A refresh of the open conversation was asked for while a load was already
+    // in flight. It runs as soon as that load is back rather than being
+    // dropped: the load in flight may have been asked before the message that
+    // prompted the refresh was stored, and nothing else would ever fetch it.
+    property bool _refreshQueued: false
+
+    // The most a refresh asks for at once. Everything on screen is refreshed
+    // up to this; past it, what is older than the refresh is kept as it was.
+    readonly property int maxRefreshPage: 500
+
     // loadHistory fetches a page ending before the given timestamp. Pass 0 for
     // the newest page.
+    //
+    // The newest page means one of two things. Opening a conversation, when
+    // nothing of it is on screen yet, it is simply the page. Otherwise it is a
+    // refresh -- a push said the store changed -- and it is merged into what is
+    // on screen rather than replacing it: replacing it with the newest fifty
+    // dropped every older page the reader had scrolled back through, cut a long
+    // unread run off at its top, and moved the selection onto a different
+    // message, all because a message had arrived somewhere.
     function loadHistory(before) {
         if (!available || !hasActiveChat)
             return;
-        if (root.loadingHistory)
+        if (root.loadingHistory) {
+            // An older page is the reader's to ask for again by scrolling. A
+            // refresh is not, so it waits for the load in flight.
+            if (!before)
+                root._refreshQueued = true;
             return;
+        }
 
         const provider = root.activeProvider;
         const chatId = root.activeChatId;
+        const refreshing = !before && root.messages.length > 0;
         root.loadingHistory = true;
+        root._refreshQueued = false;
 
-        // A page big enough to reach the unread mark, with room above it for
-        // the conversation it is part of. Only ever for the newest page: paging
-        // backwards is the user asking for fifty more.
         let limit = 50;
-        if (!before) {
+        if (refreshing) {
+            // Everything already on screen, and room for what has arrived
+            // since, so the answer speaks for all of it -- delivery ticks,
+            // deletions, a fetched attachment -- and not only for the newest
+            // fifty.
+            limit = Math.min(root.maxRefreshPage, root.messages.length + 50);
+        } else if (!before) {
+            // A page big enough to reach the unread mark, with room above it
+            // for the conversation it is part of. Paging backwards is the user
+            // asking for fifty more.
             const entry = root.chatByKey(provider, chatId);
             const unread = entry ? (entry.unread || 0) : 0;
             if (unread > 0)
@@ -409,6 +446,7 @@ Item {
             // because this one was still running -- so ask again on its behalf,
             // rather than leaving it empty until some state push comes along.
             if (provider !== root.activeProvider || chatId !== root.activeChatId) {
+                root._refreshQueued = false;
                 if (root.hasActiveChat && root.messages.length === 0)
                     root.loadHistory(0);
                 return;
@@ -420,6 +458,7 @@ Item {
                 // on screen, so it should not stay unread because its messages
                 // could not be fetched.
                 root._settleOpen(provider, chatId, before, null);
+                root._runQueuedRefresh();
                 return;
             }
 
@@ -428,17 +467,120 @@ Item {
             root._settleOpen(provider, chatId, before, response.result);
 
             const page = response.result?.messages || [];
-            root.hasMoreHistory = response.result?.hasMore === true;
+            const pageHasMore = response.result?.hasMore === true;
 
             if (before) {
-                root.messages = page.concat(root.messages);
+                root.hasMoreHistory = pageHasMore;
+                if (page.length > 0) {
+                    root.messages = page.concat(root.messages);
+                    root.olderLoaded(page.length);
+                }
+            } else if (refreshing) {
+                const merged = root._mergeRefresh(page, pageHasMore);
+                root.hasMoreHistory = merged.hasMore;
+                // Left alone when nothing changed. Most pushes are about some
+                // other conversation, and replacing the list with an identical
+                // one still rebuilds every row and puts the view back where it
+                // thinks it was.
+                if (!root._sameMessages(merged.messages, root.messages))
+                    root.messages = merged.messages;
             } else {
+                root.hasMoreHistory = pageHasMore;
                 root.messages = page;
             }
 
-            root.messagesChanged();
             root.historyLoaded(provider, chatId);
+            root._runQueuedRefresh();
         });
+    }
+
+    function _runQueuedRefresh() {
+        if (!root._refreshQueued)
+            return;
+        root._refreshQueued = false;
+        root.loadHistory(0);
+    }
+
+    // _mergeRefresh is what the open conversation holds once a refresh brought
+    // `page`, the newest messages, with `messages` what is on screen now.
+    //
+    // A refresh never adds anything above the oldest message on screen: that
+    // is the reader's position, and growing the list over their head would
+    // move what they are reading.
+    function _mergeRefresh(page, pageHasMore) {
+        const current = root.messages;
+        if (current.length === 0 || page.length === 0)
+            return {
+                "messages": page,
+                "hasMore": pageHasMore
+            };
+
+        const floor = current[0].ts || 0;
+        const pageStart = page[0].ts || 0;
+
+        // The page reaches back past everything on screen, so it speaks for
+        // all of it: whatever it lacks there has been deleted.
+        if (!pageHasMore || pageStart <= floor) {
+            const kept = [];
+            for (let i = 0; i < page.length; i++) {
+                if ((page[i].ts || 0) >= floor)
+                    kept.push(page[i]);
+            }
+            return {
+                "messages": kept,
+                "hasMore": pageHasMore || pageStart < floor
+            };
+        }
+
+        // More is on screen than one refresh fetches. What is older than the
+        // page stays as it was, and the page answers for the rest.
+        const inPage = {};
+        for (let i = 0; i < page.length; i++)
+            inPage[page[i].id] = true;
+        const older = [];
+        for (let i = 0; i < current.length; i++) {
+            const msg = current[i];
+            if ((msg.ts || 0) < pageStart && !inPage[msg.id])
+                older.push(msg);
+        }
+        return {
+            "messages": older.concat(page),
+            "hasMore": root.hasMoreHistory
+        };
+    }
+
+    function _sameMessages(a, b) {
+        if (a.length !== b.length)
+            return false;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i].id !== b[i].id)
+                return false;
+        }
+        return JSON.stringify(a) === JSON.stringify(b);
+    }
+
+    // Where each message on screen is, by id.
+    //
+    // The selection, the place the view is pinned to and a reply's quote all
+    // refer to messages by id, because positions move: older pages arrive
+    // above, and a refresh can remove a message from the middle.
+    readonly property var messageIndex: {
+        const out = {};
+        for (let i = 0; i < messages.length; i++)
+            out[messages[i].id] = i;
+        return out;
+    }
+
+    function indexOfMessage(id) {
+        if (!id)
+            return -1;
+        const at = root.messageIndex[id];
+        return at === undefined ? -1 : at;
+    }
+
+    function messageById(id) {
+        const at = root.indexOfMessage(id);
+        return at < 0 ? null : root.messages[at];
     }
 
     // _settleOpen finishes opening a conversation once its first page is here.
@@ -470,7 +612,10 @@ Item {
         loadHistory(root.messages[0].ts);
     }
 
-    function sendText(text, replyTo) {
+    // sendText sends into the open conversation. onDone, if given, hears
+    // whether it went: the composer has already cleared what was typed by then,
+    // and puts it back when it did not.
+    function sendText(text, replyTo, onDone) {
         if (!available || !hasActiveChat)
             return;
         if (!text || text.length === 0)
@@ -489,14 +634,17 @@ Item {
                 root.log.warn("send failed:", response.error);
                 root.sendFailed(response.error);
                 ToastService.showError(I18n.tr("Message not sent"), response.error);
-                return;
             }
-            // The backend has already stored the message and will push new
-            // state; refreshing here would race that.
+            // On success the backend has already stored the message and will
+            // push new state; refreshing here would race that.
+            if (onDone)
+                onDone(!response.error);
         });
     }
 
-    function sendFiles(paths, caption) {
+    // sendFiles sends attachments into the open conversation, the caption and
+    // the reply riding on the first of them.
+    function sendFiles(paths, caption, replyTo, onDone) {
         if (!available || !hasActiveChat || !paths || paths.length === 0)
             return;
 
@@ -507,6 +655,8 @@ Item {
         };
         if (caption)
             params.text = caption;
+        if (replyTo)
+            params.replyTo = replyTo;
 
         root.link.sendRequest("chat.send", params, response => {
             if (response.error) {
@@ -514,6 +664,8 @@ Item {
                 root.sendFailed(response.error);
                 ToastService.showError(I18n.tr("Attachment not sent"), response.error);
             }
+            if (onDone)
+                onDone(!response.error);
         });
     }
 
@@ -530,7 +682,16 @@ Item {
             if (response.error) {
                 root.log.warn("delete failed:", response.error);
                 ToastService.showError(I18n.tr("Message not deleted"), response.error);
+                return;
             }
+            root._updateOpenMessage(provider, chatId, messageId, msg => {
+                const tombstone = Object.assign({}, msg);
+                tombstone.kind = "deleted";
+                tombstone.text = "";
+                tombstone.mediaPath = "";
+                tombstone.mediaRef = "";
+                return tombstone;
+            });
         });
     }
 
@@ -549,8 +710,65 @@ Item {
             if (response.error) {
                 root.log.warn("local delete failed:", response.error);
                 ToastService.showError(I18n.tr("Message not deleted"), response.error);
+                return;
             }
+            root._updateOpenMessage(provider, chatId, messageId, () => null);
         });
+    }
+
+    // _updateOpenMessage changes one message of the open conversation in place,
+    // or drops it when change returns null.
+    //
+    // What was deleted goes from the screen at once rather than at the next
+    // push, which is only streamed while a window is subscribed -- and which
+    // never covered a message paged in from further back than a refresh reaches.
+    function _updateOpenMessage(provider, chatId, messageId, change) {
+        if (provider !== root.activeProvider || chatId !== root.activeChatId)
+            return;
+        const at = root.indexOfMessage(messageId);
+        if (at < 0)
+            return;
+
+        const next = root.messages.slice();
+        const updated = change(next[at]);
+        if (updated)
+            next[at] = updated;
+        else
+            next.splice(at, 1);
+        root.messages = next;
+    }
+
+    // ------------------------------------------------------------ drafts
+
+    // What was being written in each conversation and not sent, as
+    // "<provider> <chatId>" -> { text, staged }.
+    //
+    // Kept here rather than in the composer because the window and the popout
+    // each have one, and a draft belongs to the conversation, not to whichever
+    // of them it was typed in. Memory only: a draft is a moment's work.
+    property var _drafts: ({})
+
+    function draftFor(provider, chatId) {
+        return root._drafts[provider + " " + chatId] || null;
+    }
+
+    function saveDraft(provider, chatId, text, staged) {
+        if (!provider || !chatId)
+            return;
+        const key = provider + " " + chatId;
+        const empty = (text || "") === "" && (!staged || staged.length === 0);
+        if (empty && !(key in root._drafts))
+            return;
+
+        const next = Object.assign({}, root._drafts);
+        if (empty)
+            delete next[key];
+        else
+            next[key] = {
+                "text": text || "",
+                "staged": staged ? staged.slice() : []
+            };
+        root._drafts = next;
     }
 
     // openLink opens a link out of a message, if it is one worth opening.
@@ -1004,12 +1222,6 @@ Item {
 
     // ------------------------------------------------------------ wiring
 
-    // The backend owns the notification policy, so a preference change has to
-    // be pushed to it. Watched here rather than hooked in SettingsData, which
-    // lives in qs.Common and must not reach into qs.Services.
-    //
-    // Debounced because dragging a slider would otherwise send a request per
-    // pixel.
     // The manager owns the notification policy, so a preference change has to
     // be pushed to it. Settings live in this plugin now, so the whole object is
     // replaced on any change rather than arriving as one signal per field.
@@ -1036,8 +1248,9 @@ Item {
             root.syncProgress = data.sync || ({});
 
             // A push means the store changed. Refresh the open conversation so
-            // a new message appears without the UI polling for it.
-            if (root.hasActiveChat && !root.loadingHistory)
+            // a new message appears without the UI polling for it -- queued
+            // behind a load already in flight rather than dropped.
+            if (root.hasActiveChat)
                 root.loadHistory(0);
         }
 
@@ -1046,6 +1259,12 @@ Item {
                 root.providers = [];
                 root.chats = [];
                 root.syncProgress = ({});
+                // A manager that comes back is a new one, with every provider
+                // stopped again. Without this the next connection skipped
+                // restoring them -- it had been done once already -- and chat
+                // stayed dead after any manager restart until the shell itself
+                // was restarted.
+                root._restoredEnabled = false;
                 return;
             }
 

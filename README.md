@@ -2,11 +2,12 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Sixteen plugins in five shapes: **launcher** plugins that answer a trigger word
+Twenty plugins in six shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, a **bar widget** that lives in the bar and opens a popout under itself,
-a **chat provider** that connects an outside messaging service to the DMS chat
-system, and an **overlay** that replaces a piece of shell chrome.
+the **chat manager** that is the chat system itself, **chat providers** that
+connect an outside messaging service to it, and an **overlay** that replaces a
+piece of shell chrome.
 
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
@@ -16,16 +17,20 @@ system, and an **overlay** that replaces a piece of shell chrome.
 | [sshManager](sshManager/) | launcher + daemon | `ssh <name>` | an ssh client, a terminal |
 | [musicRunner](musicRunner/) | launcher | `mpd <query>` | `mpc` |
 | [nixSearch](nixSearch/) | launcher | `nix <query>` | `nix` (flakes) |
-| [chatRunner](chatRunner/) | launcher | `c <name/number>` | a chat provider |
+| [processRunner](processRunner/) | launcher | `kill <name>` | `ps`, a standalone `kill` |
+| [chatRunner](chatRunner/) | launcher | `c <name/number>` | chatManager and a chat provider |
 | [screenCatcher](screenCatcher/) | panel + bar widget | keybind / IPC | `grim`, `slurp`, `wf-recorder` |
 | [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | — |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
+| [controlPanel](controlPanel/) | panel + bar widget | keybind / IPC | — |
+| [wallpaperSearch](wallpaperSearch/) | panel + bar widget | keybind / IPC | `curl` |
 | [notificationLine](notificationLine/) | overlay | every notification | — |
 | [fileActions](fileActions/) | bar widget | the pill, and its popout | `fct`, or any writer of per-action status files |
 | [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
-| [whatsappChat](whatsappChat/) | chat provider | the DMS chat window | Go, to build |
-| [signalChat](signalChat/) | chat provider | the DMS chat window | Go, to build; `signal-cli` |
-| [matrixChat](matrixChat/) | chat provider | the DMS chat window | Go, to build |
+| [chatManager](chatManager/) | chat window + daemon | keybind / IPC, notifications, chatRunner | Go, to build |
+| [whatsappChat](whatsappChat/) | chat provider | the chat window | chatManager; Go, to build |
+| [signalChat](signalChat/) | chat provider | the chat window | chatManager; Go, to build; `signal-cli` |
+| [matrixChat](matrixChat/) | chat provider | the chat window | chatManager; Go, to build |
 
 Every plugin has its own README with the full detail — the sections below are
 summaries of what each one is for and what it needs.
@@ -65,8 +70,8 @@ ln -sfn "$PWD/nixSearch"     ~/.config/DankMaterialShell/plugins/nixSearch
 # …one line per plugin you want
 ```
 
-Then enable each under **Settings → Plugins** (or **Settings → Chats**, for
-chat providers). Removing a symlink uninstalls the plugin.
+Then enable each under **Settings → Plugins** — chat providers too; each one has
+its own settings page there. Removing a symlink uninstalls the plugin.
 
 If a new plugin does not show up on its own, trigger a rescan:
 
@@ -82,9 +87,12 @@ SHELL_PATH=$(quickshell list --all | grep -oE '/[^ ]*/shell\.qml' | head -1)
 quickshell -p "$SHELL_PATH" ipc call plugin-scan scan
 ```
 
-**whatsappChat, signalChat and matrixChat need one extra step** — their
-bridges are compiled, see their sections below. matrixChat needs a second:
-`./login.sh`, because Matrix has no QR code to scan.
+**chatManager, whatsappChat, signalChat and matrixChat need one extra step** —
+each ships a compiled Go program, so run its `./build.sh` once after installing
+and again after every update; see the chat section below. Signing in happens in
+the chat window: WhatsApp and Signal show a code to scan, and Matrix asks for
+your homeserver, user id and password there (or run its `./login.sh`), since it
+has no QR code.
 
 A plugin with unmet dependencies refuses to activate and says which binary is
 missing, rather than enabling and failing quietly later.
@@ -97,6 +105,11 @@ Each one owns a trigger word. Type it in the launcher, followed by a space,
 then your query. The trailing space is deliberate everywhere: it stops `nix `
 from firing on `nixos-rebuild` and `run ` on ordinary words. Every trigger is
 configurable in that plugin's settings.
+
+DMS also asks launcher plugins for results on plain searches typed without a
+trigger, unless a plugin is switched off under **Settings → Launcher → Plugin
+visibility**. Switch off the ones that do real work per query — nixSearch,
+tmuxRunner's SSH probes, processRunner — to keep them behind their trigger.
 
 Right-click (or the action panel) on any result shows its full action list;
 `Enter` runs the first one.
@@ -212,11 +225,27 @@ ranked locally so that top-level attributes beat `haskellPackages.*` and
 instant.
 
 `Enter` copies the attribute by default; the setting also offers copying
-`nixpkgs#attr`, a `nix run` line, or opening search.nixos.org. Needs `nix` with
+`nixpkgs#attr`, running it with `nix run`, or opening search.nixos.org. Needs `nix` with
 `nix-command` and `flakes` — the plugin passes those features itself, so it
 works where they aren't enabled globally.
 
 → [nixSearch/README.md](nixSearch/README.md)
+
+## processRunner — `kill <name>`
+
+Running processes, heaviest CPU first, filtered by name or command line.
+
+```
+kill            →  the top processes by CPU usage
+kill chrome     →  processes matching "chrome", anywhere in the command line
+```
+
+`Enter` sends SIGTERM; right-click offers SIGKILL, Copy PID and Copy command
+line. Every kill re-checks the PID first and refuses if it now belongs to a
+different command line — the process listed has gone and its PID was handed
+on — and killing the quickshell running the launcher is always refused.
+
+→ [processRunner/README.md](processRunner/README.md)
 
 ## chatRunner — `c <name, number or address>`
 
@@ -246,9 +275,9 @@ the text of the waiting messages themselves. Type `c share` and the same
 conversations are listed to **send** the clipboard into rather than to open —
 which is also where the clipboard runner's *Share to a chat…* lands you.
 
-Needs at least one chat provider enabled under **Settings → Chats** — see the
-chat section below. With none, the runner says so rather than showing an empty
-list.
+Needs the chat manager and at least one chat provider enabled under
+**Settings → Plugins** — see the chat section below. With none, the runner says
+so rather than showing an empty list.
 
 → [chatRunner/README.md](chatRunner/README.md)
 
@@ -317,8 +346,10 @@ with a shortcut, press a letter, done.
 
 | | |
 |---|---|
-| `S` / `F` / `T` | Screenshot selected / fullscreen / to text (OCR) |
-| `R` / `D` / `G` | Record fullscreen / selected / selected as GIF |
+| `S` / `⇧S` | Screenshot selected / fullscreen |
+| `T` / `⇧T` | Selection / fullscreen to text (OCR) |
+| `R` / `⇧R` | Record selected / fullscreen |
+| `G` / `⇧G` | Record selected / fullscreen as GIF |
 | `X` | Stop recording — also cancels one still waiting on a selection |
 | `M` / `Y` | Toggle microphone / system audio |
 | `1` `2` / `3` `4` | Image format PNG/JPEG · recording format MP4/MKV |
@@ -353,8 +384,8 @@ A 3×3 panel answering "who has touched this machine, and is it healthy?"
 
 | | | |
 |---|---|---|
-| Login history | Inbound SSH | Tailscale devices |
-| Boot health | Local sessions | Privilege escalation (sudo) |
+| Login history | System errors | Tailscale devices |
+| Boot health | File actions | Privilege escalation (sudo) |
 | System overview | Failed units | Listening ports |
 
 Everything runs as the logged-in user — no root, no helper daemon. Failed
@@ -399,6 +430,24 @@ closes from anywhere; **q** closes too, but only when the search field isn't
 focused.
 
 → [notificationPanel/README.md](notificationPanel/README.md)
+
+## controlPanel
+
+Quick settings, fullscreen and keyboard-first: WiFi, Bluetooth and speaker
+device lists, each with its on/off toggle on the container, and a fourth of
+plain toggles — microphone, Tailscale, keep awake and any VPN profiles. Every
+toggle wears a letter, and pressing it flips that toggle from anywhere in the
+panel; `/` searches across every list at once.
+
+→ [controlPanel/README.md](controlPanel/README.md)
+
+## wallpaperSearch
+
+Wallhaven search and a local wallpaper folder, in two tabs, browsed and applied
+from the keyboard. A download lands complete or not at all, and the local tab
+rescans each time the panel opens.
+
+→ [wallpaperSearch/README.md](wallpaperSearch/README.md)
 
 ## notificationLine
 
@@ -509,22 +558,23 @@ rather than an exit code, which is the difference between "it did not work" and
 
 # Chat
 
-DMS has a chat system that knows nothing about any particular messaging
-service. Providers arrive as plugins, and each ships a **bridge**: a small
-program that translates its service into newline-delimited JSON. The DMS
-backend owns the message store, unread counts, the attachment cache,
-notifications and search, so a bridge only has to speak its protocol.
+A chat system that knows nothing about any particular messaging service.
+**chatManager** is the system itself: the chat window, and a small daemon
+(`chat-managerd`) that owns the message store, unread counts, the attachment
+cache, notifications and search. Providers arrive as plugins of their own, and
+each ships a **bridge**: a small program that translates its service into
+newline-delimited JSON, so a bridge only has to speak its protocol.
 
 **whatsappChat**, **signalChat** and **matrixChat** are three such providers.
 **chatRunner** is not a provider at all — it's the launcher that lists whatever
 providers you have installed.
 
 ```
-                                          ┌── whatsappChat bridge ──▶ WhatsApp
-    chatRunner ──┐                        │
-                 ├──▶  DMS chat backend ◀─┼── signalChat bridge ────▶ Signal
-    chat window ─┘   (store, notifications,│
-                      search)              └── matrixChat bridge ────▶ Matrix
+                                            ┌── whatsappChat bridge ──▶ WhatsApp
+    chatRunner ──┐                          │
+                 ├──▶  chatManager daemon ◀─┼── signalChat bridge ────▶ Signal
+    chat window ─┘   (store, notifications, │
+                      search)               └── matrixChat bridge ────▶ Matrix
 ```
 
 No bridge knows the others exist, and the shell knows none of the three
@@ -536,11 +586,18 @@ speaks its own protocol through a library, Signal is reached by driving
 `signal-cli` as a child process, and Matrix is a plain HTTP API the bridge calls
 directly. All three arrive at the same contract.
 
-So chatRunner on its own shows an empty list. Install a provider first.
+It runs on stock DMS — nothing in the shell needs changing. Build the chat
+manager once, then enable it and at least one provider:
 
-This needs a DMS build with chat support. Check with `dms chat providers` — if
-that reports an unknown command, your DMS predates the chat system. You also
-want **wl-clipboard** (`wl-copy`, `wl-paste`) for pasting attachments into the
+```sh
+cd ~/src/dms-plugins/chatManager && ./build.sh
+cd ~/src/dms-plugins/whatsappChat && ./build.sh   # and the same for each provider
+```
+
+Then **Chat Manager** and the provider under **Settings → Plugins**. Each is
+built for the machine it runs on, so build again after every update; a plugin
+whose program is not built refuses to enable and says so. You also want
+**wl-clipboard** (`wl-copy`, `wl-paste`) for pasting attachments into the
 composer and copying them out.
 
 ## whatsappChat
@@ -548,29 +605,18 @@ composer and copying them out.
 Links WhatsApp as a device, the same way WhatsApp Web does, using
 [whatsmeow](https://github.com/tulir/whatsmeow).
 
-Its bridge is Go and must be compiled for the machine it runs on, so it isn't
-shipped prebuilt:
-
-```sh
-cd ~/src/dms-plugins/whatsappChat
-./build.sh
-```
-
-Once after installing, and again after every update. The plugin refuses to
-enable until the binary exists and says so, rather than sitting silently at
-"disconnected".
-
-Then **Settings → Chats → WhatsApp** to enable it, and scan the QR code that
-appears with your phone under *Settings → Linked devices → Link a device*.
-First sync pulls your history and may take a few minutes.
+Enable **WhatsApp Chat** under Settings → Plugins, open the chat window, and
+scan the QR code it shows with your phone under *Settings → Linked devices →
+Link a device*. First sync pulls your history and may take a few minutes.
 
 Text, replies, photos, video, voice notes, documents, stickers, location and
 contact cards all work, in direct and group conversations, along with read
-receipts and delete-for-everyone in both directions. Search is local — the DMS
-store indexes messages; WhatsApp has no server-side search. Reactions, polls,
-calls and status updates aren't modelled by the contract yet. Newsletters and
-broadcast lists are filtered out: they're feeds, and in a busy account they
-bury real conversations.
+receipts and delete-for-everyone in both directions. A conversation read on
+your phone is read here too. Search is local — the store indexes messages;
+WhatsApp has no server-side search. Reactions, polls, calls and status updates
+aren't modelled by the contract yet. Newsletters, statuses and broadcast lists
+are tagged rather than dropped, so each can be hidden with the plugin's chat
+filters.
 
 **Media is not downloaded during history sync.** A year of photos is gigabytes
 nobody asked for, so WhatsApp's own embedded thumbnail shows immediately and
@@ -580,16 +626,36 @@ conversation.
 
 → [whatsappChat/README.md](whatsappChat/README.md)
 
+## signalChat
+
+Links Signal as a secondary device by driving
+[signal-cli](https://github.com/AsamK/signal-cli), which has to be installed
+(or named with `SIGNAL_CLI`). Enable **Signal Chat** under Settings → Plugins
+and scan the code the chat window shows from the Signal app on your phone.
+
+→ [signalChat/README.md](signalChat/README.md)
+
+## matrixChat
+
+Talks to your homeserver's HTTP API directly. Enable **Matrix Chat** under
+Settings → Plugins and the chat window asks for your homeserver, user id and
+password — or run `./login.sh` in a terminal instead. Only the access token is
+kept, never the password. Encrypted rooms work once the device is verified with
+your recovery key, from the plugin's own settings page.
+
+→ [matrixChat/README.md](matrixChat/README.md)
+
 ## Using the chat window
 
 ```sh
 dms ipc call chats toggle                  # the full window, with the chat list
 dms ipc call chats popout "Ada"            # one conversation, by name
 dms ipc call chats popout "+905551234567"  # or by number
-dms ipc call chats cycle                   # walk unread conversations
+dms ipc call chats unread                  # the next conversation with something waiting
 ```
 
-Worth binding under Settings → Keyboard Shortcuts.
+Worth binding under Settings → Keyboard Shortcuts. Clicking a chat
+notification opens its conversation the same way.
 
 In a conversation the text field always holds focus, so typing always goes
 there — which is also why everything else is Ctrl and one key: those are the
@@ -608,57 +674,64 @@ remember.
 | `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
 | `Esc` | Clear the selection, then close |
 
+In the search box, the arrows move through the conversations listed and `Enter`
+opens the one they are on — the best match, as you type. The forward picker and
+the popout's "which conversation?" list work the same way.
+
 Attachments are pasted rather than browsed for: copy a file in a file manager,
 or an image from a screenshot tool, and paste. A pasted or typed path followed
 by a space is attached too. Everything staged shows as a thumbnail above the
 text field, so you can drop one before sending.
 
+What you type stays with its conversation: switching to another one keeps the
+draft, attachments included, for when you come back — so a half-written message
+is never sent to the wrong person — and a message that fails to send is put
+back rather than lost.
+
 ## Keeping the conversation list manageable
 
 A WhatsApp account is mostly not conversations — statuses, channels, broadcast
 lists and archived chats crowd out the rest. Each provider declares what its
-conversations are, and **Settings → Chats → WhatsApp → Chat filters** turns each
-category on or off for the conversation list and the runner. Hiding is only
-hiding: searching still finds them, and nothing is deleted.
+conversations are, and **Settings → Plugins → WhatsApp Chat → Chat filters**
+turns each category on or off for the conversation list and the runner. Hiding
+is only hiding: searching still finds them, and nothing is deleted.
 
-Notifications are separate, and per provider: on or off, previews, groups,
-archived, do not disturb, and one toggle per category — so a service's statuses
-can be silent without silencing the service.
+Notifications are set in the Chat Manager's settings: on or off, previews,
+groups and archived conversations.
 
 ## Where your data lives
 
 | What | Where | Owner |
 |---|---|---|
 | WhatsApp session — the linked device itself | `~/.local/share/dms-whatsapp/session.db`, mode 0600 | whatsappChat |
-| Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
-| Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |
+| Messages and conversations, one database per provider | `~/.local/share/DankMaterialShell/chat/stores/<provider>/history.db` | chatManager |
+| Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | chatManager |
 | Plugin settings | `~/.config/DankMaterialShell/plugin_settings.json` | DMS |
 
 **The session database is your WhatsApp account.** Anyone who can read it can
 read your messages. Keep it out of dotfile repos and shared backups.
 
-To unlink, use *Sign out* in Settings → Chats, or remove the device from your
-phone. Deleting the file locally leaves the device still linked on WhatsApp's
-side.
+To unlink, remove the device under *Linked devices* on your phone. Deleting the
+file locally leaves the device still linked on WhatsApp's side.
 
 ## When something is wrong
 
 ```sh
-dms chat providers              # what DMS found, and each one's state
-dms chat status whatsappChat    # connection state, capabilities, restarts, stderr
-dms chat tail whatsappChat      # live protocol traffic in both directions
+dms ipc call chats status    # is the manager up, how many providers are enabled
+quickshell log -f            # the manager's own log, lines starting chat-managerd
 ```
 
-`tail` is the useful one: a bridge runs as a child of the daemon, so without it
-its output is invisible.
+The manager writes why a bridge would not start, or keeps restarting, into the
+shell's log; set `DMS_CHAT_LOG_LEVEL=debug` in the shell's environment to see
+every bridge's own output there as well.
 
 | Symptom | Usually |
 |---|---|
-| Plugin will not enable | The bridge is not built — run `./build.sh` |
-| Stuck at "disconnected" | Check `dms chat status` for the error |
+| Plugin will not enable | Its program is not built — run its `./build.sh` |
+| Chat window never opens | Chat Manager is not enabled under Settings → Plugins |
+| Stuck at "disconnected" | The provider's error is in the shell's log |
 | Runner lists nothing | No provider is enabled, or everything is filtered out |
 | Searching a number finds nothing | Handles arrive when the bridge connects; reconnect once |
-| No Chats section in Settings | DMS was built without chat support |
 
 ---
 
@@ -692,7 +765,10 @@ layer surface; Hyprland ignores layer-shell exclusive keyboard focus; the
 launcher's `getItems()` is synchronous, so slow sources must cache and
 re-request).
 
-For a chat provider, the contract is `docs/CHAT-PLUGINS.md` in the
-DankMaterialShell repository, and `quickshell/PLUGINS/EchoChatExample/` there is
-a complete working bridge in about 300 lines. A bridge can be written in any
-language — it reads JSON lines on stdin and writes them on stdout.
+For a chat provider, the contract is the host's side of it:
+`chatManager/src/internal/host/protocol.go` for the frames, methods, events and
+capabilities, and [chatManager/README.md](chatManager/README.md) for what came
+after — invitations, read positions, holding notifications until a sync has
+settled. The tests in `chatManager/src/internal/host/` drive complete bridges
+written as a few lines of shell. A bridge can be written in any language — it
+reads JSON lines on stdin and writes them on stdout.

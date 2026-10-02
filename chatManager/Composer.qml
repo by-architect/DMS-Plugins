@@ -30,8 +30,101 @@ Item {
 
     property var replyTarget: null
 
+    // Whether the window or popout this composer is in is the one on screen.
+    //
+    // There are two composers -- the window keeps one loaded for good, and the
+    // popout makes one each time it opens -- and both follow the one open
+    // conversation. Only the one on screen is being typed into, so only it
+    // saves and restores drafts; the other would otherwise write back whatever
+    // stale text it was left holding.
+    property bool onScreen: true
+
     signal sent
     signal replyCleared
+
+    // The conversation this composer's text belongs to, and so the one its
+    // draft is filed under. Followed with a delay of one turn, because opening
+    // a conversation sets the provider and the chat id one after the other,
+    // and the moment in between names a conversation that does not exist.
+    readonly property string _conversationKey: root.chatCore.activeProvider + " " + root.chatCore.activeChatId
+    property string _draftProvider: ""
+    property string _draftChatId: ""
+    property bool _restoringDraft: false
+
+    on_ConversationKeyChanged: Qt.callLater(root._followConversation)
+
+    onOnScreenChanged: {
+        if (root.onScreen)
+            root._loadDraft();
+        else
+            root._saveDraft();
+    }
+
+    Component.onCompleted: {
+        if (root.onScreen)
+            root._loadDraft();
+    }
+
+    // Anything half-written goes with a popout that closes, into its
+    // conversation's draft.
+    Component.onDestruction: {
+        if (root.onScreen)
+            root._saveDraft();
+    }
+
+    // _followConversation files what was typed under the conversation it was
+    // typed in, and brings back what was left in the one now open.
+    //
+    // Without it the text stayed in the field when the conversation changed,
+    // and Enter sent a message meant for one person to another -- along with
+    // any attachment staged for the first.
+    function _followConversation() {
+        if (!root.onScreen)
+            return;
+        if (root.chatCore.activeProvider === root._draftProvider && root.chatCore.activeChatId === root._draftChatId)
+            return;
+        root._saveDraft();
+        root._loadDraft();
+    }
+
+    function _saveDraft() {
+        if (root._draftChatId === "")
+            return;
+        root.chatCore.saveDraft(root._draftProvider, root._draftChatId, input.text, root.staged);
+    }
+
+    function _loadDraft() {
+        root._draftProvider = root.chatCore.activeProvider;
+        root._draftChatId = root.chatCore.activeChatId;
+
+        const draft = root.chatCore.draftFor(root._draftProvider, root._draftChatId);
+        // Put back as it was, not read again as typing: a draft ending in a
+        // path and a space would otherwise be attached all over again.
+        root._restoringDraft = true;
+        input.text = draft ? draft.text : "";
+        input.cursorPosition = input.text.length;
+        root._restoringDraft = false;
+        root.staged = draft ? draft.staged.slice() : [];
+    }
+
+    // _restoreUnsent puts back what did not go.
+    //
+    // Into the field, when this is still the conversation on screen and
+    // nothing has been typed since; otherwise into that conversation's draft,
+    // so a message is never simply lost because the network was.
+    function _restoreUnsent(provider, chatId, text, files) {
+        const here = root.onScreen && provider === root._draftProvider && chatId === root._draftChatId;
+        if (here && input.text === "" && !root.hasStaged) {
+            root._restoringDraft = true;
+            input.text = text;
+            input.cursorPosition = text.length;
+            root._restoringDraft = false;
+            root.staged = files;
+            return;
+        }
+        if (!root.chatCore.draftFor(provider, chatId))
+            root.chatCore.saveDraft(provider, chatId, text, files);
+    }
 
     readonly property bool canSend: root.chatCore.activeSupports("send")
     readonly property bool canAttach: root.chatCore.activeSupports("media")
@@ -82,13 +175,26 @@ Item {
         if (text === "" && !root.hasStaged)
             return;
 
-        if (root.hasStaged) {
+        // Remembered as they are now, so a send that fails can be put back
+        // where it came from even if the conversation has changed since.
+        const provider = root.chatCore.activeProvider;
+        const chatId = root.chatCore.activeChatId;
+        const typed = input.text;
+        const files = root.staged.slice();
+        const replyTo = root.replyTarget ? root.replyTarget.id : "";
+        const putBack = ok => {
+            if (!ok)
+                root._restoreUnsent(provider, chatId, typed, files);
+        };
+
+        if (files.length > 0) {
             // One send carrying every attachment plus the caption, so they
-            // arrive as one message rather than a burst.
-            root.chatCore.sendFiles(root.staged, text);
+            // arrive as one message rather than a burst -- and the reply with
+            // them, which used to be dropped whenever something was attached.
+            root.chatCore.sendFiles(files, text, replyTo, putBack);
             root.clearStaged();
         } else {
-            root.chatCore.sendText(text, root.replyTarget ? root.replyTarget.id : "");
+            root.chatCore.sendText(text, replyTo, putBack);
         }
 
         input.text = "";
@@ -441,7 +547,7 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 // Typing or pasting a path and pressing space attaches it,
                 // which is how a file manager's "copy path" ends up here.
                 onTextChanged: {
-                    if (!root.canAttach || root.pasting)
+                    if (!root.canAttach || root.pasting || root._restoringDraft)
                         return;
                     if (!input.text.endsWith(" "))
                         return;

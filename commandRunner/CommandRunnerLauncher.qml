@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Common
 import qs.Services
 
 // Launcher provider for user-defined commands. Commands are added by name in
@@ -87,7 +88,10 @@ Item {
                 icon: "content_copy",
                 text: "Copy command",
                 action: () => {
-                    Quickshell.execDetached(["dms", "cl", "copy", entry.command || ""]);
+                    // Proc.dmsBin, not a bare "dms": the shell hands its
+                    // children $DMS_EXECUTABLE, but doesn't always have dms
+                    // itself on PATH.
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", entry.command || ""]);
                     root._toast("Copied", entry.command || "");
                 }
             }

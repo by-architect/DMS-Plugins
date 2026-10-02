@@ -71,6 +71,31 @@ PanelWindow {
     }
     readonly property var flowItems: sortedItems.filter(it => Filters.matches(it, searchTokens))
 
+    // The flow can shrink under the highlight -- a search narrowing it, a card
+    // deleted -- and an index past its end highlights nothing anywhere, while
+    // Alt+k has to walk back through rows that are not there before anything
+    // moves. Every category is a subset of the flow, so its end is the limit.
+    onFlowItemsChanged: {
+        const last = Math.max(0, flowItems.length - 1);
+        if (globalRowIndex > last)
+            globalRowIndex = last;
+    }
+
+    // What every card's "x minutes ago" is measured against. The tree stays
+    // loaded between opens (see the daemon's LazyLoader), and a card is only
+    // rebuilt when the history list changes, so an age read off the clock at
+    // build time still said "just now" hours later. Re-read on every open and
+    // every half minute while open; nothing ticks while the panel is hidden.
+    property real nowMs: Date.now()
+
+    Timer {
+        interval: 30000
+        repeat: true
+        running: win.open
+        triggeredOnStart: true
+        onTriggered: win.nowMs = Date.now()
+    }
+
     function loadCategories() {
         const stored = PluginService.loadPluginData(pluginId, "categories", []);
         const arr = stored.slice(0, slotCount).map(c => c ? Filters.migrateCategory(c) : null);
@@ -254,6 +279,7 @@ PanelWindow {
                                 allItems: win.sortedItems
                                 searchQuery: win.searchQuery
                                 currentRowIndex: win.globalRowIndex
+                                nowMs: win.nowMs
                                 onSaveRequested: category => win.setCategory(index, category)
                                 onDeleteRequested: win.setCategory(index, null)
                             }
@@ -265,6 +291,7 @@ PanelWindow {
                         Layout.fillHeight: true
                         items: win.flowItems
                         currentRowIndex: win.globalRowIndex
+                        nowMs: win.nowMs
                         emptyReason: win.searchQuery ? "no matches for this search" : "no notifications yet"
                     }
                 }

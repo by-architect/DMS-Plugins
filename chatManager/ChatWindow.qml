@@ -84,6 +84,9 @@ DankModal {
     content: Component {
         ChatsContent {
             chatCore: chatsModal.chatCore
+            // Kept loaded while closed, so being built says nothing about
+            // being seen; this does.
+            onScreen: chatsModal.shouldBeVisible
             onCloseRequested: chatsModal.hide()
         }
     }

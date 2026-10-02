@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // Media owns the on-disk attachment cache.
@@ -17,8 +19,11 @@ import (
 // that QML can bind straight to an Image source. This mirrors how the clipboard
 // serves decoded images.
 type Media struct {
-	root    string
-	maxSize int64
+	root string
+	// maxSize is changed by the user's settings while bridges are writing into
+	// the cache and the sweep is reading the limit, so it is atomic rather
+	// than a field somebody has to remember to lock.
+	maxSize atomic.Int64
 }
 
 // DefaultMaxCacheSize is the eviction threshold when the user has not chosen
@@ -28,11 +33,21 @@ const DefaultMaxCacheSize = 512 << 20 // 512 MiB
 
 // NewMedia returns a cache rooted at root. A maxSize of zero means the default.
 func NewMedia(root string, maxSize int64) *Media {
+	m := &Media{root: root}
+	m.SetMaxSize(maxSize)
+	return m
+}
+
+// SetMaxSize changes the eviction threshold. Zero or less means the default.
+func (m *Media) SetMaxSize(maxSize int64) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxCacheSize
 	}
-	return &Media{root: root, maxSize: maxSize}
+	m.maxSize.Store(maxSize)
 }
+
+// MaxSize is the current eviction threshold.
+func (m *Media) MaxSize() int64 { return m.maxSize.Load() }
 
 // Root is the cache directory.
 func (m *Media) Root() string { return m.root }
@@ -101,14 +116,52 @@ func (m *Media) Adopt(provider, messageID, mimeType, path string) (string, error
 		return path, nil
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read media: %w", err)
-	}
 	if mimeType == "" {
 		mimeType = mimeForExtension(filepath.Ext(path))
 	}
-	return m.Store(provider, messageID, mimeType, data)
+	return m.copyIn(provider, messageID, mimeType, path)
+}
+
+// copyIn copies a file into the cache by streaming it, never by holding it.
+//
+// Adopt used to read the whole file into memory and write it back out, which
+// for a video somebody sent is the size of the video in RAM, twice over while
+// the write is in flight. The copy lands under a temporary name and is renamed
+// into place, so a half-written file is never what the store points at.
+func (m *Media) copyIn(provider, messageID, mimeType, src string) (string, error) {
+	dir, err := m.EnsureDirFor(provider)
+	if err != nil {
+		return "", err
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("read media: %w", err)
+	}
+	defer in.Close()
+
+	target := filepath.Join(dir, sanitizeComponent(messageID)+extensionFor(mimeType))
+
+	out, err := os.CreateTemp(dir, ".incoming-*")
+	if err != nil {
+		return "", fmt.Errorf("write media: %w", err)
+	}
+	tmp := out.Name()
+
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return "", fmt.Errorf("write media: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("write media: %w", err)
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("write media: %w", err)
+	}
+	return target, nil
 }
 
 // KindForPath guesses a message kind from a file's extension.
@@ -189,6 +242,11 @@ func (m *Media) GC(ctx context.Context, store MediaReferences) (freed int64, err
 		if err != nil || d.IsDir() {
 			return nil
 		}
+		// A copy still being written belongs to whoever is writing it;
+		// removing it would fail their rename, not free anything useful.
+		if strings.HasPrefix(d.Name(), ".incoming-") {
+			return nil
+		}
 		info, ierr := d.Info()
 		if ierr != nil {
 			return nil
@@ -209,7 +267,8 @@ func (m *Media) GC(ctx context.Context, store MediaReferences) (freed int64, err
 		return 0, err
 	}
 
-	if total <= m.maxSize {
+	maxSize := m.MaxSize()
+	if total <= maxSize {
 		return 0, nil
 	}
 
@@ -222,7 +281,7 @@ func (m *Media) GC(ctx context.Context, store MediaReferences) (freed int64, err
 	})
 
 	for _, e := range entries {
-		if total <= m.maxSize {
+		if total <= maxSize {
 			break
 		}
 		if err := os.Remove(e.path); err != nil {
@@ -315,6 +374,43 @@ var mimeExtensions = map[string]string{
 	"application/pdf": ".pdf",
 }
 
+// extensionMimes covers what a person actually picks to send, keyed by
+// extension. The table above names one extension per type for writing files;
+// reading one back has to know every common spelling, or a .jpeg sent from the
+// composer is recorded as a document and its bubble shows a file icon where
+// the photo should be.
+var extensionMimes = map[string]string{
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".jpe":  "image/jpeg",
+	".png":  "image/png",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".bmp":  "image/bmp",
+	".avif": "image/avif",
+	".heic": "image/heic",
+	".heif": "image/heif",
+	".svg":  "image/svg+xml",
+	".tif":  "image/tiff",
+	".tiff": "image/tiff",
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".webm": "video/webm",
+	".mkv":  "video/x-matroska",
+	".mov":  "video/quicktime",
+	".avi":  "video/x-msvideo",
+	".3gp":  "video/3gpp",
+	".ogg":  "audio/ogg",
+	".oga":  "audio/ogg",
+	".opus": "audio/ogg",
+	".mp3":  "audio/mpeg",
+	".m4a":  "audio/mp4",
+	".aac":  "audio/aac",
+	".wav":  "audio/wav",
+	".flac": "audio/flac",
+	".pdf":  "application/pdf",
+}
+
 func extensionFor(mimeType string) string {
 	mimeType = strings.ToLower(strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0]))
 	if ext, ok := mimeExtensions[mimeType]; ok {
@@ -329,11 +425,5 @@ func extensionFor(mimeType string) string {
 }
 
 func mimeForExtension(ext string) string {
-	ext = strings.ToLower(ext)
-	for mimeType, e := range mimeExtensions {
-		if e == ext {
-			return mimeType
-		}
-	}
-	return ""
+	return extensionMimes[strings.ToLower(ext)]
 }

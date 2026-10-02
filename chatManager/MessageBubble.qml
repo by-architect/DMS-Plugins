@@ -46,6 +46,11 @@ Item {
 
     readonly property string linkUrl: message?.linkUrl ?? ""
 
+    // The message this one answers, when it is among those loaded. A reply
+    // used to say only "Reply", which tells nobody what was being answered.
+    readonly property string replyToId: message?.replyTo ?? ""
+    readonly property var quoted: replyToId !== "" ? root.chatCore.messageById(replyToId) : null
+
     // The body with URLs turned into anchors, escaped first: message text is
     // other people's input, and StyledText would otherwise treat markup in it
     // as markup. See links.js for what that has to survive.
@@ -221,20 +226,57 @@ Item {
             anchors.topMargin: Theme.spacingS
             spacing: Theme.spacingXS
 
-            // Quoted message being replied to.
+            // Quoted message being replied to: who said it and what, when it
+            // is loaded; otherwise only that this is a reply, since what it
+            // answers is further back than anything on screen.
             StyledRect {
-                visible: (root.message?.replyTo ?? "") !== ""
-                width: Math.max(replyLabel.implicitWidth + Theme.spacingS * 2, 80)
-                height: replyLabel.implicitHeight + Theme.spacingXS * 2
+                visible: root.replyToId !== ""
+                width: Math.min(Math.max(replyColumn.implicitWidth + Theme.spacingS * 2, 80), root.width * 0.72 - Theme.spacingM * 2)
+                height: replyColumn.implicitHeight + Theme.spacingXS * 2
                 radius: Theme.cornerRadius / 2
                 color: Theme.withAlpha(Theme.surfaceVariantText, 0.12)
 
-                StyledText {
-                    id: replyLabel
-                    anchors.centerIn: parent
-                    text: I18n.tr("Reply")
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
+                Column {
+                    id: replyColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.rightMargin: Theme.spacingS
+                    spacing: 0
+
+                    StyledText {
+                        width: Math.min(implicitWidth, parent.width)
+                        text: {
+                            const quoted = root.quoted;
+                            if (!quoted)
+                                return I18n.tr("Reply");
+                            if (quoted.fromMe)
+                                return I18n.tr("You");
+                            return quoted.senderName || I18n.tr("Reply");
+                        }
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: root.quoted ? Font.Medium : Font.Normal
+                        color: root.quoted ? Theme.primary : Theme.surfaceVariantText
+                        elide: Text.ElideRight
+                    }
+
+                    StyledText {
+                        width: Math.min(implicitWidth, parent.width)
+                        visible: root.quoted !== null && text !== ""
+                        text: {
+                            const quoted = root.quoted;
+                            if (!quoted)
+                                return "";
+                            if (quoted.kind === "deleted")
+                                return I18n.tr("This message was deleted");
+                            return (quoted.text || quoted.fileName || "").replace(/\s+/g, " ");
+                        }
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                    }
                 }
             }
 
@@ -381,7 +423,7 @@ Item {
             // Filename for attachments that are not images.
             StyledText {
                 visible: (root.message?.fileName ?? "") !== "" && root.kind === "document"
-                text: root.message.fileName
+                text: root.message?.fileName ?? ""
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 elide: Text.ElideMiddle

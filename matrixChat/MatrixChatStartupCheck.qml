@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Common
+import qs.Services
 
 // Gates activation on the bridge binary existing.
 //
@@ -8,9 +9,15 @@ import qs.Common
 // fail to spawn a missing executable, and the user would see nothing but a
 // provider stuck at "disconnected".
 //
-// Deliberately does not check for a session: signing in happens in the
-// provider's own card in Settings, so enabling without one is the normal first
-// step rather than a misconfiguration.
+// qs.Services is imported for PluginService. The shell creates this object from
+// inside PluginService, but a file only sees the singletons it imports itself:
+// without the import the lookup threw, the shell counts a check that throws as
+// passed, and the plugin enabled with no bridge to run -- exactly what this file
+// exists to prevent.
+//
+// Deliberately does not check for a session: signing in happens in the chat
+// window's sign-in panel once the plugin is on, so enabling without one is the
+// normal first step rather than a misconfiguration.
 QtObject {
     function check(done) {
         const dir = PluginService.getPluginPath("matrixChat");

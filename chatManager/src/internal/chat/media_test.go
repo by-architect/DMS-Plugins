@@ -198,3 +198,61 @@ func TestExtensionFor(t *testing.T) {
 	assert.Equal(t, ".bin", extensionFor("nonsense"))
 	assert.Equal(t, ".heic", extensionFor("image/heic"), "unknown subtypes still get a usable extension")
 }
+
+// What a person picks to send is recognised by every common spelling of its
+// extension; a .jpeg recorded as a document shows a file icon for a photo.
+func TestKindForPathKnowsCommonExtensions(t *testing.T) {
+	for path, kind := range map[string]string{
+		"/x/photo.jpeg":  KindImage,
+		"/x/PHOTO.JPG":   KindImage,
+		"/x/shot.heic":   KindImage,
+		"/x/clip.mov":    KindVideo,
+		"/x/clip.mkv":    KindVideo,
+		"/x/note.opus":   KindAudio,
+		"/x/song.flac":   KindAudio,
+		"/x/report.pdf":  KindDocument,
+		"/x/archive.zip": KindDocument,
+		"/x/noextension": KindDocument,
+	} {
+		assert.Equal(t, kind, KindForPath(path), path)
+	}
+	assert.Equal(t, "image/jpeg", MimeForPath("/x/photo.jpeg"))
+	assert.Empty(t, MimeForPath("/x/archive.zip"))
+}
+
+// A copied attachment lands whole under its message id, with nothing left
+// behind from the copy itself.
+func TestAdoptLeavesNoPartialFiles(t *testing.T) {
+	m := NewMedia(t.TempDir(), 0)
+
+	outside := filepath.Join(t.TempDir(), "clip.mp4")
+	payload := make([]byte, 3<<20)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	require.NoError(t, os.WriteFile(outside, payload, 0o600))
+
+	path, err := m.Adopt("p", "m1", "", outside)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(m.DirFor("p"), "m1.mp4"), path)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, payload, data)
+
+	entries, err := os.ReadDir(m.DirFor("p"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the temporary copy must have been renamed, not left beside it")
+}
+
+// The limit can change while the cache is in use, and zero means the default.
+func TestSetMaxSize(t *testing.T) {
+	m := NewMedia(t.TempDir(), 0)
+	assert.Equal(t, int64(DefaultMaxCacheSize), m.MaxSize())
+
+	m.SetMaxSize(64 << 20)
+	assert.Equal(t, int64(64<<20), m.MaxSize())
+
+	m.SetMaxSize(0)
+	assert.Equal(t, int64(DefaultMaxCacheSize), m.MaxSize())
+}

@@ -41,6 +41,18 @@ PluginComponent {
 
         link: link
         pluginData: root.pluginData
+
+        // The reference count tells the manager someone is watching, and is
+        // nothing but whether something is on screen. With both closed the
+        // stream stops, so an arriving message no longer wakes the UI all day
+        // for a window nobody has open.
+        //
+        // Worked out here, from the two surfaces themselves, rather than
+        // counted up and down by their contents: the window's content is kept
+        // loaded, so it counted itself in at startup and kept the stream
+        // running before anything had been opened, and the two counting into
+        // one number could leave the popout open with nothing streamed to it.
+        refCount: (window.shouldBeVisible ? 1 : 0) + (popout.shouldBeVisible ? 1 : 0)
     }
 
     // DankModal builds its own layer surface and only loads its content when
@@ -103,10 +115,19 @@ PluginComponent {
 
         function onShouldBeVisibleChanged() {
             openVar.set(window.shouldBeVisible);
-            // The reference count tells the manager someone is watching. With
-            // the window closed the stream stops, so an arriving message no
-            // longer wakes the UI all day for a window nobody has open.
-            chatCore.refCount = window.shouldBeVisible ? 1 : 0;
+        }
+    }
+
+    // A notification was clicked. One about a conversation opens it on its
+    // own, the way the launcher does; one about several opens the window.
+    Connections {
+        target: link
+
+        function onOpenRequested(provider, chatId) {
+            if (provider !== "" && chatId !== "")
+                root.openChatPopout(provider, chatId);
+            else
+                openVar.set(true);
         }
     }
 
@@ -133,6 +154,18 @@ PluginComponent {
                 return "CHATS_UNAVAILABLE: the chat manager is not running";
 
             root.openChatPopout(provider, chatId);
+            return "CHATS_OPEN_SUCCESS";
+        }
+
+        // One conversation on its own, by whatever the caller has for it: a
+        // name, a number in any formatting, an address, or provider:chatId.
+        // More than one match asks which, in the popout itself, rather than
+        // guessing who a keybind meant to write to.
+        function popout(query: string): string {
+            if (!chatCore.available)
+                return "CHATS_UNAVAILABLE: the chat manager is not running";
+
+            root.openChatQuery(query);
             return "CHATS_OPEN_SUCCESS";
         }
 

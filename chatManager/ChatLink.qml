@@ -22,6 +22,10 @@ Item {
 
     signal chatStateUpdate(var data)
 
+    // A notification was clicked: the manager asks for that conversation to be
+    // shown, or for the window when the notification was about several.
+    signal openRequested(string provider, string chatId)
+
     // Remembered so a failure inside a handler can name the call it came from.
     property string _lastMethod: ""
     property bool _wantSubscription: false
@@ -84,8 +88,12 @@ Item {
         // A message with no id is a subscription event rather than a reply.
         if (msg.id === undefined || msg.id === 0) {
             const event = msg.result;
-            if (event && event.service === "chat")
+            if (!event)
+                return;
+            if (event.service === "chat")
                 root.chatStateUpdate(event.data);
+            else if (event.service === "chat.open")
+                root.openRequested(event.data?.provider ?? "", event.data?.chatId ?? "");
             return;
         }
 
@@ -101,7 +109,26 @@ Item {
     Process {
         id: managerProcess
 
-        command: [root._managerBinary]
+        // The socket is named rather than left to the manager's default, so
+        // the two sides cannot disagree about where it is: without a runtime
+        // directory each used to fall back to a different path in /tmp.
+        command: [root._managerBinary, "-socket", root._socketPath]
+
+        // The manager's log -- its own warnings, and why a bridge would not
+        // start or keeps restarting -- written into the shell's, where
+        // `quickshell log` shows it. Unread, Quickshell drops a child's output
+        // on the floor, which left nothing at all to go on when chat did not
+        // work. Debug lines only appear at DMS_CHAT_LOG_LEVEL=debug.
+        stderr: SplitParser {
+            onRead: line => {
+                if (!line)
+                    return;
+                if (line.startsWith("WARN") || line.startsWith("ERROR"))
+                    console.warn("chat-managerd:", line);
+                else
+                    console.log("chat-managerd:", line);
+            }
+        }
 
         onExited: exitCode => {
             root.managerRunning = false;
@@ -114,7 +141,39 @@ Item {
             supervisor.restart();
         }
 
-        onStarted: root.managerRunning = true
+        onStarted: {
+            root.managerRunning = true;
+            redial.start();
+        }
+    }
+
+    // Dials the manager again while it is starting up.
+    //
+    // The socket's own retry backs off to fifteen seconds between attempts, and
+    // by the time a manager is being started it has usually been failing for a
+    // while -- so a manager that is listening within a second was not used for
+    // up to fifteen, and chat sat unavailable after every restart. This asks
+    // straight away and often, for the few seconds a start takes, then leaves
+    // retrying to the socket again.
+    Timer {
+        id: redial
+
+        property int attempts: 0
+
+        interval: 250
+        repeat: true
+        onRunningChanged: {
+            if (running)
+                redial.attempts = 0;
+        }
+        onTriggered: {
+            if (socket.linkUp || !managerProcess.running || ++redial.attempts > 40) {
+                redial.stop();
+                return;
+            }
+            socket.connected = false;
+            socket.connected = true;
+        }
     }
 
     // Starts the manager only when the socket is unanswered. Another shell, or

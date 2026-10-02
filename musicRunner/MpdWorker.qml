@@ -68,6 +68,22 @@ Item {
         const code = _timedOut ? -1 : _exitCode;
         _onDone = null;
         busy = false;
+
+        // A fresh Process per run() means each one has to be disposed of
+        // once it's done, too - created with this worker as its parent, it
+        // is never garbage collected, so only the timeout path below used to
+        // free one. Every normal run left its Process behind, along with
+        // both collectors still holding that run's whole output: one more per
+        // search, per poll and per playlist read, for as long as the plugin
+        // stayed loaded. Detached first, same as the timeout path, so a late
+        // signal from it (stderr finishing after stdout) finds nothing to
+        // write to; destroy() itself is deferred, so this is safe from
+        // inside that Process's own signal handlers.
+        const finished = _proc;
+        _proc = null;
+        if (finished)
+            finished.destroy();
+
         if (cb)
             cb(out, err, code);
     }

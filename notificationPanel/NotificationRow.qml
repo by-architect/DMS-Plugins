@@ -15,6 +15,8 @@ Rectangle {
 
     required property var item
     property bool isCurrent: false
+    // The panel's clock, for the "x minutes ago" stamp. See time.js.
+    property real nowMs: 0
 
     signal removeRequested
 
@@ -60,7 +62,11 @@ Rectangle {
 
             DankCircularImage {
                 imageSource: root.resolvedAppIcon
-                fallbackIcon: "notifications"
+                // The app's own themed icon when there is no image to show,
+                // resolved the way the shipped history card resolves it -- most
+                // apps send a theme icon name, not a path, and a fixed
+                // fallback gave every one of their cards the same bell.
+                fallbackIcon: NotificationService.notificationFallbackIcon(root.item.image || "", root.item.appIcon || "") || "notifications"
                 width: 30
                 height: 30
                 anchors.verticalCenter: parent.verticalCenter
@@ -80,7 +86,7 @@ Rectangle {
                 }
 
                 StyledText {
-                    text: "·  " + Time.relTime(item.timestamp)
+                    text: "·  " + Time.relTime(item.timestamp, root.nowMs)
                     font.pixelSize: Theme.fontSizeSmall - 2
                     color: Theme.surfaceVariantText
                     elide: Text.ElideRight

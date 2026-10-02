@@ -33,7 +33,13 @@ PluginComponent {
     }
 
     onBusyChanged: applyIdleVisibility()
-    Component.onCompleted: applyIdleVisibility()
+
+    // Counted in and out, so the service only polls while a pill exists.
+    Component.onCompleted: {
+        FileActionsService.consumers++;
+        applyIdleVisibility();
+    }
+    Component.onDestruction: FileActionsService.consumers = Math.max(0, FileActionsService.consumers - 1)
 
     Connections {
         target: FileActionsService

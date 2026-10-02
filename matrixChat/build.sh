@@ -28,4 +28,5 @@ echo "building the Matrix bridge (this may take a minute the first time)..."
 
 echo "built: $(pwd)/bin/matrix-chat-bridge"
 echo
-echo "Now run ./login.sh to sign in, then enable Matrix under Settings -> Chats."
+echo "Now enable Matrix Chat under Settings -> Plugins and sign in from the chat"
+echo "window, or run ./login.sh to sign in from this terminal instead."

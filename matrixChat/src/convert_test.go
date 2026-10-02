@@ -5,9 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto/attachment"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -122,10 +128,18 @@ func TestEditReplacesTheOriginal(t *testing.T) {
 
 	frames := captureEvents(t, func() { b.onMessage(context.Background(), evt) })
 
+	// As a batch, never as a message of its own: only the single event can
+	// notify, and a correction is not news.
 	var got map[string]any
 	for _, f := range frames {
-		if f["event"] == "message" {
-			got, _ = f["message"].(map[string]any)
+		switch f["event"] {
+		case "message":
+			t.Errorf("an edit went out as a new message: %+v", f)
+		case "messages":
+			list, _ := f["messages"].([]any)
+			if len(list) == 1 {
+				got, _ = list[0].(map[string]any)
+			}
 		}
 	}
 	if got == nil {
@@ -210,22 +224,39 @@ func TestMediaFields(t *testing.T) {
 }
 
 // An encrypted attachment carries its URL inside the file block, not at the top
-// level. Missing this makes every attachment in an encrypted room undownloadable.
+// level, and the key that opens it beside the URL. Missing the first made every
+// attachment in an encrypted room undownloadable; missing the second made it
+// download as ciphertext.
 func TestEncryptedAttachmentURL(t *testing.T) {
 	b := testBridge()
 
+	file := &event.EncryptedFileInfo{
+		EncryptedFile: *attachment.NewEncryptedFile(),
+		URL:           id.ContentURIString("mxc://example.org/enc456"),
+	}
 	content := &event.MessageEventContent{
 		MsgType: event.MsgFile,
 		Body:    "secret.pdf",
-		File: &event.EncryptedFileInfo{
-			URL: id.ContentURIString("mxc://example.org/enc456"),
-		},
+		File:    file,
 	}
 	evt := msgEvent(testAda, content)
 	msg := b.convert(evt, content, evt.ID)
 
-	if msg.MediaRef != "mxc://example.org/enc456" {
-		t.Errorf("mediaRef = %q, want the URL from the encrypted file block", msg.MediaRef)
+	uri, key, err := parseMediaRef(msg.MediaRef)
+	if err != nil {
+		t.Fatalf("the ref does not parse back: %v", err)
+	}
+	if uri.String() != "mxc://example.org/enc456" {
+		t.Errorf("uri = %q, want the URL from the encrypted file block", uri.String())
+	}
+	if key == nil || key.Key.Key != file.Key.Key || key.InitVector != file.InitVector {
+		t.Errorf("the key did not travel with the ref: %+v", key)
+	}
+
+	// An unencrypted attachment's ref is still the plain URI.
+	plain := &event.MessageEventContent{MsgType: event.MsgFile, Body: "a.pdf", URL: "mxc://example.org/plain"}
+	if ref := b.convert(evt, plain, evt.ID).MediaRef; ref != "mxc://example.org/plain" {
+		t.Errorf("plain ref = %q", ref)
 	}
 }
 
@@ -415,5 +446,276 @@ func TestMsgTypeAndMime(t *testing.T) {
 		if got := msgTypeFor(mimeOf(name)); got != want {
 			t.Errorf("%s -> %v, want %v", name, got, want)
 		}
+	}
+}
+
+// Publishing reads a room's record from goroutines of its own while the sync
+// loop writes it. Naming a room ranges over its member map, and a map written
+// mid-range is not a race Go forgives: the runtime ends the process. Run with
+// -race to see every unguarded access; without it, this still trips the
+// runtime's own check on code that reads the members unlocked.
+func TestRoomRecordsSurviveConcurrentSyncAndPublish(t *testing.T) {
+	b := testBridge()
+	b.room(testRoom).Members[testAda] = "Ada"
+
+	member := func(user id.UserID, membership event.Membership) *event.Event {
+		evt := &event.Event{RoomID: testRoom, Type: event.StateMember}
+		key := string(user)
+		evt.StateKey = &key
+		evt.Content.Parsed = &event.MemberEventContent{Membership: membership, Displayname: "Someone"}
+		return evt
+	}
+	named := &event.Event{RoomID: testRoom, Type: event.StateRoomName}
+	named.Content.Parsed = &event.RoomNameEventContent{Name: ""}
+
+	captureEvents(t, func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ctx := context.Background()
+			for i := 0; i < 2000; i++ {
+				user := id.UserID("@u" + strconv.Itoa(i%40) + ":example.org")
+				b.onMember(ctx, member(user, event.MembershipJoin))
+				b.onRoomName(ctx, named)
+				b.onMember(ctx, member(user, event.MembershipLeave))
+			}
+		}()
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			_ = b.displayName(testRoom)
+			_ = b.chatFor(testRoom)
+			_ = b.inviteLine(testRoom)
+		}
+	})
+}
+
+// ---------------------------------------------------------------- live or history
+
+// An initial sync's timeline is history: held back, and sent as one batch the
+// host stores without notifying. Sent message by message, a fresh sign-in
+// notified for whatever the last half hour held.
+func TestInitialSyncHistoryIsBatched(t *testing.T) {
+	b := testBridge()
+	initial := context.WithValue(context.Background(), mautrix.SyncTokenContextKey, "")
+
+	image := &event.MessageEventContent{MsgType: event.MsgImage, Body: "a.png", URL: "mxc://example.org/img"}
+	evt := msgEvent(testAda, image)
+
+	frames := captureEvents(t, func() { b.onMessage(initial, evt) })
+	if len(frames) != 0 {
+		t.Fatalf("history went out before the response was read through: %+v", frames)
+	}
+	if b.downloads != nil {
+		t.Error("history queued an attachment download")
+	}
+
+	frames = captureEvents(t, b.flushHistory)
+	if len(frames) != 1 || frames[0]["event"] != "messages" {
+		t.Fatalf("history was not sent as one batch: %+v", frames)
+	}
+	if list, _ := frames[0]["messages"].([]any); len(list) != 1 {
+		t.Errorf("batch held %d messages, want 1", len(list))
+	}
+}
+
+// A message arriving on a sync that resumed from a position is news, and goes
+// out on its own -- the one event the host may notify for.
+func TestLiveMessageGoesOutAlone(t *testing.T) {
+	b := testBridge()
+	live := context.WithValue(context.Background(), mautrix.SyncTokenContextKey, "s123")
+
+	evt := msgEvent(testAda, &event.MessageEventContent{MsgType: event.MsgText, Body: "hello"})
+	frames := captureEvents(t, func() { b.onMessage(live, evt) })
+
+	if len(frames) == 0 || frames[0]["event"] != "message" {
+		t.Fatalf("a live message did not go out as a message: %+v", frames)
+	}
+}
+
+// ---------------------------------------------------------------- attachments
+
+func encryptedAttachment(t *testing.T, plaintext []byte) (*event.EncryptedFileInfo, []byte) {
+	t.Helper()
+	file := &event.EncryptedFileInfo{
+		EncryptedFile: *attachment.NewEncryptedFile(),
+		URL:           "mxc://example.org/enc",
+	}
+	ciphertext := append([]byte(nil), plaintext...)
+	file.EncryptInPlace(ciphertext)
+	return file, ciphertext
+}
+
+// What a ref carries for an encrypted room is enough to open the file: written
+// as it arrived, every attachment in such a room was saved as ciphertext.
+func TestEncryptedAttachmentIsDecryptedOnDownload(t *testing.T) {
+	dir := t.TempDir()
+	plaintext := []byte("the picture itself")
+	file, ciphertext := encryptedAttachment(t, plaintext)
+
+	ref, _ := json.Marshal(file)
+	_, key, err := parseMediaRef(string(ref))
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	path, err := saveAttachment(dir, "enc", bytes.NewReader(ciphertext), key, 0)
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, plaintext) {
+		t.Errorf("saved %q, want the decrypted file", got)
+	}
+}
+
+// A file whose hash does not match is not the file that was sent, and nothing
+// is left behind for the host to point at.
+func TestTamperedAttachmentIsNotSaved(t *testing.T) {
+	dir := t.TempDir()
+	file, ciphertext := encryptedAttachment(t, []byte("the picture itself"))
+	ciphertext[0] ^= 0xff
+
+	if _, err := saveAttachment(dir, "enc", bytes.NewReader(ciphertext), file, 0); err == nil {
+		t.Fatal("a file that failed its hash was saved")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("left behind: %v", entries)
+	}
+}
+
+// The auto-download limit holds whatever size the sender claimed, or failed to.
+func TestAttachmentOverTheLimitIsNotSaved(t *testing.T) {
+	dir := t.TempDir()
+	_, err := saveAttachment(dir, "big", bytes.NewReader(make([]byte, 2048)), nil, 1024)
+	if !errors.Is(err, errTooLarge) {
+		t.Fatalf("err = %v, want errTooLarge", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("left behind: %v", entries)
+	}
+
+	path, err := saveAttachment(dir, "small", bytes.NewReader(make([]byte, 512)), nil, 1024)
+	if err != nil {
+		t.Fatalf("a file under the limit was refused: %v", err)
+	}
+	if info, _ := os.Stat(path); info == nil || info.Size() != 512 {
+		t.Errorf("saved %v, want 512 bytes", info)
+	}
+}
+
+// ---------------------------------------------------------------- sending
+
+// fakeSender records what sending would have put on the wire.
+type fakeSender struct {
+	uploaded   []byte
+	uploadMime string
+	sent       []*event.MessageEventContent
+}
+
+func (f *fakeSender) SendMessageEvent(_ context.Context, _ id.RoomID, _ event.Type, content interface{}, _ ...mautrix.ReqSendEvent) (*mautrix.RespSendEvent, error) {
+	f.sent = append(f.sent, content.(*event.MessageEventContent))
+	return &mautrix.RespSendEvent{EventID: id.EventID("$sent" + strconv.Itoa(len(f.sent)))}, nil
+}
+
+func (f *fakeSender) UploadBytes(_ context.Context, data []byte, contentType string) (*mautrix.RespMediaUpload, error) {
+	f.uploaded = append([]byte(nil), data...)
+	f.uploadMime = contentType
+	return &mautrix.RespMediaUpload{ContentURI: id.ContentURI{Homeserver: "example.org", FileID: "up1"}}, nil
+}
+
+// A caption travels in the file's own event, as Matrix 1.10 has it. Sent as a
+// second event it came back as a second message, and the attachment showed
+// twice.
+func TestCaptionAndReplyRideOnTheFile(t *testing.T) {
+	b := testBridge()
+	path := filepath.Join(t.TempDir(), "photo.png")
+	if err := os.WriteFile(path, []byte("png bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sender := &fakeSender{}
+	if _, err := b.sendFile(context.Background(), sender, testRoom, path, "look at this", "$question", false); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d events, want the file and its caption as one", len(sender.sent))
+	}
+	content := sender.sent[0]
+	if content.Body != "look at this" || content.FileName != "photo.png" {
+		t.Errorf("body = %q, filename = %q", content.Body, content.FileName)
+	}
+	if content.RelatesTo.GetReplyTo() != "$question" {
+		t.Errorf("reply = %q, want it on the file event", content.RelatesTo.GetReplyTo())
+	}
+	if content.URL != "mxc://example.org/up1" || content.File != nil {
+		t.Errorf("an unencrypted room got url=%q file=%v", content.URL, content.File)
+	}
+}
+
+// Into an encrypted room the file is encrypted before it is uploaded, and the
+// key goes in the event. Uploaded as it was, the homeserver kept a readable
+// copy of it.
+func TestAttachmentIsEncryptedForAnEncryptedRoom(t *testing.T) {
+	b := testBridge()
+	plaintext := []byte("png bytes")
+	path := filepath.Join(t.TempDir(), "photo.png")
+	if err := os.WriteFile(path, plaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sender := &fakeSender{}
+	if _, err := b.sendFile(context.Background(), sender, testRoom, path, "", "", true); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	content := sender.sent[0]
+	if content.File == nil || content.URL != "" {
+		t.Fatalf("file = %v, url = %q: the attachment went out unencrypted", content.File, content.URL)
+	}
+	if bytes.Equal(sender.uploaded, plaintext) || sender.uploadMime != "application/octet-stream" {
+		t.Errorf("uploaded %q as %s, want ciphertext", sender.uploaded, sender.uploadMime)
+	}
+	if content.File.URL != "mxc://example.org/up1" {
+		t.Errorf("file url = %q", content.File.URL)
+	}
+
+	// Opened the way a recipient opens it: from the event as it arrives, not
+	// from the sender's own copy, which mautrix caches without the hash.
+	wire, _ := json.Marshal(content.File)
+	var received event.EncryptedFileInfo
+	if err := json.Unmarshal(wire, &received); err != nil {
+		t.Fatal(err)
+	}
+	opened := append([]byte(nil), sender.uploaded...)
+	if err := received.DecryptInPlace(opened); err != nil || !bytes.Equal(opened, plaintext) {
+		t.Errorf("the event's key does not open the upload: %v", err)
+	}
+}
+
+// With encryption not working, a message for an encrypted room is refused
+// rather than sent: mautrix encrypts only when it holds a crypto helper, and
+// without one it sent in plain text.
+func TestNoPlainTextIntoAnEncryptedRoom(t *testing.T) {
+	b := testBridge()
+	client, err := mautrix.NewClient("https://example.invalid", testSelf, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.client = client
+	b.room(testRoom).Encrypted = true
+
+	params, _ := json.Marshal(map[string]any{"chatId": string(testRoom), "text": "secret"})
+	frames := captureEvents(t, func() {
+		b.handleSend(context.Background(), call{ID: 7, Method: "send", Params: params})
+	})
+
+	if len(frames) != 1 || frames[0]["ok"] != false {
+		t.Fatalf("the send was not refused: %+v", frames)
+	}
+	if errInfo, _ := frames[0]["error"].(map[string]any); errInfo["code"] != "no_encryption" {
+		t.Errorf("error = %v, want no_encryption", frames[0]["error"])
 	}
 }

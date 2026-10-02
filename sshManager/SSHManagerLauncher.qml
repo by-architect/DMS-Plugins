@@ -95,7 +95,10 @@ Item {
             icon: "content_copy",
             text: "Copy connection string",
             action: () => {
-                Quickshell.execDetached(["dms", "cl", "copy", "ssh://" + dest + (entry.port && entry.port !== "22" ? ":" + entry.port : "")]);
+                // Proc.dmsBin, not a bare "dms": the shell hands its
+                // children $DMS_EXECUTABLE, but doesn't always have dms
+                // itself on PATH.
+                Quickshell.execDetached([Proc.dmsBin, "cl", "copy", "ssh://" + dest + (entry.port && entry.port !== "22" ? ":" + entry.port : "")]);
                 root._toast("Copied", dest);
             }
         }];

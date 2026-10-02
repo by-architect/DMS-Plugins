@@ -155,22 +155,40 @@ function matchesConditions(item, conditions) {
 }
 
 // Upgrades a category saved before the structured-condition editor existed
-// (`{ name, filter: "title:whatsapp" }`, the free-text query syntax) into one
-// bare "any/include" condition carrying the old string verbatim, so it keeps
-// matching exactly what it matched before and still shows up as an editable
-// row afterward.
+// (`{ name, filter: "title:whatsapp -app:spotify" }`, the free-text query
+// syntax) into the same rules as conditions: one per token, so `title:x`
+// becomes a Title/Include row, `-app:y` an App/Exclude row and a bare word an
+// Any-field/Include row. Tokens and conditions are both ANDed and both match
+// by substring, so the category keeps matching what it matched before and
+// every part of it shows up as an editable row. Carrying the old string over
+// verbatim as one condition does neither: a condition's value is plain text,
+// so "title:whatsapp" would be searched for literally and match nothing.
+const TOKEN_FIELD_TO_CONDITION = {
+    "summary": "title",
+    "body": "content",
+    "appName": "app",
+    "urgency": "urgency"
+};
+
 function migrateCategory(cat) {
     if (!cat)
         return cat;
     if (Array.isArray(cat.conditions))
         return cat;
     if (typeof cat.filter === "string") {
+        const conditions = parseFilter(cat.filter).map(t => ({
+                    field: t.field ? TOKEN_FIELD_TO_CONDITION[t.field] : "any",
+                    mode: t.negate ? "exclude" : "include",
+                    value: t.value
+                }));
         return {
             name: cat.name,
-            conditions: [{
+            // An empty old filter matched everything. One blank row still
+            // does, and leaves the editor a row to edit rather than none.
+            conditions: conditions.length > 0 ? conditions : [{
                     field: "any",
                     mode: "include",
-                    value: cat.filter
+                    value: ""
                 }]
         };
     }

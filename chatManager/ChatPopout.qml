@@ -117,6 +117,8 @@ DankModal {
     content: Component {
         ChatPopoutContent {
             chatCore: chatPopout.chatCore
+            popout: chatPopout
+            onScreen: chatPopout.shouldBeVisible
             onCloseRequested: chatPopout.hidePopout()
         }
     }

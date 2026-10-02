@@ -64,6 +64,9 @@ PluginComponent {
         function stop(): string {
             if (!ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting)
                 return "NOT_RECORDING";
+            // Already stopped, still converting/copying: nothing to stop.
+            if (ScreenCatcherService.isFinishing)
+                return "FINISHING";
             ScreenCatcherService.stopRecording();
             return "STOPPING";
         }
@@ -148,13 +151,23 @@ PluginComponent {
 
         // Takes the format as an argument: `ipc call screenCatcher
         // setImageFormat jpeg` / `setRecordFormat mkv`.
+        //
+        // Anything else is refused rather than saved: the value is persisted
+        // and fed straight to grim's -t / used as the recording's extension,
+        // so a natural typo like "jpg" (grim only knows "jpeg") used to stick
+        // as the default and make every later screenshot fail with "invalid
+        // filetype", with neither chip lit in the panel to show why.
         function setImageFormat(format: string): string {
+            if (format !== "png" && format !== "jpeg")
+                return "INVALID: png or jpeg";
             ScreenCatcherService.setImageFormat(format);
             return "OK";
         }
 
         // mp4/mkv only — GIF has its own action.
         function setRecordFormat(format: string): string {
+            if (format !== "mp4" && format !== "mkv")
+                return "INVALID: mp4 or mkv";
             ScreenCatcherService.setRecordFormat(format);
             return "OK";
         }

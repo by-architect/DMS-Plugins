@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"dmschatmanager/internal/log"
@@ -54,10 +55,30 @@ type NotifyPolicy struct {
 	// StartedAt is when the host came up. Anything older is backfill.
 	StartedAt time.Time
 
+	// mu guards everything below: the shell pushes focus down on one goroutine
+	// while messages are judged on another, and clicks arrive on a third.
+	mu sync.Mutex
+
 	// focused is the chat currently on screen, pushed down by the shell. A
 	// message you are already looking at should not also buzz.
 	focused focusKey
+
+	// shown remembers which conversation each notification raised here is
+	// about, so a click on one can open it. Bounded by maxRemembered, oldest
+	// forgotten first, through shownOrder.
+	shown      map[uint32]focusKey
+	shownOrder []uint32
 }
+
+// maxRemembered is how many notifications are remembered for answering a
+// click: far more than are ever on screen at once. A click on one older than
+// that opens the chat window rather than guessing.
+const maxRemembered = 256
+
+// openActions are what every chat notification offers. "default" is what a
+// notification server invokes when the notification itself is clicked, which
+// is the only action anybody looks for on a message: take me to it.
+var openActions = []string{"default", "Open"}
 
 type focusKey struct {
 	provider string
@@ -81,17 +102,83 @@ func NewNotifyPolicy(store NotifyStore, media *Media) *NotifyPolicy {
 		store:     store,
 		media:     media,
 		StartedAt: time.Now(),
+		shown:     map[uint32]focusKey{},
 	}
 }
 
 // SetFocus records which chat is on screen. An empty chatID means none is.
 func (p *NotifyPolicy) SetFocus(provider, chatID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.focused = focusKey{provider: provider, chatID: chatID}
 }
 
 // Focused reports the chat currently on screen.
 func (p *NotifyPolicy) Focused() (provider, chatID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.focused.provider, p.focused.chatID
+}
+
+// isFocused reports whether a conversation is the one on screen.
+func (p *NotifyPolicy) isFocused(provider, chatID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.focused.provider == provider && p.focused.chatID == chatID
+}
+
+// remember records which conversation a notification is about. An empty
+// target is a notification about several at once.
+func (p *NotifyPolicy) remember(id uint32, target focusKey) {
+	if id == 0 {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.shown == nil {
+		p.shown = map[uint32]focusKey{}
+	}
+	if _, known := p.shown[id]; !known {
+		p.shownOrder = append(p.shownOrder, id)
+	}
+	p.shown[id] = target
+
+	for len(p.shownOrder) > maxRemembered {
+		delete(p.shown, p.shownOrder[0])
+		p.shownOrder = p.shownOrder[1:]
+	}
+}
+
+// Target is the conversation a notification raised here is about.
+//
+// ok is false for a notification this process does not know -- another app's,
+// or one raised before a restart. A notification about several conversations
+// at once is known, with an empty chatID: the place for it is the window.
+func (p *NotifyPolicy) Target(id uint32) (provider, chatID string, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	target, ok := p.shown[id]
+	return target.provider, target.chatID, ok
+}
+
+// Forget drops a notification that has gone away.
+func (p *NotifyPolicy) Forget(id uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.shown[id]; !ok {
+		return
+	}
+	delete(p.shown, id)
+	for i, known := range p.shownOrder {
+		if known == id {
+			p.shownOrder = append(p.shownOrder[:i], p.shownOrder[i+1:]...)
+			break
+		}
+	}
 }
 
 const (
@@ -148,7 +235,7 @@ func (p *NotifyPolicy) suppress(ctx context.Context, m Message, prefs NotifyPref
 	}
 
 	// The conversation is already on screen.
-	if p.focused.provider == m.Provider && p.focused.chatID == m.ChatID {
+	if p.isFocused(m.Provider, m.ChatID) {
 		return "chat focused"
 	}
 
@@ -218,7 +305,7 @@ func (p *NotifyPolicy) Notify(ctx context.Context, m Message, providerName strin
 		log.Debugf("chat: suppressed notification for %s/%s: %s", m.Provider, m.ChatID, reason)
 		return false
 	}
-	return p.send(p.notificationFor(ctx, m, providerName, prefs))
+	return p.send(p.notificationFor(ctx, m, providerName, prefs), focusKey{provider: m.Provider, chatID: m.ChatID})
 }
 
 // NotifyCatchUp announces messages that were held while a provider was still
@@ -259,7 +346,8 @@ func (p *NotifyPolicy) NotifyCatchUp(ctx context.Context, msgs []Message, provid
 				Icon:    "material:chat",
 				Summary: providerNameOr(providerName),
 				Body:    plural(remaining, "more conversation", "more conversations") + " with unread messages",
-			})
+				Actions: openActions,
+			}, focusKey{})
 			shown++
 			break
 		}
@@ -273,7 +361,7 @@ func (p *NotifyPolicy) NotifyCatchUp(ctx context.Context, msgs []Message, provid
 			// it. A count alone says nothing about whether it matters.
 			n.Body = plural(len(group), "new message", "new messages") + "\n" + n.Body
 		}
-		if p.send(n) {
+		if p.send(n, focusKey{provider: latest.Provider, chatID: latest.ChatID}) {
 			shown++
 		}
 	}
@@ -305,6 +393,7 @@ func (p *NotifyPolicy) notificationFor(ctx context.Context, m Message, providerN
 		Icon:    "material:chat",
 		Summary: p.titleFor(ctx, m, providerName),
 		Body:    body,
+		Actions: openActions,
 	}
 
 	// An image attachment shows as the notification's own preview. Only for
@@ -315,13 +404,15 @@ func (p *NotifyPolicy) notificationFor(ctx context.Context, m Message, providerN
 	return n
 }
 
-func (p *NotifyPolicy) send(n notify.Notification) bool {
-	// Send returns the notification id, which chat has no use for: these are
-	// fire-and-forget and never replaced or recalled.
-	if _, err := notify.Send(n); err != nil {
+// send shows a notification and remembers what it is about, so a click on it
+// can be answered with the conversation it names.
+func (p *NotifyPolicy) send(n notify.Notification, target focusKey) bool {
+	id, err := notify.Send(n)
+	if err != nil {
 		log.Warnf("chat: notification failed: %v", err)
 		return false
 	}
+	p.remember(id, target)
 	return true
 }
 

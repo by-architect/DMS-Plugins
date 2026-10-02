@@ -78,8 +78,13 @@ type attachment struct {
 type syncMessage struct {
 	SentMessage  *sentMessage `json:"sentMessage"`
 	ReadMessages []struct {
-		Sender    string `json:"sender"`
-		Timestamp int64  `json:"timestamp"`
+		// Sender is signal-cli's legacy identifier: the phone number whenever
+		// it knows one. Messages are keyed on the UUID first (see authorOf),
+		// so the UUID is what has to be matched.
+		Sender       string `json:"sender"`
+		SenderNumber string `json:"senderNumber"`
+		SenderUUID   string `json:"senderUuid"`
+		Timestamp    int64  `json:"timestamp"`
 	} `json:"readMessages"`
 }
 
@@ -138,9 +143,12 @@ func (b *bridge) handleEnvelope(env envelope) {
 		// An edit replaces the original. Because chat and message events are
 		// upserts keyed on id, re-emitting under the *target* timestamp updates
 		// the message in place instead of appending a near-duplicate.
+		//
+		// Not as a live message: the original already arrived, and only a
+		// message event can notify or count as news.
 		edited := *env.EditMessage.DataMessage
 		edited.Timestamp = env.EditMessage.TargetSentTimestamp
-		b.onDataMessage(env, &edited, false)
+		b.deliver(env, &edited, false, false)
 
 	case env.DataMessage != nil:
 		b.onDataMessage(env, env.DataMessage, false)
@@ -149,6 +157,15 @@ func (b *bridge) handleEnvelope(env envelope) {
 
 // onDataMessage converts one message, incoming or echoed from our own device.
 func (b *bridge) onDataMessage(env envelope, dm *dataMessage, fromMe bool) {
+	b.deliver(env, dm, fromMe, true)
+}
+
+// deliver converts one message and hands it to the host.
+//
+// live says whether this is a message arriving now. Only those go out as a
+// message event, the one kind the host may notify for or count as news; a
+// message the host already has, said again, goes out as a batch of one.
+func (b *bridge) deliver(env envelope, dm *dataMessage, fromMe, live bool) {
 	if dm.Reaction != nil {
 		return
 	}
@@ -167,7 +184,17 @@ func (b *bridge) onDataMessage(env envelope, dm *dataMessage, fromMe bool) {
 		return
 	}
 
-	emitEvent("message", map[string]any{"message": msg})
+	if live {
+		emitEvent("message", map[string]any{"message": msg})
+		if !fromMe {
+			// Remembered for the read receipt that opening it here owes, and
+			// for placing a read sync from the phone, which names the message
+			// but not its conversation.
+			b.noteUnread(msg.ChatID, unreadRef{author: msg.SenderID, ts: msg.TS})
+		}
+	} else {
+		emitEvent("messages", map[string]any{"messages": []*messageObj{msg}})
+	}
 
 	if msg.MediaRef != "" && msg.MediaPath == "" {
 		go b.autoDownload(*msg)
@@ -201,12 +228,96 @@ func (b *bridge) onSync(env envelope) {
 
 	// Read somewhere else: clear it here too, so unread counts agree across
 	// devices instead of this one insisting on messages the user has read.
+	//
+	// This used to do nothing at all. The ids were built from "sender", which
+	// is the phone number whenever signal-cli knows one, while messages are
+	// keyed on the UUID -- so they matched no row. And a status on a message
+	// is not what the host counts anyway: unread and notifications go by the
+	// conversation's read position, so that is what has to move.
+	readUpTo := map[string]int64{}
+	var chats []string
 	for _, r := range sync.ReadMessages {
+		author := r.SenderUUID
+		if author == "" {
+			author = r.SenderNumber
+		}
+		if author == "" {
+			author = r.Sender
+		}
+
 		emitEvent("status", map[string]any{
-			"messageId": messageID(r.Sender, r.Timestamp),
+			"messageId": messageID(author, r.Timestamp),
 			"status":    "read",
 		})
+
+		// A read sync names a message, not its conversation, so only a
+		// message this bridge saw arrive can be placed.
+		chatID, known := b.chatOfUnread(author, r.Timestamp)
+		if !known {
+			continue
+		}
+		if _, seen := readUpTo[chatID]; !seen {
+			chats = append(chats, chatID)
+		}
+		if r.Timestamp > readUpTo[chatID] {
+			readUpTo[chatID] = r.Timestamp
+		}
 	}
+
+	for _, chatID := range chats {
+		// Read on the phone, so no receipt from here is owed for any of it.
+		b.takeUnread(chatID, readUpTo[chatID])
+		emitEvent("chat", map[string]any{"chat": chatObj{ID: chatID, ReadUpTo: readUpTo[chatID]}})
+	}
+}
+
+// noteUnread remembers an incoming message until it is marked read.
+func (b *bridge) noteUnread(chatID string, ref unreadRef) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	refs := append(b.unread[chatID], ref)
+	if len(refs) > maxUnreadPerChat {
+		refs = refs[len(refs)-maxUnreadPerChat:]
+	}
+	b.unread[chatID] = refs
+}
+
+// takeUnread removes and returns a conversation's remembered messages at or
+// before upTo. Later ones stay: they arrived after whatever was read.
+func (b *bridge) takeUnread(chatID string, upTo int64) []unreadRef {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var taken, kept []unreadRef
+	for _, ref := range b.unread[chatID] {
+		if ref.ts <= upTo {
+			taken = append(taken, ref)
+		} else {
+			kept = append(kept, ref)
+		}
+	}
+	if len(kept) == 0 {
+		delete(b.unread, chatID)
+	} else {
+		b.unread[chatID] = kept
+	}
+	return taken
+}
+
+// chatOfUnread finds the conversation a remembered message was filed under.
+func (b *bridge) chatOfUnread(author string, ts int64) (string, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for chatID, refs := range b.unread {
+		for _, ref := range refs {
+			if ref.author == author && ref.ts == ts {
+				return chatID, true
+			}
+		}
+	}
+	return "", false
 }
 
 // onReceipt maps Signal's receipts onto the contract's status ladder. The host

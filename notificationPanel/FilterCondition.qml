@@ -73,8 +73,16 @@ Column {
         width: parent.width
         placeholderText: "text to match"
         text: root.condition.value || ""
-        onTextEdited: root.update({
-                "value": text
-            })
+        // DankTextField emits textEdited for every change to its text, the
+        // binding above included -- so building a row, or the value coming
+        // back round from the parent, reported an "edit" that changed nothing
+        // and sent the whole conditions array round again. Only a real
+        // difference goes up.
+        onTextEdited: {
+            if (text !== (root.condition.value || ""))
+                root.update({
+                    "value": text
+                });
+        }
     }
 }

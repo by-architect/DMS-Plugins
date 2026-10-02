@@ -2,7 +2,8 @@
 //
 // It is a DMS chat provider bridge: it translates Signal into newline-delimited
 // JSON on stdout, and reads commands as JSON lines on stdin. See
-// docs/CHAT-PLUGINS.md in the DankMaterialShell repository for the contract.
+// chatManager/src/internal/host/protocol.go, in the Chat Manager plugin, for
+// the contract.
 //
 // It deliberately does very little. The DMS backend owns the message store,
 // unread counts, pagination, the attachment cache, notifications and search;

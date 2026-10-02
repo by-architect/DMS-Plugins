@@ -83,11 +83,11 @@ func runLogin() {
 	fmt.Printf("Device:  %s\n", sess.DeviceID)
 	fmt.Printf("Session: %s\n", path)
 	fmt.Println()
-	fmt.Println("Now enable Matrix under Settings -> Chats.")
+	fmt.Println("Now enable Matrix Chat under Settings -> Plugins, if it is not on already.")
 	fmt.Println()
 	fmt.Println("This device is new, so it cannot read messages sent before now.")
-	fmt.Println("To read encrypted history, verify it from another signed-in")
-	fmt.Println("client (Element: Settings -> Security -> verify this device).")
+	fmt.Println("To read encrypted history, verify it with your recovery key on the")
+	fmt.Println("Matrix Chat plugin's settings page, or from another signed-in client.")
 
 }
 

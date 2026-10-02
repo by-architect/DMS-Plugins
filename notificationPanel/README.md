@@ -98,8 +98,11 @@ scrolls if a category ends up with more conditions than fit.
 
 Categories saved before this rule builder existed (a single free-text
 `filter` string) still load and still match exactly what they matched before
-— `migrateCategory()` in `filters.js` wraps the old string into one `Any
-field / Include` condition the first time the panel starts.
+— `migrateCategory()` in `filters.js` turns each token of the old string into
+its own condition when the panel loads them: `title:whatsapp` becomes a
+`Title / Include` row, `-app:spotify` an `App / Exclude` row, a bare word an
+`Any field / Include` row. The converted form is saved the next time that
+category is edited.
 
 ## Install
 
@@ -148,7 +151,10 @@ shell's own `KeyboardFocus` policy plus `DankFocusGrab` rather than hardcoding
 
 Unlike `systemPanel`, there are no background processes here at all —
 `NotificationService.historyList` is a live QML property, so every tile is
-just a filtered/sorted binding over it. No timers, no polling.
+just a filtered/sorted binding over it. No polling. The one timer is the
+clock every card's "x minutes ago" is measured against, re-read when the panel
+opens and every 30 seconds while it stays open, and stopped while it is
+hidden.
 
 `exclusionMode: ExclusionMode.Ignore` + `WlrLayershell.exclusiveZone: -1` make
 the panel a true fullscreen overlay that draws over the bar, rather than

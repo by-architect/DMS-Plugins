@@ -261,8 +261,13 @@ Item {
                     NotificationService.dismissNotification(line.wrapper);
                     return;
                 }
-                if (line.actions && line.actions.length > 0) {
-                    line.actions[0].invoke();
+                // The action the sender marked "default" is what a click on
+                // the notification means, wherever it sits in the list -- the
+                // same lookup the shipped popup does. The first action is only
+                // the fallback, and it can just as well be "Mark as read".
+                const action = line.actions && line.actions.length > 0 ? (line.actions.find(a => a.identifier === "default") || line.actions[0]) : null;
+                if (action) {
+                    action.invoke();
                     NotificationService.dismissNotification(line.wrapper);
                     return;
                 }

@@ -1,9 +1,12 @@
 .pragma library
 
-function relTime(ms) {
+// `nowMs` is the clock to measure against. A binding over a plain Date.now()
+// call has nothing to notice when time moves on, so a card would keep the
+// age it was built with; the panel passes its own ticking clock instead.
+function relTime(ms, nowMs) {
     if (!ms || isNaN(ms))
         return "";
-    var delta = Date.now() - ms;
+    var delta = (nowMs || Date.now()) - ms;
     if (delta < 0)
         delta = 0;
     var s = Math.floor(delta / 1000);

@@ -98,9 +98,9 @@ chats with history.
 
 ## Requirements
 
-A DMS build with chat support, and at least one chat provider plugin enabled
-under **Settings → Chats**. With none, the runner says so rather than showing an
-empty list.
+The Chat Manager plugin (chatManager), and at least one chat provider plugin
+enabled under **Settings → Plugins**. With none, the runner says so rather than
+showing an empty list.
 
 ## Settings
 

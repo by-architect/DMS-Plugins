@@ -388,7 +388,7 @@ func (b *bridge) call(ctx context.Context, method string, params map[string]any)
 		return bridgeFrame{}, err
 	}
 
-	b.tap("in", string(payload))
+	b.tap("in", tapLineFor(id, method, payload))
 
 	if _, err := stdin.Write(append(payload, '\n')); err != nil {
 		return bridgeFrame{}, fmt.Errorf("write to bridge: %w", err)
@@ -398,7 +398,13 @@ func (b *bridge) call(ctx context.Context, method string, params map[string]any)
 	defer timeout.Stop()
 
 	select {
-	case f := <-reply:
+	case f, ok := <-reply:
+		// Closed rather than answered: the bridge died, or was stopped, with
+		// this call still in flight. Reading the zero frame as a reply made that
+		// look like success -- a message that never left was marked sent.
+		if !ok {
+			return bridgeFrame{}, errBridgeDown
+		}
 		if f.OK != nil && !*f.OK {
 			return f, fmt.Errorf("%s", f.Error.String())
 		}
@@ -408,6 +414,24 @@ func (b *bridge) call(ctx context.Context, method string, params map[string]any)
 	case <-ctx.Done():
 		return bridgeFrame{}, ctx.Err()
 	}
+}
+
+// tapLineFor is what an observer of the protocol sees of a call.
+//
+// Everything, except what somebody typed to sign in: a password or a recovery
+// key goes to the bridge and nowhere else, and a tap is somewhere else. The
+// line keeps its shape, so the exchange still reads, with the values withheld.
+func tapLineFor(id int, method string, payload []byte) string {
+	if method != MethodAuthSubmit {
+		return string(payload)
+	}
+	withheld, err := json.Marshal(bridgeCall{
+		ID: id, Method: method, Params: map[string]any{"values": "(withheld)"},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(withheld)
 }
 
 // notify sends a method without waiting for its reply.
@@ -425,11 +449,19 @@ func (b *bridge) notify(method string, params map[string]any) {
 	}()
 }
 
+// deliverReply hands a reply to the call waiting for it.
+//
+// The send happens under the lock, and so does failPending's close: Stop runs
+// on another goroutine, and a reply delivered in the instant between looking
+// the channel up and sending on it would otherwise land on a channel that had
+// just been closed -- which panics, and takes the whole manager down with it.
+// The channel is buffered and the send never blocks, so holding the lock
+// across it costs nothing.
 func (b *bridge) deliverReply(f bridgeFrame) {
 	b.mu.Lock()
-	reply, ok := b.pending[f.ID]
-	b.mu.Unlock()
+	defer b.mu.Unlock()
 
+	reply, ok := b.pending[f.ID]
 	if !ok {
 		// A late reply to a call that already timed out. Expected, not an error.
 		log.Debugf("chat: bridge %s replied to unknown call %d", b.provider.ID, f.ID)
@@ -444,21 +476,19 @@ func (b *bridge) deliverReply(f bridgeFrame) {
 
 func (b *bridge) failPending(err error) {
 	b.mu.Lock()
-	pending := b.pending
-	b.pending = map[int]chan bridgeFrame{}
-	b.mu.Unlock()
+	defer b.mu.Unlock()
 
-	failed := false
-	for range pending {
-		failed = true
-		break
+	if len(b.pending) == 0 {
+		return
 	}
-	if failed {
-		log.Debugf("chat: bridge %s failing in-flight calls: %v", b.provider.ID, err)
-	}
-	for _, ch := range pending {
+	log.Debugf("chat: bridge %s failing in-flight calls: %v", b.provider.ID, err)
+
+	// Closed, not answered: call reads a closed channel as the bridge being
+	// gone, which is what this is.
+	for _, ch := range b.pending {
 		close(ch)
 	}
+	b.pending = map[int]chan bridgeFrame{}
 }
 
 // sendConfigure hands the bridge its settings and media directory.

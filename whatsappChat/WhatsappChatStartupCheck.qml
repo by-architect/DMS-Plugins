@@ -1,5 +1,9 @@
 import QtQuick
 import qs.Common
+// PluginService lives here. Without the import it is a ReferenceError, and the
+// shell treats a check that throws as one that passed -- so the gate below
+// never blocked anything.
+import qs.Services
 
 // Gates activation on the bridge binary existing.
 //

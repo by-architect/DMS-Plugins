@@ -97,7 +97,22 @@ func (b *bridge) chatName(jid types.JID) string {
 	ctx := context.Background()
 
 	if jid.Server == types.GroupServer {
+		// From the cache when it can be: this runs for every incoming group
+		// message, inside whatsmeow's event handler, and asking WhatsApp each
+		// time held up everything queued behind it. Renames keep the cache
+		// current (see the GroupInfo event), so a miss is a group this session
+		// has not heard of yet.
+		b.mu.RLock()
+		name, cached := b.groupNames[jid]
+		b.mu.RUnlock()
+		if cached {
+			return name
+		}
+
 		if info, err := client.GetGroupInfo(ctx, jid); err == nil && info.Name != "" {
+			b.mu.Lock()
+			b.groupNames[jid] = info.Name
+			b.mu.Unlock()
 			return info.Name
 		}
 		// Falling back to the raw id would show a bare number; better to let

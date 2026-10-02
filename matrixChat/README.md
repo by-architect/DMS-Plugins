@@ -32,9 +32,9 @@ cd ~/.config/DankMaterialShell/plugins/matrixChat
 ./build.sh
 ```
 
-Then enable **Matrix** under **Settings → Chats** and sign in there: the
-provider's card asks for your homeserver, user id and password, in the same place
-WhatsApp shows a QR code.
+Then enable **Matrix Chat** under **Settings → Plugins** and open the chat
+window: its sign-in panel asks for your homeserver, user id and password, in the
+same place WhatsApp shows a QR code.
 
 The plugin refuses to enable until the bridge is built, and says so rather than
 sitting silently at "disconnected".
@@ -58,19 +58,24 @@ sign in before enabling the plugin, or are working on the bridge outside DMS.
 ## Encrypted history, and how to unlock it
 
 **Signing in creates a new device**, exactly as adding Element on a new phone
-does. A new device has no keys to messages sent before it existed, so encrypted
-history shows as undecryptable until the device is verified.
+does. A new device has no keys to messages sent before it existed. Those
+messages are not shown here at all -- this bridge does not fetch older history
+-- and an encrypted message that arrives but cannot be decrypted is dropped
+rather than kept to be tried again later.
 
 Matrix normally verifies a new device by asking you to confirm it on one you are
 already signed in to. If DMS is your only signed-in client there is nothing to
 confirm it from — Element offers "start verification on the other device" and
 there is no other device.
 
-So use your **recovery key** instead, under **Settings → Chats → Matrix →
-Verify this device**. That is the key Element gave you when you turned on Secure
-Backup; the passphrase you chose works there too. It unlocks secret storage on
-your homeserver, which holds both the cross-signing keys that mark this device as
-genuinely yours and the backup key that decrypts your history.
+So use your **recovery key** instead, under **Verify this device** on the
+plugin's own settings page (**Settings → Plugins → Matrix Chat**). That is the
+key Element gave you when you turned on Secure Backup; the passphrase you chose
+works there too. It unlocks secret storage on your homeserver, which holds both
+the cross-signing keys that mark this device as genuinely yours and your key
+backup. Verifying is what makes other people's clients trust this device and
+share their keys with it; the backup is restored too, but nothing already
+missed is fetched again to use it on.
 
 The key is sent to the bridge, used, and dropped. It is never written to plugin
 settings or logged.
@@ -96,7 +101,7 @@ Unencrypted rooms are readable immediately either way.
 | Direct messages named after the other person | yes |
 | Spaces | listed and taggable, but they are containers rather than conversations |
 | Invitations | shown in the conversation list, and joined or declined from it |
-| History before this device existed | unlock it with your recovery key, see below |
+| History before this device existed | not shown — see "Signing in creates a new device" above |
 | Backfill of older messages | not yet — the room shows what has arrived since signing in |
 | Search | local only — the DMS store indexes what it has received |
 | Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
@@ -143,7 +148,7 @@ chat filters below. That only hides them; nothing is answered on your behalf.
 
 ## Settings
 
-Under **Settings → Chats → Matrix**:
+On the plugin's own settings page, **Settings → Plugins → Matrix Chat**:
 
 - **Send read receipts** — off still clears your own unread count; it only stops
   telling the sender.
@@ -170,34 +175,40 @@ Under **Settings → Chats → Matrix**:
 key beside it decrypts your message keys. Keep both out of dotfile repos and
 shared backups.
 
-**Sign out** in Settings → Chats logs the device out on the homeserver and
-deletes all three files locally. The crypto store goes with the session
+Signing out logs the device out on the homeserver and deletes the session, the
+crypto store, the sync position and the room cache locally. Stock DMS has no
+Sign out button for it yet; removing the DankMaterialShell session from another
+client (Element: Settings → Sessions) does the same locally on the bridge's next
+sync, and puts the sign-in form back. The crypto store goes with the session
 deliberately: keeping it would leave a later login inheriting keys for a device
-that no longer exists.
+that no longer exists. The sync position goes too, because a new device resumed
+from the old one's position never learns which rooms are encrypted.
 
 ## Troubleshooting
 
 ```sh
-dms chat status matrixChat    # connection state, capabilities, restarts, recent stderr
-dms chat tail matrixChat      # live protocol traffic, both directions
+dms ipc call chats status    # is the chat manager up, and how many providers are on
+quickshell log -f            # the manager's log, lines starting chat-managerd
 ```
 
-`tail` is the useful one: the bridge runs as a child of the daemon, so its output
-is otherwise invisible.
+The bridge runs as a child of the chat manager, which writes why a bridge would
+not start, or keeps restarting, into the shell's log. Set
+`DMS_CHAT_LOG_LEVEL=debug` in the shell's environment to see the bridge's own
+output there too.
 
 | Symptom | Usually |
 |---|---|
 | Will not enable | The bridge is not built — run `./build.sh` |
-| Stuck at "needsLogin" | No session, or the token was revoked. Sign in again from the provider's card |
+| Stuck at "needsLogin" | No session, or the token was revoked. Sign in again in the chat window, or with `./login.sh` |
 | Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
 | Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
-| Messages say they cannot be decrypted | This device is not verified yet — verify it from Element |
+| Messages in an encrypted room never appear | They could not be decrypted, and are not retried. Verify this device with your recovery key, so that new messages are shared with it |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
-| Attachment will not open | `dms chat tail` shows the download error; encrypted media needs the room's keys |
+| Attachment will not open | The download error is in the shell's log (`quickshell log`). Encrypted attachments received before this version were stored without their key and cannot be opened |
 
 If the homeserver revokes the token, the bridge stops rather than retrying
 forever, clears the session and reports `needsLogin`, which puts the sign-in form
-back in the provider's card.
+back in the chat window.
 
 ## Environment
 

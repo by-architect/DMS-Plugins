@@ -13,7 +13,11 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
-    property var pluginService: null
+    // pluginService and pluginData are PluginComponent's own. Declaring
+    // pluginService again here shadowed it: the shell set this copy, the base
+    // type's stayed null, and the base is what loads pluginData -- so every
+    // setting on this plugin's page reached the bridge as an empty object, and
+    // turning read receipts off did nothing.
 
     readonly property var chatManager: {
         const instances = root.pluginService?.pluginDaemonInstances ?? ({});

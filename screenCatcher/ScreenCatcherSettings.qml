@@ -96,7 +96,7 @@ PluginSettings {
     SelectionSetting {
         settingKey: "recordFormat"
         label: "Default recording format"
-        description: "Used by Record Fullscreen and Record Selected. Also switchable from the panel's format chips (3/4). GIF is not a format here — it has its own panel action, 'Record Selected as GIF' (G)."
+        description: "Used by Record Fullscreen and Record Selected. Also switchable from the panel's format chips (3/4). GIF is not a format here — it has its own panel actions, 'Record Selected as GIF' (G) and 'Record Fullscreen as GIF' (Shift+G)."
         defaultValue: "mp4"
         options: [
             {
@@ -121,7 +121,7 @@ PluginSettings {
     SliderSetting {
         settingKey: "gifFps"
         label: "GIF frame rate"
-        description: "Frames per second for 'Record Selected as GIF' (requires ffmpeg)."
+        description: "Frames per second for both GIF recordings, selected and fullscreen (requires ffmpeg)."
         defaultValue: 20
         minimum: 5
         maximum: 30
@@ -143,7 +143,7 @@ PluginSettings {
     StringSetting {
         settingKey: "micDevice"
         label: "Microphone device (optional)"
-        description: "PipeWire/PulseAudio source name. Leave empty to use the system default input."
+        description: "PipeWire/PulseAudio source name. Leave empty to use the system default input. Applies with or without system audio on."
         placeholder: ""
         defaultValue: ""
     }
@@ -151,7 +151,7 @@ PluginSettings {
     StringSetting {
         settingKey: "sysAudioDevice"
         label: "System audio device (optional)"
-        description: "PipeWire/PulseAudio monitor source name. Leave empty to use the default output's monitor."
+        description: "PipeWire/PulseAudio monitor source name (the one ending in .monitor). Leave empty to use the default output's monitor. Applies with or without the microphone on."
         placeholder: ""
         defaultValue: ""
     }

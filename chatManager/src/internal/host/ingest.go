@@ -180,20 +180,27 @@ func (m *Manager) ingestMessages(ctx context.Context, provider string, msgs []wi
 
 	// One transaction for the batch: a history sync arrives in thousands, and
 	// a transaction per message turns a first login into minutes of fsync.
-	if err := m.store.PutMessages(ctx, stored); err != nil {
+	fresh, err := m.store.InsertMessages(ctx, stored)
+	if err != nil {
 		log.Warnf("chat: failed to store %d message(s) from %s: %v", len(stored), provider, err)
 		return
 	}
 
-	for _, msg := range stored {
+	for i, msg := range stored {
+		// Only a message the store had never seen is news. Bridges redeliver
+		// -- a reconnect replays the last few messages, a sync resends what
+		// came in live -- and counting each copy put a conversation's badge
+		// at twice what was waiting, and announced the same message again.
+		isNew := fresh[i]
+
 		// Keep the chat's activity line in step with its newest message, and
 		// create the chat if the bridge never announced it.
-		incrementUnread := !msg.FromMe && !isProtocol(msg.Kind)
+		incrementUnread := isNew && !msg.FromMe && !isProtocol(msg.Kind)
 		if err := m.store.TouchChat(ctx, provider, msg.ChatID, "", msg.Preview(), msg.TS, false, incrementUnread); err != nil {
 			log.Warnf("chat: failed to touch chat %s/%s: %v", provider, msg.ChatID, err)
 		}
 
-		if !live {
+		if !live || !isNew {
 			continue
 		}
 		// While the provider is still catching up this is put aside rather

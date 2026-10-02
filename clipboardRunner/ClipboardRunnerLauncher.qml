@@ -60,14 +60,13 @@ Item {
     property bool listingDevices: false
     property double devicesListedAt: 0
 
-    // getItems() has to answer synchronously, and the shell currently has no
-    // hook for a launcher plugin to say "my list changed" -- neither
-    // itemsChanged nor PluginService.requestLauncherUpdate is connected to
-    // anything. So the clipboard is kept cached ahead of time rather than
-    // fetched on demand: read once when the instance is created, and again
-    // whenever the clipboard changes. That is one small socket round trip per
-    // copy, and only after the runner has been used at least once, because the
-    // instance itself is created lazily by ensureLauncherInstance().
+    // getItems() has to answer synchronously, so the clipboard is kept cached
+    // ahead of time rather than fetched on demand: read once when the instance
+    // is created, and again whenever the clipboard changes. That is one small
+    // socket round trip per copy, and only after the runner has been used at
+    // least once, because the instance itself is created lazily by
+    // ensureLauncherInstance(). A read that lands while the launcher is open
+    // still shows up by itself -- see _refreshLauncher.
     property var detail: null
     property bool reading: false
     property string readError: ""
@@ -130,9 +129,12 @@ Item {
         actions = Array.isArray(loaded) ? loaded : [];
     }
 
-    // Both of these are no-ops in the shell as it stands; they are here so the
-    // plugin behaves correctly if a refresh hook is ever wired up. The list
-    // staying correct does not depend on them -- see the note above.
+    // requestLauncherUpdate is what redraws an open launcher: the launcher's
+    // controller listens for it and runs its current search again, so a
+    // clipboard read, a device list or a settings edit that lands while the
+    // list is showing replaces it without anything being typed. itemsChanged
+    // is not connected to anything in the shell; it is only emitted for the
+    // plugin contract's sake.
     function _refreshLauncher() {
         itemsChanged();
         if (pluginService && typeof pluginService.requestLauncherUpdate === "function")
@@ -274,11 +276,16 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
         if (actions.length === 0 && !canShare && kdeDevices.length === 0)
             return [_statusItem("settings", "No clipboard actions yet", "Add one in Settings → Plugins → Clipboard Runner")];
 
-        // Only reachable before the first read has landed -- typing another
-        // character re-runs this and by then the cache is warm.
+        // Only reachable before the first read has landed. The read redraws
+        // the launcher itself when it lands, so this row is replaced without
+        // typing anything -- unless DMS is not connected, where the read
+        // fails on the spot without ever sending a request; that falls
+        // through to the error row below instead of claiming a read is
+        // still on its way.
         if (!detail && !readError) {
             _readClipboard();
-            return [_statusItem("hourglass_empty", "Reading the clipboard…", "Type another character")];
+            if (!detail && !readError)
+                return [_statusItem("hourglass_empty", "Reading the clipboard…", "")];
         }
 
         if (!detail)
@@ -455,7 +462,9 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
             PopoutService.openDankLauncherV2WithQuery(query);
             return;
         }
-        Quickshell.execDetached(["dms", "ipc", "call", "spotlight", "openQuery", query]);
+        // Proc.dmsBin for the same reason the presets go through
+        // $DMS_EXECUTABLE: the shell's children don't always have dms on PATH.
+        Quickshell.execDetached([Proc.dmsBin, "ipc", "call", "spotlight", "openQuery", query]);
     }
 
     function executeItem(item) {
@@ -499,7 +508,7 @@ fi', "materialise", file, String(current.id)], function (output, exitCode) {
                 text: "Copy the command",
                 action: () => {
                     const line = Clipboard.preview(entry, root.detail, root.ctx);
-                    Quickshell.execDetached(["dms", "cl", "copy", line]);
+                    Quickshell.execDetached([Proc.dmsBin, "cl", "copy", line]);
                     root._toast("Copied", line);
                 }
             }

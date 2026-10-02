@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Common
 import qs.Services
 
 // Launcher provider backed by `nix search <flake> <regex...> --json`.
@@ -236,10 +237,26 @@ Item {
         interval: 4000
         repeat: false
         onTriggered: {
-            if (!searchProcess.running)
+            if (searchProcess.running) {
+                root._slow = true;
+                root._notify();
                 return;
-            root._slow = true;
+            }
+            if (root._exitDone)
+                return;
+            // Not running, and no exit ever reported: the binary couldn't be
+            // started at all (a wrong nix path in settings). Quickshell sends
+            // no exited signal for that, so nothing else would ever end this
+            // run - the row sat on "Searching nixpkgs…" indefinitely, and
+            // every keystroke quietly launched the same failing command
+            // again. Failing the query here gives it the usual error row,
+            // which also stops that query being relaunched until Enter asks
+            // for a retry.
+            timeoutTimer.stop();
+            root._runningQuery = "";
+            root._fail(searchProcess.queryForRun, "Could not start '" + root.nixBin + "'. Check the nix binary in this plugin's settings.");
             root._notify();
+            root._pump();
         }
     }
 
@@ -522,8 +539,11 @@ Item {
         return flakeRef + "#" + entry.attr;
     }
 
+    // Proc.dmsBin, not a bare "dms": the shell hands its children
+    // $DMS_EXECUTABLE, but doesn't always have dms itself on PATH - and this
+    // is the default Enter action, so it failing would be most of the plugin.
     function _copy(text, label) {
-        Quickshell.execDetached(["dms", "cl", "copy", text]);
+        Quickshell.execDetached([Proc.dmsBin, "cl", "copy", text]);
         _toast(label, text);
     }
 

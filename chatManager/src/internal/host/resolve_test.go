@@ -32,6 +32,17 @@ func seedResolvable(t *testing.T, m *Manager) {
 	} {
 		require.NoError(t, m.Store().UpsertChat(ctx, c))
 	}
+	switchOn(m, "whatsappChat", "mailChat", "echoChat")
+}
+
+// switchOn marks providers enabled without starting a bridge for them, which is
+// all resolving needs: it answers from switched-on providers only.
+func switchOn(m *Manager, providers ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range providers {
+		m.enabled[id] = true
+	}
 }
 
 func TestResolveByQualifiedID(t *testing.T) {
@@ -92,6 +103,7 @@ func TestResolveFindsChatsWithNoMessages(t *testing.T) {
 	require.NoError(t, m.Store().UpsertChat(ctx, chat.Chat{
 		Provider: "whatsappChat", ID: "553311220099@lid", Name: "Katherine Johnson",
 		Handles: []string{"+905550001122"}}))
+	switchOn(m, "whatsappChat")
 
 	byName := m.Resolve(ctx, "Katherine", 10)
 	require.NotEmpty(t, byName, "a known contact with no history should still be findable")
@@ -170,8 +182,47 @@ func TestResolveOrdersEqualScoresByRecency(t *testing.T) {
 		Provider: "a", ID: "old", Name: "Project Falcon", LastTS: 1000}))
 	require.NoError(t, m.Store().UpsertChat(ctx, chat.Chat{
 		Provider: "a", ID: "new", Name: "Project Condor", LastTS: 9000}))
+	switchOn(m, "a")
 
 	got := m.Resolve(ctx, "project", 10)
 	require.Len(t, got, 2)
 	assert.Equal(t, "new", got[0].ChatID, "the more recent conversation comes first")
+}
+
+// A provider that is switched off keeps its conversations but does not offer
+// them: the launcher must not list somebody on a service that is turned off.
+func TestResolveSkipsSwitchedOffProviders(t *testing.T) {
+	m := newTestManager(t, t.TempDir())
+	seedResolvable(t, m)
+	ctx := context.Background()
+
+	m.mu.Lock()
+	m.enabled["mailChat"] = false
+	m.mu.Unlock()
+
+	assert.Empty(t, m.Resolve(ctx, "ada@example.com", 10),
+		"a handle that only a switched-off provider knows should match nothing")
+	assert.Empty(t, m.Resolve(ctx, "mailChat:thread-8812", 10),
+		"nor should its conversation by qualified id")
+
+	for _, c := range m.Resolve(ctx, "ada", 10) {
+		assert.NotEqual(t, "mailChat", c.Provider)
+	}
+}
+
+// Anything with a colon in it looks like provider:chatId. Asking the store about
+// a provider that does not exist must not create one.
+func TestResolveColonQueryCreatesNoStore(t *testing.T) {
+	m := newTestManager(t, t.TempDir())
+	seedResolvable(t, m)
+	ctx := context.Background()
+
+	for _, query := range []string{"10:30", "re: lunch", "../../escape:x"} {
+		m.Resolve(ctx, query, 10)
+	}
+
+	for _, provider := range m.Store().Providers() {
+		assert.Contains(t, []string{"whatsappChat", "mailChat", "echoChat"}, provider,
+			"resolving created a store for %q", provider)
+	}
 }

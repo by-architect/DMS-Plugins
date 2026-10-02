@@ -49,6 +49,9 @@ func (m *MultiStore) For(provider string) (*HistoryStore, error) {
 	if provider == "" {
 		return nil, fmt.Errorf("no provider given")
 	}
+	if !validProviderID(provider) {
+		return nil, fmt.Errorf("not a provider id: %q", provider)
+	}
 
 	m.mu.RLock()
 	s, ok := m.open[provider]
@@ -76,6 +79,20 @@ func (m *MultiStore) For(provider string) (*HistoryStore, error) {
 	}
 	m.open[provider] = store
 	return store, nil
+}
+
+// validProviderID guards the one place a provider id becomes a path.
+//
+// Ids come from plugin manifests, but also from whatever reaches the socket,
+// and For creates a directory for what it is handed. A launcher query such as
+// "10:30" used to be tried as provider "10" and leave a database behind named
+// after it -- and one with a slash in it would have been made somewhere else
+// entirely.
+func validProviderID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	return !strings.ContainsAny(id, "/\\\x00")
 }
 
 // Providers lists every provider that has a database, whether or not it is
@@ -284,6 +301,41 @@ func (m *MultiStore) PutMessages(ctx context.Context, msgs []Message) error {
 	return nil
 }
 
+// InsertMessages is PutMessages reporting which messages were new, in the
+// order they were passed -- see HistoryStore.InsertMessages.
+func (m *MultiStore) InsertMessages(ctx context.Context, msgs []Message) ([]bool, error) {
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	// Grouped by provider so each batch stays one transaction, with each
+	// message remembering where it came from so the answers line up again.
+	byProvider := map[string][]int{}
+	for i, msg := range msgs {
+		byProvider[msg.Provider] = append(byProvider[msg.Provider], i)
+	}
+
+	fresh := make([]bool, len(msgs))
+	for provider, positions := range byProvider {
+		s, err := m.For(provider)
+		if err != nil {
+			return nil, err
+		}
+		batch := make([]Message, len(positions))
+		for j, i := range positions {
+			batch[j] = msgs[i]
+		}
+		got, err := s.InsertMessages(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		for j, i := range positions {
+			fresh[i] = got[j]
+		}
+	}
+	return fresh, nil
+}
+
 func (m *MultiStore) Page(ctx context.Context, provider, chatID string, before int64, limit int) ([]Message, bool, error) {
 	s, err := m.For(provider)
 	if err != nil {
@@ -488,6 +540,35 @@ func (m *MultiStore) UnreadMessagesIn(ctx context.Context, providers []string, l
 		all = all[:limit]
 	}
 	return all, err
+}
+
+// SearchChatsIn is SearchChats restricted to the named providers.
+func (m *MultiStore) SearchChatsIn(ctx context.Context, providers []string, query string, limit int) ([]Chat, error) {
+	var all []Chat
+	err := m.eachIn(providers, func(_ string, s *HistoryStore) error {
+		chats, err := s.SearchChats(ctx, query, limit)
+		if err != nil {
+			return err
+		}
+		all = append(all, chats...)
+		return nil
+	})
+	return trimChats(all, limit), err
+}
+
+// UnreadTotalsIn is each named provider's UnreadTotal. A provider with no
+// database yet, or one that will not open, has nothing waiting.
+func (m *MultiStore) UnreadTotalsIn(ctx context.Context, providers []string) map[string]int {
+	out := make(map[string]int, len(providers))
+	_ = m.eachIn(providers, func(provider string, s *HistoryStore) error {
+		n, err := s.UnreadTotal(ctx)
+		if err != nil {
+			return err
+		}
+		out[provider] = n
+		return nil
+	})
+	return out
 }
 
 func (m *MultiStore) SearchChats(ctx context.Context, query string, limit int) ([]Chat, error) {

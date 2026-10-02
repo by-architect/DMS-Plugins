@@ -162,8 +162,48 @@ PanelWindow {
         focusAnchor.forceActiveFocus();
     }
 
-    Component.onCompleted: TailscaleService.refCount++
-    Component.onDestruction: TailscaleService.refCount--
+    // DMS only scans for WiFi networks while something is showing the list —
+    // its own network detail holds a NetworkService reference for exactly as
+    // long as it is open. Without one of its own, the WiFi container showed
+    // whatever the last scan anyone else asked for had found, so a network
+    // that came into range since never appeared on the one surface whose
+    // point is connecting to it. Held only while open: the window outlives
+    // every close, and a reference left behind would keep the radio scanning
+    // every 10 seconds for good.
+    property bool holdsScanRef: false
+
+    function syncScanRef() {
+        if (open === holdsScanRef)
+            return;
+        holdsScanRef = open;
+        if (open)
+            NetworkService.addRef();
+        else
+            NetworkService.removeRef();
+    }
+
+    // Every open starts in panel mode with an empty search. The window is
+    // only hidden on close, never destroyed, so closing it while typing (bar
+    // pill, close button, the IPC toggle) used to bring it back with the
+    // field still focused — the letters typed text instead of toggling,
+    // contrary to the README — and the lists still filtered by the old query.
+    onOpenChanged: {
+        syncScanRef();
+        if (open) {
+            clearSearch();
+            focusAnchor.forceActiveFocus();
+        }
+    }
+
+    Component.onCompleted: {
+        TailscaleService.refCount++;
+        syncScanRef();
+    }
+    Component.onDestruction: {
+        TailscaleService.refCount--;
+        if (holdsScanRef)
+            NetworkService.removeRef();
+    }
 
     visible: open
     color: "transparent"
@@ -243,6 +283,13 @@ PanelWindow {
                     event.accepted = true;
                     return;
                 }
+
+                // A bare letter is a toggle; with Ctrl/Alt/Meta held it is
+                // some other shortcut. Ctrl+W above all: that is the search
+                // field's delete-word, and pressed once Enter or Esc had
+                // already handed focus back to the panel it switched WiFi off.
+                if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))
+                    return;
 
                 switch (event.key) {
                 case Qt.Key_W:

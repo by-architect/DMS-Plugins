@@ -33,5 +33,6 @@ fi
 
 echo "signal-cli: $(command -v signal-cli) ($(signal-cli --version 2>/dev/null || echo 'version unknown'))"
 echo
-echo "Now enable Signal under Settings -> Chats, and scan the QR code with"
-echo "Signal on your phone (Settings -> Linked devices -> Link New Device)."
+echo "Now enable Signal Chat (and Chat Manager) under Settings -> Plugins, open the"
+echo "chat window, and scan the QR code it shows with Signal on your phone"
+echo "(Settings -> Linked devices -> Link New Device)."

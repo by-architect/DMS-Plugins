@@ -22,8 +22,8 @@ PluginComponent {
 
     // The loader stays active for the plugin's lifetime; the window's own
     // `open` property (not the loader's `active`) controls visibility, so
-    // search results and the local folder scan persist across opens instead
-    // of being rebuilt every time.
+    // Wallhaven search results persist across opens instead of being rebuilt
+    // every time. The local folder is rescanned once per open.
     LazyLoader {
         id: panelLoader
 

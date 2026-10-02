@@ -13,7 +13,10 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
-    property var pluginService: null
+    // pluginService and pluginData both come from PluginComponent. Declaring
+    // pluginService again here shadowed the one the base type loads pluginData
+    // through: the shell filled this copy, the original stayed null, and every
+    // setting reached the bridge as an empty object.
 
     readonly property var chatManager: {
         const instances = root.pluginService?.pluginDaemonInstances ?? ({});

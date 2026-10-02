@@ -126,6 +126,7 @@ PluginComponent {
     function syncTracked() {
         const vis = root.visibleList();
         const next = [];
+        let added = false;
         for (const w of vis) {
             let e = root.entryFor(w);
             if (!e) {
@@ -134,12 +135,34 @@ PluginComponent {
                     "at": Date.now(),
                     "holds": 0
                 };
+                added = true;
                 if (root.ownsTiming && w.timer)
                     w.timer.stop();
             }
             next.push(e);
         }
         root.tracked = next;
+        if (added && root.ownsTiming)
+            Qt.callLater(root.silenceShellTimers);
+    }
+
+    // The stop in syncTracked() is not enough on its own. processQueue()
+    // starts a new wrapper's timer as the very last step of putting it on
+    // screen -- after the visibleNotifications and popups signals that
+    // syncTracked() runs from have already fired -- so that stop lands first
+    // and is undone a moment later. Left running, the shell's timer retires
+    // the line at the app's or the shell's timeout whatever this clock says:
+    // hovering and unfolding hold nothing, a longer lifetime is cut short, and
+    // app timeouts are not ignored at all. So the stop is repeated once the
+    // arrival has finished, and on every reap tick for anything else that
+    // starts one again.
+    function silenceShellTimers() {
+        if (!root.ownsTiming)
+            return;
+        for (const e of root.tracked) {
+            if (e.w && e.w.timer && e.w.timer.running)
+                e.w.timer.stop();
+        }
     }
 
     // Called by every line that starts or stops hovering/unfolding. Holds are
@@ -169,6 +192,7 @@ PluginComponent {
     }
 
     function reap() {
+        root.silenceShellTimers();
         const now = Date.now();
         for (const e of root.tracked) {
             if (!e.w || e.holds > 0)
@@ -231,6 +255,17 @@ PluginComponent {
         function onVisibleNotificationsChanged() {
             root.syncTracked();
         }
+
+        // A duplicate of something already on screen is dropped, and the
+        // shell restarts the original's timer instead -- but only a running
+        // one, and while this clock owns the line that timer is stopped. So
+        // the line's own countdown starts over here, as the shipped popup's
+        // would.
+        function onNotificationDeduplicated(wrapper) {
+            const e = root.entryFor(wrapper);
+            if (e && e.holds === 0)
+                e.at = Date.now();
+        }
     }
 
     // ---- one-at-a-time actions, for keybinds -----------------------------
@@ -240,9 +275,12 @@ PluginComponent {
         return root.retire(list[list.length - 1]);
     }
 
+    // The oldest line *drawn*. Past "Lines on screen" the oldest notifications
+    // are held back rather than shown, and retiring one of those would change
+    // nothing anybody can see.
     function dismissOldest() {
         const list = root.visibleList();
-        return root.retire(list[0]);
+        return root.retire(list[Math.max(0, list.length - root.maxLines)]);
     }
 
     // Puts the most recent notification that is not currently a line back on
@@ -259,6 +297,11 @@ PluginComponent {
             if (NotificationService.visibleNotifications.indexOf(w) === -1)
                 NotificationService.visibleNotifications = [...NotificationService.visibleNotifications, w];
             root.syncTracked();
+            // Under the shell's clock nothing else would start this one's
+            // timer -- processQueue() only times notifications on their way
+            // in -- so a recalled line would stay up until dismissed.
+            if (!root.ownsTiming && w.timer && w.timer.interval > 0)
+                w.timer.restart();
             return w;
         }
         return null;
@@ -335,14 +378,22 @@ PluginComponent {
     // full lifetime like every other.
     readonly property int serviceCap: Math.max(24, root.maxLines * 2)
 
-    // A Binding rather than an assignment on load with a restore on unload:
-    // reloading the plugin overlaps two generations, and the outgoing one's
-    // restore can land after the incoming one has already applied its value,
-    // silently leaving the shell on whatever the older generation had saved.
+    // A Binding, so the shell gets its own limit back when the plugin goes.
+    // But a Binding only restores when `when` turns false -- destroying one
+    // leaves its target exactly where it put it, so after the plugin was
+    // disabled the shipped cards came back allowed two dozen deep instead of
+    // four, until the shell restarted. `unloading` is what drops it, first
+    // thing in onDestruction. On a reload that restore lands before the next
+    // generation applies its own value: PluginService destroys the outgoing
+    // daemon and only spawns the incoming one from a zero-interval timer,
+    // after the deferred destroy has run.
+    property bool unloading: false
+
     Binding {
         target: NotificationService
         property: "maxVisibleNotifications"
         value: root.serviceCap
+        when: !root.unloading
         restoreMode: Binding.RestoreBindingOrValue
     }
 
@@ -353,6 +404,7 @@ PluginComponent {
     }
 
     Component.onDestruction: {
+        root.unloading = true;
         releaseTiming();
         releaseSuppression();
     }
@@ -384,6 +436,9 @@ PluginComponent {
 
         function clearAll(): string {
             const n = NotificationService.notifications.length;
+            // clearAllNotifications() returns early when the centre is empty,
+            // which leaves transient lines -- `test` sends one -- on screen.
+            NotificationService.dismissAllPopups();
             NotificationService.clearAllNotifications();
             return "CLEARED " + n;
         }

@@ -4,12 +4,14 @@ Connects DMS to WhatsApp as a **linked device**, the same way WhatsApp Web and t
 Your conversations, media, replies and read receipts show up in the DMS chat window.
 
 This is a DMS *chat plugin*: it ships a small program called a **bridge** rather than QML. The
-bridge translates WhatsApp into newline-delimited JSON and hands it to the DMS backend, which owns
-the message store, unread counts, the attachment cache, notifications and search. See
-`docs/CHAT-PLUGINS.md` in the DankMaterialShell repository for the contract.
+bridge translates WhatsApp into newline-delimited JSON and hands it to the **Chat Manager** plugin
+(`chatManager`), which owns the message store, unread counts, the attachment cache, notifications
+and search. The contract is `chatManager/src/internal/host/protocol.go`, with the additions
+described in `chatManager/README.md`.
 
 ## Requirements
 
+- The **Chat Manager** plugin, which runs the bridge and provides the chat window.
 - **Go**, to build the bridge. It is not shipped prebuilt because it has to be compiled for your
   machine.
 - A phone with WhatsApp, to link the device.
@@ -22,7 +24,9 @@ cd ~/.config/DankMaterialShell/plugins/whatsappChat
 ./build.sh
 ```
 
-Then open **Settings → Chats**, enable **WhatsApp**, and scan the QR code with your phone under
+Then enable **WhatsApp Chat** under **Settings → Plugins**, with Chat Manager enabled as well. Its
+options — history sync, attachment downloads, chat filters — are in its own settings page there.
+Signing in happens in the chat window: open it, and it shows a QR code to scan with your phone under
 *Settings → Linked devices → Link a device*.
 
 The plugin refuses to enable until the bridge is built, and tells you so rather than sitting
@@ -36,29 +40,32 @@ silently at "disconnected".
 | Replies | yes |
 | Photos, video, voice notes, documents, stickers | yes |
 | Read receipts (sent / delivered / read) | yes |
+| Read state synced from your phone | yes |
 | Groups, with sender names | yes |
 | Delete for everyone | yes |
 | History backfill on first link | yes, optional |
 | Search | local only — the DMS store indexes messages; WhatsApp has no server-side search |
 | Reactions, polls, calls, status updates | not modelled by the contract yet |
 
-Newsletters and broadcast lists are filtered out. They are feeds rather than conversations, and in
-a busy account they bury everything else.
+Channels (newsletters), statuses and broadcast lists are not dropped: each is tagged, and **Chat
+filters** in this plugin's settings hides any of them from the conversation list and the chat
+runner. Hidden is only hidden — search still finds them, and nothing is deleted.
 
 ## Where your data lives
 
 | What | Where | Who owns it |
 |---|---|---|
 | WhatsApp session (the linked device itself) | `~/.local/share/dms-whatsapp/session.db`, mode 0600 | this plugin |
-| Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
+| Messages and conversations | `~/.local/share/DankMaterialShell/chat/stores/whatsappChat/history.db` | Chat Manager |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/whatsappChat/` | DMS |
 | Plugin settings | `~/.config/DankMaterialShell/plugin_settings.json` | DMS |
 
 **The session database is your WhatsApp account.** Anyone who can read it can read your messages.
 It is created 0600 in a 0700 directory; keep it out of dotfile repos and backups you share.
 
-To unlink, use *Sign out* in Settings → Chats, or remove the device from your phone. Deleting
-`~/.local/share/dms-whatsapp/` locally leaves the device still linked on WhatsApp's side.
+To unlink, remove the device on your phone under *Linked devices* — there is no Sign out button in
+the chat window. It then offers to sign in again. Deleting `~/.local/share/dms-whatsapp/` locally
+leaves the device still linked on WhatsApp's side.
 
 ## Attachments
 
@@ -72,21 +79,17 @@ conversation refreshes it.
 
 ## Debugging
 
-```bash
-dms chat providers              # is it discovered, is it running
-dms chat status whatsappChat    # state, capabilities, restart count, recent stderr
-dms chat tail whatsappChat      # live protocol traffic in both directions
-```
-
-The bridge is also a plain program reading stdin and writing stdout, so you can drive it directly
-without DMS involved at all:
+Stock DMS has no `dms chat` command. The bridge is a plain program reading stdin and writing
+stdout, though, so you can drive it directly without DMS involved at all. Switch the plugin off
+first: two copies of the bridge on one session take turns knocking each other offline.
 
 ```bash
 printf '%s\n' '{"id":1,"method":"configure","params":{"settings":{},"mediaDir":"/tmp"}}' \
   | ./bin/whatsapp-chat-bridge
 ```
 
-That prints the handshake, then a live pairing QR string.
+That prints the handshake, then a live pairing QR string — or, for a device that is already
+linked, the connection coming up.
 
 ## A note on trust
 

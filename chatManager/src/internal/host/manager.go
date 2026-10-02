@@ -12,6 +12,7 @@ import (
 
 	"dmschatmanager/internal/chat"
 	"dmschatmanager/internal/log"
+	"dmschatmanager/internal/notify"
 	"github.com/AvengeMedia/dankgo/syncmap"
 )
 
@@ -95,6 +96,13 @@ type Manager struct {
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	startedAt time.Time
+
+	// onOpen is told when a notification is clicked: which conversation to
+	// show, or nothing for the window. Set by whoever owns the connections to
+	// the shell, since the click arrives from the notification server rather
+	// than through any one of them.
+	openMu sync.Mutex
+	onOpen func(provider, chatID string)
 }
 
 // NewManager opens the store and discovers installed chat plugins. Bridges are
@@ -154,12 +162,65 @@ func NewManager() (*Manager, error) {
 
 	m.Rescan()
 
-	m.wg.Add(3)
+	m.wg.Add(4)
 	go m.ingestLoop()
 	go m.broadcastLoop()
 	go m.gcLoop()
+	go m.watchNotifications()
 
 	return m, nil
+}
+
+// SetOpenHandler names who is told when a notification asks to open a
+// conversation.
+func (m *Manager) SetOpenHandler(fn func(provider, chatID string)) {
+	m.openMu.Lock()
+	defer m.openMu.Unlock()
+	m.onOpen = fn
+}
+
+func (m *Manager) requestOpen(provider, chatID string) {
+	m.openMu.Lock()
+	fn := m.onOpen
+	m.openMu.Unlock()
+
+	if fn != nil {
+		fn(provider, chatID)
+	}
+}
+
+// watchNotifications answers clicks on the notifications this manager raised.
+//
+// A chat notification that could not be clicked through to its conversation was
+// the one thing everybody tries first and the one thing that did nothing. The
+// notification server reports the click on the session bus, so this listens
+// there for as long as the manager runs.
+func (m *Manager) watchNotifications() {
+	defer m.wg.Done()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-m.stopChan:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	err := notify.Listen(ctx, func(id uint32, action string) {
+		if action != "default" {
+			return
+		}
+		provider, chatID, ok := m.notify.Target(id)
+		if !ok {
+			return
+		}
+		m.requestOpen(provider, chatID)
+	}, m.notify.Forget)
+	if err != nil {
+		log.Warnf("chat: clicking a notification will not open its conversation: %v", err)
+	}
 }
 
 // Rescan re-reads the plugin directories, picking up newly installed or
@@ -204,9 +265,11 @@ func (m *Manager) SetConfig(c Config) {
 	m.config = c
 	m.mu.Unlock()
 
+	// The limit changes on the cache everything already holds. Replacing the
+	// cache with a new one was a write to a pointer other goroutines were
+	// reading without a lock, and the notification policy kept the old one.
 	if c.MediaCacheMaxBytes > 0 {
-		root := m.media.Root()
-		m.media = chat.NewMedia(root, c.MediaCacheMaxBytes)
+		m.media.SetMaxSize(c.MediaCacheMaxBytes)
 	}
 }
 
@@ -417,14 +480,15 @@ func (m *Manager) Providers(ctx context.Context) []ProviderStatus {
 	}
 	m.mu.RUnlock()
 
-	unread := map[string]int{}
-	if chats, err := m.store.Chats(ctx, 500); err == nil {
-		for _, c := range chats {
-			if !c.Archived {
-				unread[c.Provider] += c.Unread
-			}
-		}
+	// One sum per provider rather than reading conversations back to add them
+	// up: this runs on every broadcast, which during a sync is several times a
+	// second, and five hundred full conversation rows each time was the most
+	// expensive part of telling the window that something changed.
+	ids := make([]string, 0, len(providers))
+	for _, p := range providers {
+		ids = append(ids, p.ID)
 	}
+	unread := m.store.UnreadTotalsIn(ctx, ids)
 
 	out := make([]ProviderStatus, 0, len(providers))
 	for _, p := range providers {
@@ -455,7 +519,10 @@ func (m *Manager) GetState() State {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	chats, err := m.store.Chats(ctx, 200)
+	// Switched-on providers only, the same as chat.chats answers. Reading every
+	// store here put a disabled provider's conversations back in the window --
+	// and in its unread count -- with the first push after it was turned off.
+	chats, err := m.store.ChatsIn(ctx, m.EnabledProviders(), 200)
 	if err != nil {
 		log.Warnf("chat: failed to read chats: %v", err)
 	}
@@ -480,17 +547,30 @@ func (m *Manager) GetState() State {
 // ---------------------------------------------------------------- subscribe
 
 // Subscribe registers a state channel for a client.
+//
+// The channel is never closed. broadcastLoop sends on whatever channels it
+// found a moment earlier, and a client unsubscribing in between -- a chat window
+// closing as a message lands -- used to close one under it, which panics and
+// takes the manager down. A reader stops through its own context instead, and a
+// channel nobody holds is simply collected.
 func (m *Manager) Subscribe(id string) chan State {
 	ch := make(chan State, 8)
 	m.subscribers.Store(id, ch)
 	return ch
 }
 
-// Unsubscribe removes a client's channel.
+// Unsubscribe removes a client's channel, whichever one it is.
 func (m *Manager) Unsubscribe(id string) {
-	if ch, ok := m.subscribers.LoadAndDelete(id); ok {
-		close(ch)
-	}
+	m.subscribers.Delete(id)
+}
+
+// UnsubscribeChannel removes a client's channel only if it is still this one.
+//
+// A stream ending must not remove the subscription that replaced it: closing
+// and reopening the window inside one broadcast window would otherwise leave the
+// reopened one with no stream at all.
+func (m *Manager) UnsubscribeChannel(id string, ch chan State) {
+	syncmap.CompareAndDelete(&m.subscribers, id, ch)
 }
 
 // markDirty schedules a state broadcast. Coalescing happens in broadcastLoop.

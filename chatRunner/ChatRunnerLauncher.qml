@@ -75,6 +75,19 @@ Item {
     readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
     readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
 
+    // _refreshLauncher tells the launcher to ask for the list again, once an
+    // answer it was waiting for has arrived.
+    //
+    // It is a signal carrying a plugin id: the launcher only re-asks the
+    // plugin it names, and emitting it without one throws. This went missing
+    // in a merge, so the reply handlers below threw instead of refreshing --
+    // the conversations loaded and the launcher was never told, and "c " sat on
+    // "Loading conversations…" until another key was pressed.
+    function _refreshLauncher() {
+        if (root.pluginService)
+            root.pluginService.requestLauncherUpdate("chatRunner");
+    }
+
     // Nothing subscribes to the manager from here.
     //
     // There was a Ref holding the chat subscription open, which never worked:
@@ -125,7 +138,7 @@ Item {
         root._ensureLoaded();
 
         if (root._allChats.length === 0) {
-            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings → Plugins");
         }
 
         return root._toItems(root._filter(q), q);
@@ -475,8 +488,7 @@ Item {
                 "ts": Date.now()
             };
 
-            if (root.pluginService)
-                root.pluginService.requestLauncherUpdate();
+            root._refreshLauncher();
         });
     }
 
@@ -488,7 +500,7 @@ Item {
         root._ensureLoaded();
 
         if (root._allChats.length === 0) {
-            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings, Chats");
+            return root._loading ? root._statusItem("hourglass_empty", "Loading conversations…", "") : root._statusItem("search_off", "No conversations", "Enable a chat provider under Settings → Plugins");
         }
 
         const entries = root._filter(query);

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"time"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -52,10 +53,32 @@ type publishingSyncer struct {
 
 func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.RespSync, since string) error {
 	if err := s.DefaultSyncer.ProcessResponse(ctx, resp, since); err != nil {
+		// What the response did get through is sent rather than dropped: the
+		// position was saved before processing, so nothing re-delivers it.
+		s.b.flushHistory()
 		return err
 	}
 	s.b.afterSync(resp, since)
 	return nil
+}
+
+// OnFailedSync is mautrix about to retry a sync that did not go through: the
+// network gone, the homeserver restarting.
+//
+// mautrix retries these by itself and never returns from the sync loop for
+// them, so runSync never heard of an outage. The bridge went on reporting
+// connected through all of it, and the host -- which holds back what arrives
+// during a catch-up and judges it once a provider says connected again --
+// announced the backlog message by message instead, including messages read on
+// another device in the meantime.
+func (s *publishingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Duration, error) {
+	wait, fatal := s.DefaultSyncer.OnFailedSync(res, err)
+	if fatal == nil {
+		// Not on a fatal one: that is a revoked token, and runSync is about to
+		// say needsLogin instead.
+		s.b.markDegraded(err)
+	}
+	return wait, fatal
 }
 
 // afterSync publishes the room list once the cache is populated.
@@ -68,6 +91,11 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	recovered := b.degraded
 	b.degraded = false
 	b.mu.Unlock()
+
+	// The history an initial sync carried goes out before anything else, and
+	// before connected: it is the conversation everything after it follows on
+	// from. See onMessage for why it was held back.
+	b.flushHistory()
 
 	// Membership first, and on every sync rather than only incremental ones:
 	// an invitation is mentioned once and never again, so a response skipped
@@ -173,17 +201,18 @@ func (b *bridge) publishSome(roomIDs []id.RoomID) {
 
 // chatFor assembles the contract's view of a room.
 func (b *bridge) chatFor(roomID id.RoomID) chatObj {
-	b.mu.RLock()
-	info := b.rooms[roomID]
-	b.mu.RUnlock()
-
 	chat := chatObj{
 		ID:      string(roomID),
 		Name:    b.displayName(roomID),
 		Handles: b.handlesFor(roomID),
 		Tags:    b.tagsFor(roomID),
 	}
-	if info != nil {
+
+	// The record is read under the lock, not merely looked up under it: the
+	// sync loop writes these fields while this runs from publishing goroutines.
+	b.mu.RLock()
+	invited := false
+	if info := b.rooms[roomID]; info != nil {
 		// A room is a group unless Matrix has been told it is a direct chat.
 		chat.IsGroup = !info.IsDirect
 		chat.Subject = info.Topic
@@ -193,9 +222,16 @@ func (b *bridge) chatFor(roomID id.RoomID) chatObj {
 		// line: the host hides conversations that have never had any, which is
 		// exactly what an unanswered invitation looks like without this.
 		if info.Invited {
+			invited = true
 			chat.LastTS = info.InviteTS
-			chat.LastText = b.inviteLine(roomID)
 		}
+	}
+	b.mu.RUnlock()
+
+	// After the lock is released: inviteLine takes it again, and a second read
+	// lock while holding the first deadlocks as soon as a writer is waiting.
+	if invited {
+		chat.LastText = b.inviteLine(roomID)
 	}
 	return chat
 }
@@ -207,7 +243,7 @@ func (b *bridge) onRoomName(ctx context.Context, evt *event.Event) {
 	if !ok {
 		return
 	}
-	b.room(evt.RoomID).Name = content.Name
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.Name = content.Name })
 	b.touchRoom(evt.RoomID)
 }
 
@@ -216,7 +252,7 @@ func (b *bridge) onCanonicalAlias(ctx context.Context, evt *event.Event) {
 	if !ok {
 		return
 	}
-	b.room(evt.RoomID).Alias = string(content.Alias)
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.Alias = string(content.Alias) })
 	b.touchRoom(evt.RoomID)
 }
 
@@ -225,7 +261,7 @@ func (b *bridge) onTopic(ctx context.Context, evt *event.Event) {
 	if !ok {
 		return
 	}
-	b.room(evt.RoomID).Topic = content.Topic
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.Topic = content.Topic })
 }
 
 // onMember tracks who is in a room and what they are called there.
@@ -278,7 +314,7 @@ func (b *bridge) onMember(ctx context.Context, evt *event.Event) {
 }
 
 func (b *bridge) onEncryption(ctx context.Context, evt *event.Event) {
-	b.room(evt.RoomID).Encrypted = true
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.Encrypted = true })
 	b.touchRoom(evt.RoomID)
 }
 
@@ -288,7 +324,7 @@ func (b *bridge) onCreate(ctx context.Context, evt *event.Event) {
 		return
 	}
 	// A space is a container for other rooms, not a conversation.
-	b.room(evt.RoomID).IsSpace = content.Type == event.RoomTypeSpace
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.IsSpace = content.Type == event.RoomTypeSpace })
 	b.touchRoom(evt.RoomID)
 }
 
@@ -297,7 +333,7 @@ func (b *bridge) onRoomAvatar(ctx context.Context, evt *event.Event) {
 	if !ok {
 		return
 	}
-	b.room(evt.RoomID).AvatarURL = content.URL.ParseOrIgnore()
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.AvatarURL = content.URL.ParseOrIgnore() })
 }
 
 // onDirectChats is how Matrix records which rooms are one-to-one.
@@ -336,7 +372,7 @@ func (b *bridge) onRoomTags(ctx context.Context, evt *event.Event) {
 		tags = append(tags, string(tag))
 	}
 
-	b.room(evt.RoomID).Tags = tags
+	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.Tags = tags })
 	b.touchRoom(evt.RoomID)
 }
 

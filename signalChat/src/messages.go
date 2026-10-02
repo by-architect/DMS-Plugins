@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ---------------------------------------------------------------- conversion
@@ -103,15 +104,25 @@ func (b *bridge) convert(env envelope, dm *dataMessage, fromMe bool) *messageObj
 	if len(dm.Attachments) > 0 {
 		b.applyAttachment(msg, dm.Attachments[0])
 
+		var siblings []messageObj
 		for i, extra := range dm.Attachments[1:] {
 			sibling := *msg
 			sibling.ID = fmt.Sprintf("%s#%d", msg.ID, i+1)
 			sibling.Text = ""
 			sibling.ReplyTo = ""
 			b.applyAttachment(&sibling, extra)
-			emitEvent("message", map[string]any{"message": &sibling})
-			if sibling.MediaRef != "" && sibling.MediaPath == "" {
-				go b.autoDownload(sibling)
+			siblings = append(siblings, sibling)
+		}
+
+		// One batch rather than a message event each: they are parts of one
+		// message, which is announced on its own, and an album of five photos
+		// should not ring five times.
+		if len(siblings) > 0 {
+			emitEvent("messages", map[string]any{"messages": siblings})
+			for _, sibling := range siblings {
+				if sibling.MediaRef != "" && sibling.MediaPath == "" {
+					go b.autoDownload(sibling)
+				}
 			}
 		}
 	}
@@ -139,9 +150,26 @@ func (b *bridge) applyAttachment(msg *messageObj, a attachment) {
 	// signal-cli has usually already written the file into its own store by the
 	// time the notification arrives, so the common case costs no download at
 	// all -- the host copies it into the media cache and the image renders.
-	if path := attachmentPath(a.ID); path != "" {
-		msg.MediaPath = path
+	//
+	// Only when the settings ask for attachments as they arrive, though. This
+	// used to hand over every file signal-cli had, so the size limit never
+	// applied to anything. Left out, the ref is enough: opening the
+	// attachment finds the same file through fetchMedia.
+	if b.wantsEagerMedia(a.Size) {
+		if path := attachmentPath(a.ID); path != "" {
+			msg.MediaPath = path
+		}
 	}
+}
+
+// wantsEagerMedia reports whether an attachment of this size should reach the
+// host as its message arrives, rather than when it is opened.
+func (b *bridge) wantsEagerMedia(size int64) bool {
+	if !b.settingBool("autoDownloadMedia", true) {
+		return false
+	}
+	maxMB := int64(b.settingInt("autoDownloadMaxMB", 16))
+	return maxMB <= 0 || size <= maxMB*1024*1024
 }
 
 func kindOf(a attachment) string {
@@ -281,6 +309,15 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 		return
 	}
 
+	// What this conversation had waiting, up to where it has now been read.
+	// Taken whatever happens below: it is read either way, and keeping it
+	// would only send a stale receipt later.
+	upTo := params.UpTo
+	if upTo <= 0 {
+		upTo = time.Now().UnixMilli()
+	}
+	waiting := b.takeUnread(params.ChatID, upTo)
+
 	if !b.settingBool("sendReadReceipts", true) {
 		// Reading without telling anyone is a deliberate choice, and the host
 		// still clears the unread count locally.
@@ -309,9 +346,16 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 			timestamps = append(timestamps, ts)
 		}
 	}
-	// Nothing itemised: fall back to the read position the host tracks.
-	if len(timestamps) == 0 && params.UpTo > 0 {
-		timestamps = []int64{params.UpTo}
+	// The host itemises nothing: it says how far the conversation has been
+	// read. A Signal receipt has to name the exact messages it is for, and
+	// the receipt this used to send named the read position itself -- the
+	// current time, a message that does not exist -- so no sender ever saw
+	// one. The messages are the ones remembered as they arrived.
+	for _, ref := range waiting {
+		if !seen[ref.ts] {
+			seen[ref.ts] = true
+			timestamps = append(timestamps, ref.ts)
+		}
 	}
 	if len(timestamps) == 0 {
 		ok(c.ID, nil)
@@ -456,11 +500,7 @@ func (b *bridge) downloadAttachment(chatID, ref string) (string, error) {
 // autoDownload fetches an attachment in the background and re-emits the message
 // once it has landed, so an image appears without the user opening it.
 func (b *bridge) autoDownload(msg messageObj) {
-	if !b.settingBool("autoDownloadMedia", true) {
-		return
-	}
-	maxMB := int64(b.settingInt("autoDownloadMaxMB", 16))
-	if maxMB > 0 && msg.FileSize > maxMB*1024*1024 {
+	if !b.wantsEagerMedia(msg.FileSize) {
 		return
 	}
 
@@ -470,6 +510,8 @@ func (b *bridge) autoDownload(msg messageObj) {
 		return
 	}
 
+	// A batch of one, not a message event: this is the same message again,
+	// and only a message event can notify.
 	msg.MediaPath = path
-	emitEvent("message", map[string]any{"message": &msg})
+	emitEvent("messages", map[string]any{"messages": []messageObj{msg}})
 }

@@ -125,6 +125,14 @@ func saveSession(s *session) error {
 //
 // Both or neither: an encryption store belonging to a device that no longer
 // exists cannot decrypt anything, and keeping it only invites confusion.
+//
+// The sync position and the room cache go with them, for a sharper reason. The
+// next sign-in is a new device with an empty encryption store, and that store is
+// also where mautrix records which rooms are encrypted. Resumed from the old
+// position, the new device's first sync mentions only what changed since, so
+// most rooms were never recorded as encrypted -- and a message sent into one
+// went out in plain text. It also skipped the initial sync that fills the
+// conversation list, which after signing out had nothing left in it.
 func clearSession() error {
 	path, err := sessionPath()
 	if err != nil {
@@ -140,6 +148,16 @@ func clearSession() error {
 	}
 	for _, p := range []string{db, db + "-wal", db + "-shm"} {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"sync.json", "rooms.json"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -165,11 +183,16 @@ type fileSyncStore struct {
 	mu   sync.Mutex
 	path string
 
+	// DeviceID is the device that reached this position. A position is only
+	// worth resuming on the device that reached it: clearSession removes the
+	// file, but a bridge still running on the old session -- ./login.sh run
+	// while the shell is up -- writes it straight back.
+	DeviceID  string `json:"deviceId,omitempty"`
 	FilterID  string `json:"filterId"`
 	NextBatch string `json:"nextBatch"`
 }
 
-func newSyncStore() (*fileSyncStore, error) {
+func newSyncStore(deviceID string) (*fileSyncStore, error) {
 	dir, err := stateDir()
 	if err != nil {
 		return nil, err
@@ -181,6 +204,15 @@ func newSyncStore() (*fileSyncStore, error) {
 		// replayed sync, which the host deduplicates anyway.
 		_ = json.Unmarshal(data, store)
 	}
+
+	// Another device's position is started over rather than resumed: see
+	// clearSession for what resuming it cost. A file from before positions
+	// were stamped names no device, and is taken to be this one's -- the
+	// alternative is a full initial sync on every installation at once.
+	if store.DeviceID != "" && store.DeviceID != deviceID {
+		store.FilterID, store.NextBatch = "", ""
+	}
+	store.DeviceID = deviceID
 	return store, nil
 }
 

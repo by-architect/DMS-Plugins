@@ -16,6 +16,10 @@ StyledRect {
     required property var chat
     property bool selected: false
 
+    // The row the keyboard is on, from the search box's arrows. Drawn like a
+    // hover, which is what it stands in for.
+    property bool highlighted: false
+
     signal activated
     signal archiveToggled
     signal muteToggled
@@ -52,8 +56,10 @@ StyledRect {
     color: {
         if (root.selected)
             return Theme.primarySelected;
-        return mouseArea.containsMouse ? Theme.surfaceHover : "transparent";
+        return mouseArea.containsMouse || root.highlighted ? Theme.surfaceHover : "transparent";
     }
+    border.color: root.highlighted ? Theme.primary : "transparent"
+    border.width: root.highlighted ? 1 : 0
 
     MouseArea {
         id: mouseArea
@@ -121,7 +127,7 @@ StyledRect {
         Item {
             id: trailing
             anchors.verticalCenter: parent.verticalCenter
-            width: root.showActions ? 64 : Math.max(32, timeText.implicitWidth)
+            width: root.showActions ? 64 : Math.max(32, timeText.implicitWidth, root.hasUnread ? unreadBadge.width : 0)
             height: 36
 
             Column {
@@ -139,6 +145,7 @@ StyledRect {
                 }
 
                 StyledRect {
+                    id: unreadBadge
                     anchors.right: parent.right
                     visible: root.hasUnread
                     width: Math.max(18, unreadText.implicitWidth + Theme.spacingS)

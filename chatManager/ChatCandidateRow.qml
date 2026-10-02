@@ -8,6 +8,9 @@ StyledRect {
 
     required property var candidate
 
+    // The row the keyboard is on, in a list chosen from with the arrows.
+    property bool highlighted: false
+
     signal chosen
 
     readonly property string displayName: candidate?.name || candidate?.chatId || ""
@@ -17,7 +20,9 @@ StyledRect {
 
     height: 52
     radius: Theme.cornerRadius
-    color: hover.containsMouse ? Theme.surfaceHover : "transparent"
+    color: hover.containsMouse || root.highlighted ? Theme.surfaceHover : "transparent"
+    border.color: root.highlighted ? Theme.primary : "transparent"
+    border.width: root.highlighted ? 1 : 0
 
     MouseArea {
         id: hover

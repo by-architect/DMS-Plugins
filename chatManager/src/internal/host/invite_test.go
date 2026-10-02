@@ -135,9 +135,16 @@ func TestChatGoneRemovesAnInvitationAnsweredElsewhere(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, m.SetEnabled(ctx, "inviter", true, nil))
 
+	// The invitation's own message as well as its row: the bridge sends both,
+	// and a message landing after the withdrawal would put the row back -- a
+	// race this test lost on a busy machine.
 	eventually(t, "the invitation to be stored", func() bool {
 		chats, err := m.Store().ChatsForProvider(ctx, "inviter", 10)
-		return err == nil && len(chats) == 1
+		if err != nil || len(chats) != 1 {
+			return false
+		}
+		_, err = m.Store().MessageByID(ctx, "inviter", "room1", "room1/invite")
+		return err == nil
 	})
 
 	m.ingest(ingestEvent{provider: "inviter", frame: bridgeFrame{

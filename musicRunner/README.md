@@ -58,6 +58,9 @@ This overrides the settings toggles for that one search, including a
 category you've turned off — a quick way to reach it without opening
 settings. `mpd l` or `mpd q` with nothing after the prefix browses that
 category (same as opening the trigger with no query at all, just scoped).
+Only the short prefixes work on their own like that — `mpd queue` or
+`mpd music` with nothing after them is still an ordinary search for that
+word.
 
 ## Why one plugin, not six separate result sections
 

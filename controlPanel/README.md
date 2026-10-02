@@ -49,7 +49,10 @@ two never collide.
 
 The six single-letter toggles only fire in panel mode — the moment the
 search field has focus, every keystroke goes to it as text, so typing
-"wifi" doesn't also toggle WiFi via its `w`.
+"wifi" doesn't also toggle WiFi via its `w`. They also only fire bare (Shift
+is fine): with Ctrl, Alt or Super held a letter does nothing, so a `Ctrl+w`
+meant for the search field no longer switches WiFi off when focus has already
+gone back to the panel.
 
 VPN profiles don't get a reserved letter: there can be zero, one, or several
 of them, so each row is click-only rather than claiming a key that might not
@@ -66,6 +69,12 @@ prefix filters all three lists at once, generically.
 Connecting: WiFi calls `NetworkService.connectToWifi(ssid)` with no password,
 so it works for open networks and anything NetworkManager already has saved
 credentials for — this is a quick-connect surface, not a credentials flow.
+
+While the panel is open it holds a `NetworkService` reference, the same way
+DMS's own network detail does, which is what makes the shell scan for
+networks (once on open, then every 10 seconds); it is released on close.
+Without it the WiFi list was whatever the last scan anyone else asked for had
+found.
 
 ## Install
 
@@ -91,7 +100,9 @@ dms ipc call controlPanel toggle   # also: open, close, status
 Unlike `notificationPanel`, this panel does **not** auto-focus the search bar
 on open — the primary interaction here is the letter toggles, which only work
 in panel mode, so opening straight into panel mode (not search mode) is the
-right default.
+right default. Every open also starts with an empty search: the window is
+kept alive between opens, and closing it mid-search used to bring it back in
+search mode with the lists still filtered.
 
 ## Implementation notes
 

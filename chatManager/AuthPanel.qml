@@ -30,6 +30,68 @@ Item {
     property string qrImagePath: ""
     property bool requesting: false
 
+    // A provider that signs in with typed details -- a Matrix homeserver, a
+    // user and a password -- asks with a form: its own title, and the fields
+    // it needs, which are drawn here as it described them. The window had no
+    // way to show one, so such a provider sat behind a "Start sign-in" button
+    // that asked it for the very form it had already sent.
+    readonly property var formFields: provider?.authFields ?? []
+    readonly property string formTitle: provider?.authTitle ?? ""
+    property var formValues: ({})
+    property bool submitting: false
+    property string formError: ""
+
+    readonly property bool formComplete: {
+        if (root.formFields.length === 0)
+            return false;
+        for (let i = 0; i < root.formFields.length; i++) {
+            const field = root.formFields[i];
+            if (field.required && String(root.formValues[field.key] ?? "").trim() === "")
+                return false;
+        }
+        return true;
+    }
+
+    // Each form starts from the values the provider filled in itself.
+    onFormFieldsChanged: root.resetForm()
+
+    function resetForm() {
+        const values = {};
+        for (let i = 0; i < root.formFields.length; i++)
+            values[root.formFields[i].key] = root.formFields[i].value || "";
+        root.formValues = values;
+        root.formError = "";
+    }
+
+    function setFormValue(key, value) {
+        const next = Object.assign({}, root.formValues);
+        next[key] = value;
+        root.formValues = next;
+    }
+
+    // The values go to the provider and nowhere else. A password is not kept
+    // here past the attempt, whichever way it goes: what was typed is gone
+    // from the form the moment the answer arrives.
+    function submitForm() {
+        if (!root.formComplete || root.submitting)
+            return;
+        root.submitting = true;
+        root.formError = "";
+
+        const values = Object.assign({}, root.formValues);
+        root.chatCore.authSubmit(root.providerId, values, (succeeded, error) => {
+            root.submitting = false;
+            const kept = Object.assign({}, root.formValues);
+            for (let i = 0; i < root.formFields.length; i++) {
+                if (root.formFields[i].type === "password")
+                    kept[root.formFields[i].key] = "";
+            }
+            root.formValues = kept;
+            if (!succeeded)
+                root.formError = error || I18n.tr("Sign-in failed");
+        });
+    }
+
     // Re-render whenever the challenge changes. These rotate on a timer for
     // most services, so a stale image is a sign-in that silently will not work.
     onPayloadChanged: refreshChallenge()
@@ -90,6 +152,8 @@ Item {
                     return I18n.tr("Enter this code in the app on your other device.");
                 case "url":
                     return I18n.tr("Open this link to finish signing in.");
+                case "form":
+                    return root.formTitle !== "" ? root.formTitle : I18n.tr("Enter your account details.");
                 default:
                     return I18n.tr("Start sign-in to link this device.");
                 }
@@ -168,10 +232,88 @@ Item {
             onClicked: Quickshell.execDetached(["xdg-open", root.payload])
         }
 
-        // Always offered: a challenge may have expired, and asking again is the
-        // only way forward.
+        // ---------------------------------------------------------- form
+
+        Column {
+            width: parent.width
+            spacing: Theme.spacingS
+            visible: root.method === "form"
+
+            Repeater {
+                id: formRepeater
+
+                model: root.method === "form" ? root.formFields : []
+
+                delegate: DankTextField {
+                    id: formField
+
+                    required property var modelData
+                    required property int index
+
+                    width: parent.width
+                    labelText: (modelData.label || modelData.key) + (modelData.required ? " *" : "")
+                    placeholderText: modelData.placeholder || ""
+                    echoMode: modelData.type === "password" ? TextInput.Password : TextInput.Normal
+                    showPasswordToggle: modelData.type === "password"
+                    enabled: !root.submitting
+
+                    // Written back as typed, and set from the form when it
+                    // changes a field itself -- clearing the password after an
+                    // attempt. Not a binding: typing into a field drops its
+                    // binding, and the password would then stay on screen.
+                    Component.onCompleted: formField.text = root.formValues[modelData.key] ?? ""
+                    onTextChanged: {
+                        if (formField.text !== (root.formValues[modelData.key] ?? ""))
+                            root.setFormValue(modelData.key, formField.text);
+                    }
+
+                    Connections {
+                        target: root
+
+                        function onFormValuesChanged() {
+                            const value = root.formValues[formField.modelData.key] ?? "";
+                            if (formField.text !== value)
+                                formField.text = value;
+                        }
+                    }
+
+                    // Enter moves to the next field, and on the last signs in.
+                    onAccepted: {
+                        const next = formRepeater.itemAt(formField.index + 1);
+                        if (next)
+                            next.forceActiveFocus();
+                        else
+                            root.submitForm();
+                    }
+                }
+            }
+
+            StyledText {
+                width: parent.width
+                visible: root.formError !== ""
+                text: root.formError
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.error
+            }
+
+            DankButton {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.submitting ? I18n.tr("Signing in…") : I18n.tr("Sign in")
+                iconName: "login"
+                backgroundColor: Theme.primary
+                textColor: Theme.onPrimary
+                enabled: root.formComplete && !root.submitting
+                onClicked: root.submitForm()
+            }
+        }
+
+        // Offered for everything but a form, which has its own button: a
+        // challenge may have expired, and asking again is the only way forward.
         DankButton {
             anchors.horizontalCenter: parent.horizontalCenter
+            visible: root.method !== "form"
             text: root.payload === "" ? I18n.tr("Start sign-in") : I18n.tr("Get a new code")
             iconName: "refresh"
             backgroundColor: root.payload === "" ? Theme.primary : "transparent"

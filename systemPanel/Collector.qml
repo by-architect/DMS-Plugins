@@ -53,6 +53,11 @@ Item {
         }
 
         onExited: exitCode => {
+            // The watchdog already settled this run (and killed the process,
+            // which is what this exit is). Letting it through overwrote the
+            // watchdog's verdict with "exit 15" or a parse of half an output.
+            if (!root.busy)
+                return;
             const raw = outCollector.text || "";
             // Non-zero exit with usable stdout still parses (ss and journalctl
             // both exit non-zero on partial permission errors).

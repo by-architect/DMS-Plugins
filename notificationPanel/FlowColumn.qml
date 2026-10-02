@@ -13,6 +13,8 @@ Rectangle {
     required property string emptyReason
     // Shared across every container by the window; see CategoryTile for why.
     property int currentRowIndex: -1
+    // The window's clock, handed on to every card's age stamp.
+    property real nowMs: 0
 
     onCurrentRowIndexChanged: RowNav.scrollRowIntoView(flowFlick, flowRepeater, currentRowIndex)
 
@@ -97,6 +99,7 @@ Rectangle {
 
                             item: modelData
                             isCurrent: index === root.currentRowIndex
+                            nowMs: root.nowMs
                             onRemoveRequested: NotificationService.removeFromHistory(modelData.id)
                         }
                     }

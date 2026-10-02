@@ -31,10 +31,29 @@ type bridge struct {
 	linkStarted bool
 	stopOnce    sync.Once
 	configured  bool
+
+	// unread holds, per conversation, the incoming messages that have not been
+	// marked read here and that no other device has said were read. A Signal
+	// read receipt has to name the exact messages it is for, and the host only
+	// ever says "read up to now"; and a read sync from the phone names a
+	// message without its conversation. This is what answers both.
+	unread map[string][]unreadRef
 }
 
+// unreadRef is an incoming message that has not been marked read yet: its
+// author and its timestamp, which together are what Signal identifies it by.
+type unreadRef struct {
+	author string
+	ts     int64
+}
+
+// maxUnreadPerChat bounds how many unacknowledged messages are remembered for
+// one conversation. Past it the oldest go without a read receipt, which only
+// costs the sender a tick.
+const maxUnreadPerChat = 200
+
 func newBridge() *bridge {
-	return &bridge{settings: map[string]any{}}
+	return &bridge{settings: map[string]any{}, unread: map[string][]unreadRef{}}
 }
 
 // beginLinking claims the right to start an automatic link attempt.
@@ -73,6 +92,17 @@ func (b *bridge) settingBool(key string, fallback bool) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if v, ok := b.settings[key].(bool); ok {
+		return v
+	}
+	return fallback
+}
+
+// settingString reads a text preference, under the same lock as the others: a
+// configure arriving meanwhile replaces the whole settings map.
+func (b *bridge) settingString(key, fallback string) string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if v, ok := b.settings[key].(string); ok && v != "" {
 		return v
 	}
 	return fallback
@@ -168,18 +198,22 @@ func (b *bridge) connect() {
 	client := newRPCClient()
 	client.onNotify = b.onNotification
 	client.onExit = func(err error) {
-		// signal-cli stopping is not something this process recovers from: the
-		// DMS supervisor restarts the bridge, which starts a fresh one.
-		logf("warn", "signal-cli stopped: %v", err)
+		// signal-cli stopping on its own is not something this process recovers
+		// from: the DMS supervisor restarts the bridge, which starts a fresh
+		// one. But the supervisor only restarts a bridge that has exited, so
+		// exiting is the way to ask for it -- staying up, as this used to,
+		// left the provider at "disconnected" until it was switched off and on.
+		logf("error", "signal-cli stopped: %v", err)
 		emitState("disconnected")
+		os.Exit(1)
 	}
 
+	// No --ignore-attachments, whatever autoDownloadMedia says. signal-cli can
+	// only hand over an attachment it has already downloaded -- there is no
+	// fetching one later -- so ignoring them made every attachment impossible
+	// to open. The setting decides what the host is given as messages arrive
+	// (see wantsEagerMedia); what crosses the network is signal-cli's business.
 	args := []string{"--output", "json", "jsonRpc", "--receive-mode", "on-start"}
-	if !b.settingBool("autoDownloadMedia", true) {
-		// Told not to fetch attachments eagerly, do not let signal-cli spend the
-		// bandwidth either.
-		args = append(args, "--ignore-attachments")
-	}
 	if !b.settingBool("receiveStories", false) {
 		args = append(args, "--ignore-stories")
 	}
@@ -221,7 +255,7 @@ func (b *bridge) resumeOrLink() {
 	// speaks for one of them. Preferring the configured number keeps the choice
 	// with the user when they have more than one.
 	chosen := accounts[0]
-	if want, _ := b.settings["account"].(string); want != "" {
+	if want := b.settingString("account", ""); want != "" {
 		for _, a := range accounts {
 			if a == want {
 				chosen = a
@@ -288,10 +322,7 @@ func (b *bridge) startLinking() {
 
 	emitEvent("auth", map[string]any{"method": "qr", "qr": start.DeviceLinkURI})
 
-	name := "DankMaterialShell"
-	if n, _ := b.settings["deviceName"].(string); n != "" {
-		name = n
-	}
+	name := b.settingString("deviceName", "DankMaterialShell")
 
 	// Blocks until the code is scanned or Signal expires it.
 	var finish struct {

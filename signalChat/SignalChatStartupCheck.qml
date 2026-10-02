@@ -1,5 +1,9 @@
 import QtQuick
 import qs.Common
+// PluginService lives here. Without the import it is a ReferenceError, and the
+// shell treats a check that throws as one that passed -- so the gate below
+// never blocked anything.
+import qs.Services
 
 // Gates activation on the two things this provider cannot work without.
 //
@@ -32,14 +36,18 @@ QtObject {
 
             // Checked second so the message names whichever piece is actually
             // missing, rather than always blaming the build.
-            Proc.runCommand("signalChat.cliCheck", ["sh", "-c", "command -v signal-cli"], (out, code) => {
+            //
+            // SIGNAL_CLI first, the way the bridge itself resolves it: a
+            // signal-cli that is only reachable through that variable is one
+            // the bridge would run, and refusing to enable over it was wrong.
+            Proc.runCommand("signalChat.cliCheck", ["sh", "-c", "command -v \"${SIGNAL_CLI:-signal-cli}\""], (out, code) => {
                 if (code === 0) {
                     done(null);
                     return;
                 }
                 done({
                     "title": "signal-cli is not installed",
-                    "details": "This plugin reaches Signal through signal-cli. Install it from https://github.com/AsamK/signal-cli, make sure it is on your PATH, then enable this plugin again."
+                    "details": "This plugin reaches Signal through signal-cli. Install it from https://github.com/AsamK/signal-cli and make sure it is on your PATH (or point SIGNAL_CLI at it), then enable this plugin again."
                 });
             });
         });

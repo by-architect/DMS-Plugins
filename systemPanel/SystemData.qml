@@ -235,8 +235,13 @@ Item {
 
     // Error context is only fetched for boots that actually ended badly, one at
     // a time, so a long boot history does not fan out into dozens of processes.
+    //
+    // The boot being fetched right now is left out: every finished fetch
+    // changes bootErrors, which re-runs this, and the in-flight id (no errors
+    // recorded yet) used to be queued straight back in behind itself — so each
+    // unclean boot after the first had its journal read twice.
     function _queueBootErrors() {
-        const targets = bootList.filter(b => b.status === "unclean" && !bootErrors[b.bootId]).slice(0, 5).map(b => b.bootId);
+        const targets = bootList.filter(b => b.status === "unclean" && !bootErrors[b.bootId] && b.bootId !== _bootErrorCurrent).slice(0, 5).map(b => b.bootId);
         if (!targets.length)
             return;
         _bootErrorQueue = targets;
@@ -521,10 +526,17 @@ Item {
 
     // -------------------------------------------------------------- overview
 
+    // firewall= is "active" when any of the three units is, else the first
+    // state that is not plain "inactive" (a failed unit), else "inactive". It
+    // used to be an `a || b || c` chain inside $(...), which captured every
+    // unit's line, not just the last: with firewall.service absent and
+    // nftables active (NixOS with nftables enabled) the value was
+    // "inactive\nactive", the parser kept only the first line, and the tile
+    // reported the firewall as inactive while it was up.
     Collector {
         id: overview
 
-        command: ["sh", "-c", "echo \"host=$(hostname 2>/dev/null)\"; echo \"kernel=$(uname -r 2>/dev/null)\"; echo \"arch=$(uname -m 2>/dev/null)\"; echo \"os=$(. /etc/os-release 2>/dev/null; echo $PRETTY_NAME)\"; echo \"uptime=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)\"; echo \"loadavg=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)\"; echo \"boottime=$(systemd-analyze 2>/dev/null | head -1)\"; echo \"firewall=$(systemctl is-active firewall 2>/dev/null || systemctl is-active nftables 2>/dev/null || systemctl is-active iptables 2>/dev/null)\"; echo \"sshd=$(systemctl is-active sshd 2>/dev/null)\""]
+        command: ["sh", "-c", "echo \"host=$(hostname 2>/dev/null)\"; echo \"kernel=$(uname -r 2>/dev/null)\"; echo \"arch=$(uname -m 2>/dev/null)\"; echo \"os=$(. /etc/os-release 2>/dev/null; echo $PRETTY_NAME)\"; echo \"uptime=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)\"; echo \"loadavg=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)\"; echo \"boottime=$(systemd-analyze 2>/dev/null | head -1)\"; fw=$(systemctl is-active firewall nftables iptables 2>/dev/null); echo \"firewall=$(echo \"$fw\" | grep -x -m1 active || echo \"$fw\" | grep -v -x -m1 inactive || echo inactive)\"; echo \"sshd=$(systemctl is-active sshd 2>/dev/null)\""]
         parse: text => {
             const map = {};
             const lines = text.split("\n");

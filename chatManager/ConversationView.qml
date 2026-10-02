@@ -35,25 +35,41 @@ FocusScope {
 
     property bool showingHelp: false
 
+    // Whether the window or popout this is in is the one on screen. Handed
+    // down to the composer, which keeps each conversation's draft and so has
+    // to know when it stops being the one being typed into.
+    property bool onScreen: true
+
     // A pending destructive action, held until confirmed. Deleting a message is
     // not undoable, and a mistyped key should not be enough to do it.
     property var pendingDelete: null
     property bool pendingDeleteForEveryone: false
 
-    // The selected message, as an index into root.chatCore.messages.
+    // The selected message, by id.
     //
     // Deliberately not real focus: the composer keeps that, so typing always
     // reaches the text field. This is a border drawn around one message and
     // moved with Ctrl+K/J.
-    property int selectedIndex: -1
+    //
+    // By id rather than by position, because positions move: older pages
+    // arrive above, and a refresh can take a message out of the middle. Held
+    // as an index, the selection slid onto a neighbour when that happened --
+    // and the next Ctrl+R answered, or Ctrl+Delete removed, somebody else's
+    // message.
+    property string selectedId: ""
+    readonly property int selectedIndex: root.chatCore.indexOfMessage(root.selectedId)
 
     // Where the view belongs, and whether it is still ours to place.
     //
-    // Both are needed because the open conversation is reloaded whole on every
-    // state push, and a list whose model is replaced puts itself back where it
+    // Both are needed because the open conversation's list is replaced when
+    // it changes, and a list whose model is replaced puts itself back where it
     // thinks it was rather than where it was put. So the intended position is
     // remembered and reapplied, until the user scrolls somewhere themselves.
-    property int viewPin: -1
+    //
+    // The message the view is pinned to, by id for the same reason as the
+    // selection; empty means the newest, following the conversation as it
+    // grows.
+    property string viewPinId: ""
     property int viewPinMode: ListView.Beginning
     property bool viewPinned: true
 
@@ -61,7 +77,7 @@ FocusScope {
     // lands. Set when a conversation is opened, cleared by the first page.
     property bool _awaitingUnread: false
 
-    readonly property var selectedMessage: selectedIndex >= 0 && selectedIndex < root.chatCore.messages.length ? root.chatCore.messages[selectedIndex] : null
+    readonly property var selectedMessage: selectedIndex >= 0 ? root.chatCore.messages[selectedIndex] : null
 
     // True while anything is layered over the conversation. Escape belongs to
     // the overlay then, and the modal must not act on it.
@@ -98,9 +114,22 @@ FocusScope {
 
     // An invitation has no composer; answering it grows one, and the bar that
     // had the keyboard is gone, so nothing else would ever put it there.
+    //
+    // The other way round matters as much. A hidden field keeps the keyboard
+    // in Qt Quick, so an invitation opened while the composer had it left
+    // typing going into a box nobody could see -- and Enter sending it into a
+    // conversation that has not been joined. The keyboard goes to this view
+    // instead, where Escape and the invitation's own keys still work.
     onIsInviteChanged: {
-        if (!isInvite)
+        if (!isInvite) {
             Qt.callLater(root.takeFocus);
+            return;
+        }
+        focusSettle.stop();
+        if (composer.fieldFocused) {
+            composer.releaseFocus();
+            root.forceActiveFocus();
+        }
     }
 
     onVisibleChanged: {
@@ -157,7 +186,9 @@ FocusScope {
     // to put: something in here took it, or was handed it and did nothing with
     // it. Focus that has left this view is deliberately not chased.
     function keepFocus() {
-        if (root.hasOverlay || !root.activeFocus || composer.fieldFocused)
+        // An invitation has no composer to give it to: the view itself holds
+        // the keyboard then, on purpose.
+        if (root.hasOverlay || root.isInvite || !root.activeFocus || composer.fieldFocused)
             return;
         root.takeFocus();
     }
@@ -194,6 +225,54 @@ FocusScope {
         composer.takeFocus();
     }
 
+    // providerStateText says why a provider is not sending, or "" when it is.
+    function providerStateText(provider) {
+        if (!provider || !provider.enabled)
+            return "";
+        switch (provider.state) {
+        case "connected":
+            return "";
+        case "connecting":
+            return I18n.tr("connecting…");
+        case "needsLogin":
+            return I18n.tr("signed out");
+        default:
+            return I18n.tr("offline");
+        }
+    }
+
+    // startsDay is whether a message is the first of its day on screen.
+    function startsDay(index) {
+        const messages = root.chatCore.messages;
+        if (index < 0 || index >= messages.length)
+            return false;
+        if (index === 0)
+            return true;
+        return new Date(messages[index - 1].ts || 0).toDateString() !== new Date(messages[index].ts || 0).toDateString();
+    }
+
+    // dayLabel names a day the way people say it: today, yesterday, a weekday
+    // for this week, and a date before that -- with the year only once it is
+    // not this one.
+    function dayLabel(ts) {
+        if (!ts)
+            return "";
+        const date = new Date(ts);
+        const now = new Date();
+        const startOf = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        const days = Math.round((startOf(now) - startOf(date)) / 86400000);
+
+        if (days === 0)
+            return I18n.tr("Today");
+        if (days === 1)
+            return I18n.tr("Yesterday");
+        if (days > 1 && days < 7)
+            return date.toLocaleDateString(Qt.locale(), "dddd");
+        if (date.getFullYear() === now.getFullYear())
+            return date.toLocaleDateString(Qt.locale(), "d MMMM");
+        return date.toLocaleDateString(Qt.locale(), "d MMMM yyyy");
+    }
+
     function answerInvite(accept) {
         if (!root.isInvite)
             return;
@@ -208,7 +287,8 @@ FocusScope {
     // Contain for a selection, which only has to stay on screen; Beginning for
     // the unread mark, which belongs at the top with what is unread below it.
     function pinView(index, mode) {
-        root.viewPin = index;
+        const msg = index >= 0 ? root.chatCore.messages[index] : null;
+        root.viewPinId = msg ? msg.id : "";
         root.viewPinMode = mode === undefined ? ListView.Beginning : mode;
         root.viewPinned = true;
         root.applyPin();
@@ -229,10 +309,15 @@ FocusScope {
     }
 
     function _place() {
-        if (root.viewPin < 0)
+        if (root.viewPinId === "") {
             messageList.positionViewAtEnd();
-        else if (root.viewPin < root.chatCore.messages.length)
-            messageList.positionViewAtIndex(root.viewPin, root.viewPinMode);
+            return;
+        }
+        // A pinned message that has gone -- deleted, or trimmed -- leaves
+        // the view where it is rather than guessing at a neighbour.
+        const at = root.chatCore.indexOfMessage(root.viewPinId);
+        if (at >= 0)
+            messageList.positionViewAtIndex(at, root.viewPinMode);
     }
 
     Timer {
@@ -253,28 +338,34 @@ FocusScope {
 
     // ------------------------------------------------------------- selection
 
+    function select(index) {
+        const msg = root.chatCore.messages[index];
+        if (!msg)
+            return;
+        root.selectedId = msg.id;
+        root.pinView(index, ListView.Contain);
+    }
+
     function selectPrevious() {
         const count = root.chatCore.messages.length;
         if (count === 0)
             return;
         // From nothing, start at the newest and walk back.
-        root.selectedIndex = root.selectedIndex < 0 ? count - 1 : Math.max(0, root.selectedIndex - 1);
-        root.pinView(root.selectedIndex, ListView.Contain);
+        root.select(root.selectedIndex < 0 ? count - 1 : Math.max(0, root.selectedIndex - 1));
     }
 
     function selectNext() {
         const count = root.chatCore.messages.length;
         if (count === 0 || root.selectedIndex < 0)
             return;
-        root.selectedIndex = Math.min(count - 1, root.selectedIndex + 1);
-        root.pinView(root.selectedIndex, ListView.Contain);
+        root.select(Math.min(count - 1, root.selectedIndex + 1));
     }
 
     function clearSelection() {
-        root.selectedIndex = -1;
+        root.selectedId = "";
         // Following the newest message again if that is already where the view
         // is; otherwise it stays where it was left.
-        root.viewPin = -1;
+        root.viewPinId = "";
         root.viewPinned = messageList.atYEnd;
     }
 
@@ -382,7 +473,7 @@ FocusScope {
         // back on it -- is still an open, and still has to place the view.
         function onChatOpened(provider, chatId) {
             root.replyTarget = null;
-            root.selectedIndex = -1;
+            root.selectedId = "";
             root.pendingDelete = null;
 
             // Where it lands is decided by the page that is still on its way:
@@ -396,8 +487,22 @@ FocusScope {
         // declined invitation closing the view, mostly.
         function onActiveChatIdChanged() {
             root.replyTarget = null;
-            root.selectedIndex = -1;
+            root.selectedId = "";
             root.pendingDelete = null;
+        }
+
+        // An older page arrived above. Loading it was asked for by reaching
+        // the top of what was there, so the reader stays on the message that
+        // was at the top, with the new page above it to scroll up into --
+        // rather than being moved to the start of what just arrived.
+        //
+        // Not when the view is following the newest message: a short
+        // conversation pages older ones in on its own, and that is no reason
+        // to stop following it.
+        function onOlderLoaded(count) {
+            if (root.viewPinned && root.viewPinId === "")
+                return;
+            root.pinView(count, ListView.Beginning);
         }
 
         function onMessagesChanged() {
@@ -410,10 +515,10 @@ FocusScope {
                 return;
             }
 
-            // Every push reloads the page, and the list puts itself back where
-            // it was rather than where it was told to be. By name rather than
-            // as a closure, so a burst of pushes queues one of these and not
-            // one per push.
+            // A changed conversation replaces the list, and the list puts
+            // itself back where it was rather than where it was told to be.
+            // By name rather than as a closure, so a burst of pushes queues
+            // one of these and not one per push.
             Qt.callLater(root.applyPin);
         }
     }
@@ -588,7 +693,7 @@ FocusScope {
                     anchors.verticalCenter: parent.verticalCenter
                     width: 34
                     height: 34
-                    imageSource: root.chat?.avatarPath ? "file://" + root.chatCore.avatarPath : ""
+                    imageSource: root.chat?.avatarPath ? "file://" + root.chat.avatarPath : ""
                     fallbackText: root.chatName.charAt(0).toUpperCase()
                     fallbackIcon: "person"
                 }
@@ -623,6 +728,13 @@ FocusScope {
 
                             if (root.chat?.isGroup)
                                 parts.push(I18n.tr("Group"));
+
+                            // Said here because it is the reason a message
+                            // sits at "pending": a provider that is not
+                            // connected sends nothing until it is.
+                            const offline = root.providerStateText(provider);
+                            if (offline !== "")
+                                parts.push(offline);
 
                             return parts.join("  ·  ");
                         }
@@ -703,6 +815,15 @@ FocusScope {
                     width: messageList.width
                     spacing: 0
 
+                    // The day, above the first message of each. Times alone
+                    // do not say whether "09:14" was this morning or last
+                    // spring.
+                    ChatDayDivider {
+                        width: parent.width
+                        visible: root.startsDay(messageRow.index)
+                        text: visible ? root.dayLabel(messageRow.modelData.ts) : ""
+                    }
+
                     ChatUnreadDivider {
                         width: parent.width
                         // Never at the very top: with nothing above it, the
@@ -715,13 +836,17 @@ FocusScope {
 
                         width: parent.width
                         message: messageRow.modelData
-                        selected: root.selectedIndex === messageRow.index
+                        selected: root.selectedId !== "" && root.selectedId === messageRow.modelData.id
                         previousMessage: messageRow.index > 0 ? root.chatCore.messages[messageRow.index - 1] : null
 
                         onReplyRequested: root.replyTarget = messageRow.modelData
                         onForwardRequested: root.forwardSource = messageRow.modelData
                         onCopyRequested: root.copyMessage(messageRow.modelData)
-                        onDeleteRequested: root.requestDelete(messageRow.modelData, root.chatCore.activeSupports("revoke"))
+                        // What the button's tooltip says it does: for everyone
+                        // only on your own message. Asking for everyone on
+                        // somebody else's put up a confirmation for a delete
+                        // the provider then refused.
+                        onDeleteRequested: root.requestDelete(messageRow.modelData, messageRow.modelData.fromMe && root.chatCore.activeSupports("revoke"))
                     }
                 }
 
@@ -746,7 +871,7 @@ FocusScope {
                 // while its model is being replaced.
                 onAtYEndChanged: {
                     if (messageList.atYEnd && messageList.isUserScrolling) {
-                        root.viewPin = -1;
+                        root.viewPinId = "";
                         root.viewPinned = true;
                     }
                 }
@@ -790,6 +915,7 @@ FocusScope {
             id: composer
             width: parent.width
             visible: !root.isInvite
+            onScreen: root.onScreen
             replyTarget: root.replyTarget
 
             // Anything in here that takes the keyboard gives it straight back.
@@ -812,7 +938,7 @@ FocusScope {
             onReplyCleared: root.replyTarget = null
             onSent: {
                 root.replyTarget = null;
-                root.selectedIndex = -1;
+                root.selectedId = "";
                 // Writing is catching up, whatever was left unread above.
                 root.pinView(-1);
             }

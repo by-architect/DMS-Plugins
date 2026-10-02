@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -28,6 +29,11 @@ const rpcTimeout = 90 * time.Second
 // linkTimeout bounds finishLink, which blocks until the phone scans the code.
 // Signal expires a linking URI well before this.
 const linkTimeout = 10 * time.Minute
+
+// stopGrace is how long signal-cli gets to shut down after SIGTERM before it
+// is killed: inside the three seconds the host allows the whole bridge to exit.
+// A variable only so the tests need not wait it out.
+var stopGrace = 2 * time.Second
 
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -69,6 +75,12 @@ type rpcClient struct {
 	pending map[string]chan rpcResult
 	closed  bool
 
+	// stopping is set by stop, so the exit that follows is not reported as
+	// signal-cli dying on its own.
+	stopping bool
+	// exited is closed once signal-cli has exited and its output is drained.
+	exited chan struct{}
+
 	nextID atomic.Int64
 
 	// onNotify receives every notification signal-cli pushes. Set before start.
@@ -102,17 +114,28 @@ func (c *rpcClient) start(binary string, args []string) error {
 		return fmt.Errorf("start signal-cli: %w", err)
 	}
 
+	exited := make(chan struct{})
+
 	c.mu.Lock()
 	c.cmd = cmd
 	c.stdin = bufio.NewWriter(stdin)
 	c.closed = false
+	c.stopping = false
+	c.exited = exited
 	c.mu.Unlock()
 
-	go c.readLoop(stdout)
+	var drained sync.WaitGroup
+	drained.Add(2)
+
+	go func() {
+		defer drained.Done()
+		c.readLoop(stdout)
+	}()
 
 	// signal-cli is a JVM program and is chatty on stderr even when healthy, so
 	// this is forwarded at debug level rather than surfaced as an error.
 	go func() {
+		defer drained.Done()
 		s := bufio.NewScanner(stderr)
 		s.Buffer(make([]byte, 0, 64*1024), 4<<20)
 		for s.Scan() {
@@ -123,9 +146,21 @@ func (c *rpcClient) start(binary string, args []string) error {
 	}()
 
 	go func() {
+		// Both pipes are read to the end before Wait. Wait closes them, and
+		// calling it while they are still being read -- which os/exec warns
+		// against -- could cut off the last lines signal-cli wrote: when it is
+		// dying, the very lines that say why.
+		drained.Wait()
 		err := cmd.Wait()
 		c.failAll(fmt.Errorf("signal-cli exited: %w", err))
-		if c.onExit != nil {
+		close(exited)
+
+		// An exit that was asked for is not news. Any other is signal-cli
+		// stopping on its own, which the owner has to hear about.
+		c.mu.Lock()
+		stopping := c.stopping
+		c.mu.Unlock()
+		if !stopping && c.onExit != nil {
 			c.onExit(err)
 		}
 	}()
@@ -264,16 +299,30 @@ func (c *rpcClient) failAll(err error) {
 }
 
 // stop ends the signal-cli process.
+//
+// SIGTERM first, and a kill only if that is not enough: signal-cli handles
+// SIGTERM by shutting down cleanly, finishing whatever it was writing to the
+// account store. Killing it outright could cut that write short -- and did so
+// even when the host had already sent the whole process group SIGTERM,
+// pre-empting signal-cli's own handling of it.
 func (c *rpcClient) stop() {
 	c.mu.Lock()
 	cmd := c.cmd
+	exited := c.exited
 	c.closed = true
+	c.stopping = true
 	c.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = cmd.Process.Kill()
+
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-exited:
+	case <-time.After(stopGrace):
+		_ = cmd.Process.Kill()
+	}
 }
 
 func (c *rpcClient) running() bool {

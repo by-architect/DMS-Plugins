@@ -64,7 +64,11 @@ func (m *Manager) Resolve(ctx context.Context, query string, limit int) []Resolv
 
 	// A qualified "provider:chatId" is unambiguous by construction, and is what
 	// the UI itself passes around. Answer it without touching the rest.
-	if provider, chatID, ok := splitQualified(query); ok {
+	//
+	// Only for a provider that is switched on. Anything with a colon in it
+	// looks qualified -- "10:30", "re: lunch" -- and asking the store about a
+	// provider called "10" made it create one.
+	if provider, chatID, ok := splitQualified(query); ok && m.IsEnabled(provider) {
 		if c, err := m.Store().ChatByID(ctx, provider, chatID); err == nil {
 			return []ResolveCandidate{m.candidate(c, scoreQualified)}
 		}
@@ -72,7 +76,10 @@ func (m *Manager) Resolve(ctx context.Context, query string, limit int) []Resolv
 
 	// Everything known, not just conversations with activity: finding someone
 	// you have never written to is exactly when resolving by name matters.
-	chats, err := m.Store().AllChats(ctx, 5000)
+	//
+	// From switched-on providers only, the same as every other list: a
+	// provider that is off has its conversations kept, not offered.
+	chats, err := m.Store().AllChatsIn(ctx, m.EnabledProviders(), 5000)
 	if err != nil {
 		return nil
 	}

@@ -40,6 +40,19 @@ type bridge struct {
 	pendingMedia map[string]mediaHandle
 	mediaOrder   []string
 
+	// unread holds, per conversation, the incoming messages no read receipt has
+	// gone out for yet. WhatsApp marks messages read by id, and the host only
+	// ever says "read up to now" -- so without this list markRead had nothing
+	// to send. Entries leave when they are marked read here, or when the phone
+	// says it read them first.
+	unread map[string][]unreadRef
+
+	// groupNames caches each group's subject. Looking one up is a round trip to
+	// WhatsApp, and every incoming group message used to make one, inside the
+	// event handler -- so a reconnect replaying a few hundred group messages
+	// spent minutes on names it already had.
+	groupNames map[types.JID]string
+
 	// qrCancel stops an in-flight pairing loop when a new one is requested.
 	qrCancel context.CancelFunc
 
@@ -47,13 +60,35 @@ type bridge struct {
 	// waits on the network and must not hold the state lock while doing so.
 	pairMu sync.Mutex
 
+	// configured is set by the first configure call, under mu, so that only
+	// that one brings the connection up. Deciding from the client being nil
+	// was not enough: connect sets it only after opening the session store,
+	// and a second configure landing in that gap -- a settings change, or the
+	// manager re-registering this provider -- started a second client on the
+	// same session, and the two took turns knocking each other offline.
+	configured bool
+
 	stopOnce sync.Once
 }
+
+// unreadRef is an incoming message that has not been marked read yet.
+type unreadRef struct {
+	id     types.MessageID
+	sender types.JID
+	ts     int64
+}
+
+// maxUnreadPerChat bounds how many unacknowledged messages are remembered for
+// one conversation. Past it the oldest go without a read receipt, which only
+// costs the sender a blue tick.
+const maxUnreadPerChat = 200
 
 func newBridge() *bridge {
 	return &bridge{
 		settings:     map[string]any{},
 		pendingMedia: map[string]mediaHandle{},
+		unread:       map[string][]unreadRef{},
+		groupNames:   map[types.JID]string{},
 	}
 }
 
@@ -103,7 +138,8 @@ func (b *bridge) handleConfigure(ctx context.Context, c call) {
 		b.settings = params.Settings
 	}
 	b.mediaDir = params.MediaDir
-	first := b.client == nil
+	first := !b.configured
+	b.configured = true
 	b.mu.Unlock()
 
 	ok(c.ID, nil)
@@ -186,6 +222,14 @@ func (b *bridge) connect(ctx context.Context) {
 		return
 	}
 
+	// The shell often starts before the network does, and whatsmeow only
+	// retries a connection that dropped -- not one that never came up. Without
+	// this a first dial that failed at login left WhatsApp disconnected until
+	// the plugin was switched off and on again. With it whatsmeow keeps trying
+	// in the background, reports Disconnected meanwhile, and Connected once it
+	// gets through.
+	client.InitialAutoReconnect = true
+
 	if err := client.Connect(); err != nil {
 		logf("error", "could not connect: %v", err)
 		emitState("disconnected")
@@ -250,14 +294,26 @@ func (b *bridge) startPairing(parent context.Context, client *whatsmeow.Client) 
 				emitEvent("auth", map[string]any{"method": "qr", "qr": item.Code})
 			case "success":
 				logf("info", "device linked")
-				// The Connected event completes the transition; nothing to do.
+				// Out of needsLogin straight away, so the sign-in panel does
+				// not keep showing a code that has just been scanned while
+				// whatsmeow reconnects. Connected and the offline replay after
+				// it complete the transition.
+				emitState("connecting")
 				return
 			case "timeout":
 				logf("warn", "pairing timed out, ask for a new code to retry")
 				emitState("needsLogin")
 				return
 			default:
-				logf("debug", "pairing: %s", item.Event)
+				// Whatever ends a pairing other than success or a timeout --
+				// an outdated client, a phone without multi-device, a passkey
+				// step this bridge cannot answer -- has to be visible, or the
+				// user is left looking at a code that will never work.
+				if item.Error != nil {
+					logf("error", "pairing failed: %v", item.Error)
+				} else {
+					logf("warn", "pairing: %s", item.Event)
+				}
 			}
 		}
 	}()
@@ -281,9 +337,31 @@ func (b *bridge) handleLogin(ctx context.Context, c call) {
 
 	ok(c.ID, nil)
 
+	// A device WhatsApp has unlinked -- removed under Linked devices on the
+	// phone, expired, or signed out here -- is deleted from the session store,
+	// and whatsmeow refuses ever to connect it again ("invalid use of deleted
+	// device"). Pairing it anyway failed on the spot and dropped the sign-in
+	// panel, so the only way back was switching the plugin off and on. A new
+	// device is what a first install pairs with, and is what this needs too.
+	if client.Store.Deleted {
+		client = b.replaceDevice()
+	}
+
 	// startPairing takes care of closing any existing socket first; doing it
 	// here as well raced with the pairing already running.
 	go b.startPairing(context.Background(), client)
+}
+
+// replaceDevice swaps in a client for a brand new device, in the session store
+// that is already open.
+func (b *bridge) replaceDevice() *whatsmeow.Client {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	client := whatsmeow.NewClient(b.container.NewDevice(), waLog.Noop)
+	client.AddEventHandler(b.handleWhatsAppEvent)
+	b.client = client
+	return client
 }
 
 func (b *bridge) handleLogout(ctx context.Context, c call) {
@@ -297,6 +375,17 @@ func (b *bridge) handleLogout(ctx context.Context, c call) {
 		// Report it, but still tear down locally: a user who asked to sign out
 		// should not be left looking at a session they think is gone.
 		logf("warn", "logout was not acknowledged by WhatsApp: %v", err)
+
+		// Logout changes nothing locally when its request fails, so the local
+		// half is done here. Left in place, the session would come straight
+		// back on the next start, and signing in again would be refused for a
+		// device that still counts as linked.
+		if client.Store.ID != nil {
+			client.Disconnect()
+			if err := client.Store.Delete(ctx); err != nil {
+				logf("warn", "could not remove the local session: %v", err)
+			}
+		}
 	}
 
 	client.Disconnect()

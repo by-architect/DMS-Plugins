@@ -364,12 +364,13 @@ func handleSearch(ctx context.Context, conn *models.Conn, req models.Request, m 
 	}
 	limit := models.GetOr(req, "limit", 50)
 
-	msgs, err := m.Store().SearchMessagesIn(ctx, m.EnabledProviders(), query, limit)
+	visible := m.EnabledProviders()
+	msgs, err := m.Store().SearchMessagesIn(ctx, visible, query, limit)
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
 		return
 	}
-	chats, err := m.Store().SearchChats(ctx, query, limit)
+	chats, err := m.Store().SearchChatsIn(ctx, visible, query, limit)
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
 		return

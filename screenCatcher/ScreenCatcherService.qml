@@ -170,8 +170,14 @@ Singleton {
     // `mode` is "select" (default) or "full" — the panel's plain letter takes
     // the selection, Shift takes the whole screen, and every action follows
     // the same rule rather than each one having its own letter per mode.
+    // The clipboard choice is read once, when the capture starts, and the
+    // toast follows that same value — not whatever the toggle says by the time
+    // tesseract is done. With the clipboard off the recognized text used to
+    // go nowhere at all (no toast, and nothing to paste); it now rides along
+    // as the toast's details, which DMS shows with a copy button of its own.
     function screenshotToText(mode) {
-        Proc.runCommand("screenCatcher.shotOcr", ["bash", scriptPath, "shot-ocr", _bool(copyToClipboard), _bool(notifyOnComplete), ocrLang, mode || "select"], (stdout, exitCode) => {
+        const copy = copyToClipboard;
+        Proc.runCommand("screenCatcher.shotOcr", ["bash", scriptPath, "shot-ocr", _bool(copy), _bool(notifyOnComplete), ocrLang, mode || "select"], (stdout, exitCode) => {
             if (exitCode === 2)
                 return; // cancelled, stay quiet
             if (exitCode !== 0) {
@@ -182,8 +188,10 @@ Singleton {
                 ToastService.showInfo("Screenshot to text", "No text recognized");
                 return;
             }
-            if (root.copyToClipboard)
+            if (copy)
                 ToastService.showInfo("Text copied to clipboard");
+            else
+                ToastService.showInfo("Text recognized", stdout.replace(/^TEXT /, "").trim());
         }, 0, Proc.noTimeout);
     }
 
@@ -207,6 +215,12 @@ Singleton {
     // while slurp is up, or while audio/output setup runs.
     readonly property bool isSelecting: recProcess.running && !root.isRecording
     property bool isRecording: false
+    // Set by the script's STOPPED line: wf-recorder is done and what is left
+    // is the GIF conversion and/or the clipboard copy. isRecording stays true
+    // until the process exits (the finished-file toast waits for that too),
+    // but the clock stops, and there is nothing left for a stop to stop — the
+    // script ignores one now, rather than dying mid-conversion.
+    property bool isFinishing: false
     property string recordingMode: ""
     property string recordingFormat: ""
     property string recordingOutputPath: ""
@@ -230,7 +244,7 @@ Singleton {
     Timer {
         interval: 1000
         repeat: true
-        running: root.isRecording
+        running: root.isRecording && !root.isFinishing
         onTriggered: root.elapsedSeconds = Math.floor((Date.now() - root.recordingStartedAt) / 1000)
     }
 
@@ -276,13 +290,14 @@ Singleton {
     // nothing recorded yet): the script kills its slurp and exits as
     // cancelled, which beats leaving an invisible selection overlay behind.
     function stopRecording() {
-        if (!recProcess.running)
+        if (!recProcess.running || root.isFinishing)
             return;
         recProcess.signal(15); // SIGTERM
     }
 
     function _resetRecordingState() {
         root.isRecording = false;
+        root.isFinishing = false;
         root.recordingMode = "";
         root.recordingFormat = "";
         root.recordingOutputPath = "";
@@ -304,12 +319,20 @@ Singleton {
                     root.isRecording = true;
                     root.recordingStartedAt = Date.now();
                     root.elapsedSeconds = 0;
+                } else if (line === "STOPPED") {
+                    root.elapsedSeconds = Math.floor((Date.now() - root.recordingStartedAt) / 1000);
+                    root.isFinishing = true;
                 } else if (line.indexOf("SAVED ") === 0 || line.indexOf("COPIED ") === 0) {
                     // Held until the process actually exits: the GIF palette
                     // pass runs after wf-recorder is done, and a toast that
                     // lands while the bar still shows a recording in progress
                     // reads as a lie.
-                    recProcess.finishedLabel = root.recordingFormat === "gif" ? "GIF" : "Recording";
+                    //
+                    // Named after the file the script actually finished, not
+                    // the format that was asked for: when the GIF conversion
+                    // fails, the script keeps the raw mp4 instead, and this
+                    // used to toast "GIF saved" over an .mp4.
+                    recProcess.finishedLabel = /\.gif$/i.test(line) ? "GIF" : "Recording";
                     recProcess.finishedOutput = line;
                 } else if (line === "CANCELLED") {
                     ToastService.showInfo("Recording cancelled");

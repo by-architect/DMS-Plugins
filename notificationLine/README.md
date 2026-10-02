@@ -113,7 +113,9 @@ So the shell's limit is deliberately not the number of lines drawn. The plugin
 raises it well clear of **Lines on screen** and does its own trimming instead:
 a notification past the visible count is *hidden, not killed*, keeps its full
 lifetime, and takes its place on the stack when one of the visible lines
-expires. Nothing is ever retired early by arriving in company.
+expires. Nothing is ever retired early by arriving in company. Disabling the
+plugin puts the shell's own limit back, so the cards it returns to stack four
+deep again rather than two dozen.
 
 The trade-off is that on a very busy stack an older notification can surface a
 little after it arrived. Shorten the lifetime if you would rather a burst

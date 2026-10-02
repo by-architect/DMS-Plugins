@@ -1,7 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"maunium.net/go/mautrix"
@@ -154,5 +160,257 @@ func TestApplyStateUsesAlreadyParsedContent(t *testing.T) {
 	}
 	if got := b.senderName(testRoom, testAda); got != "Ada" {
 		t.Errorf("sender name = %q, want Ada", got)
+	}
+}
+
+// A sync position belongs to the device that reached it. Resumed on a new
+// device, the first sync reports only what changed since, so the new device's
+// empty encryption store never learns which rooms are encrypted -- and sends
+// into them in plain text.
+func TestSyncPositionIsNotResumedOnAnotherDevice(t *testing.T) {
+	t.Setenv("DMS_MATRIX_DIR", t.TempDir())
+	ctx := context.Background()
+
+	old, err := newSyncStore("OLDDEVICE")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	_ = old.SaveFilterID(ctx, "", "7")
+	_ = old.SaveNextBatch(ctx, "", "s123_456")
+
+	same, _ := newSyncStore("OLDDEVICE")
+	if next, _ := same.LoadNextBatch(ctx, ""); next != "s123_456" {
+		t.Errorf("the same device lost its position: %q", next)
+	}
+
+	other, _ := newSyncStore("NEWDEVICE")
+	if next, _ := other.LoadNextBatch(ctx, ""); next != "" {
+		t.Errorf("a new device resumed another's position %q, want an initial sync", next)
+	}
+	if filter, _ := other.LoadFilterID(ctx, ""); filter != "" {
+		t.Errorf("a new device reused another's filter %q", filter)
+	}
+}
+
+// A position written before positions were stamped names no device. It is
+// taken as this one's, or every installation would redo an initial sync at once.
+func TestUnstampedSyncPositionIsKept(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DMS_MATRIX_DIR", dir)
+
+	legacy := []byte(`{"filterId":"7","nextBatch":"s123_456"}`)
+	if err := os.WriteFile(filepath.Join(dir, "sync.json"), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := newSyncStore("DEVICE")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if next, _ := store.LoadNextBatch(context.Background(), ""); next != "s123_456" {
+		t.Errorf("an unstamped position was dropped: %q", next)
+	}
+	if store.DeviceID != "DEVICE" {
+		t.Errorf("device = %q, want the position stamped with this device", store.DeviceID)
+	}
+}
+
+// Everything derived from a session goes when the session does, so the next
+// sign-in starts from an initial sync rather than the old device's position.
+func TestClearSessionRemovesWhatTheSessionLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DMS_MATRIX_DIR", dir)
+
+	names := []string{"session.json", "crypto.db", "crypto.db-wal", "sync.json", "rooms.json"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := clearSession(); err != nil {
+		t.Fatalf("clearSession: %v", err)
+	}
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived signing out", name)
+		}
+	}
+
+	// Nothing to remove is not a failure: signing out twice is still signed out.
+	if err := clearSession(); err != nil {
+		t.Errorf("clearSession on an empty directory: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------- the session's lifecycle
+
+func hasState(frames []map[string]any, state string) bool {
+	for _, f := range frames {
+		if f["event"] == "state" && f["state"] == state {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLoginForm(frames []map[string]any) bool {
+	for _, f := range frames {
+		if f["event"] == "auth" && f["method"] == "form" {
+			fields, _ := f["fields"].([]any)
+			return len(fields) == 3
+		}
+	}
+	return false
+}
+
+func signedInBridge(t *testing.T) *bridge {
+	t.Helper()
+	b := testBridge()
+	client, err := mautrix.NewClient("https://example.invalid", testSelf, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.client = client
+	return b
+}
+
+// A session the homeserver has ended is torn down, not merely forgotten on
+// disk: the client left in place made the next Sign in report connected, and
+// the needsLogin that went out carried no form to sign in with.
+func TestEndedSessionAsksToSignInAgain(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DMS_MATRIX_DIR", dir)
+	for _, name := range []string{"session.json", "sync.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b := signedInBridge(t)
+	frames := captureEvents(t, b.endSession)
+
+	if b.getClient() != nil {
+		t.Error("the client survived the end of its session")
+	}
+	if !hasState(frames, "needsLogin") || !hasLoginForm(frames) {
+		t.Errorf("needsLogin went out without the form: %+v", frames)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "session.json")); !os.IsNotExist(err) {
+		t.Error("the session file survived")
+	}
+
+	// And Sign in, pressed now, asks for credentials rather than claiming a
+	// connection.
+	frames = captureEvents(t, func() { b.handleLogin(context.Background(), call{ID: 3}) })
+	if hasState(frames, "connected") || !hasLoginForm(frames) {
+		t.Errorf("sign in after the session ended: %+v", frames)
+	}
+}
+
+// With a session running, Sign in has nothing to report: the sync loop says
+// what state it is in, and "connected" here could be a lie.
+func TestSignInDoesNotClaimConnected(t *testing.T) {
+	b := signedInBridge(t)
+	frames := captureEvents(t, func() { b.handleLogin(context.Background(), call{ID: 3}) })
+	if hasState(frames, "connected") {
+		t.Errorf("reported connected without a sync behind it: %+v", frames)
+	}
+}
+
+// A second sign-in over a running session cleared the encryption store it had
+// open and started a second sync loop beside the first.
+func TestSecondSignInIsRefused(t *testing.T) {
+	b := signedInBridge(t)
+	params, _ := json.Marshal(map[string]any{"values": map[string]string{
+		"homeserver": "https://example.invalid", "user": "@me:example.invalid", "password": "pw",
+	}})
+
+	frames := captureEvents(t, func() {
+		b.handleAuthSubmit(context.Background(), call{ID: 9, Method: "authSubmit", Params: params})
+	})
+	if len(frames) != 1 || frames[0]["ok"] != false {
+		t.Fatalf("a second sign-in was not refused: %+v", frames)
+	}
+	if errInfo, _ := frames[0]["error"].(map[string]any); errInfo["code"] != "already_signed_in" {
+		t.Errorf("error = %v", frames[0]["error"])
+	}
+}
+
+// A session file that cannot be read is the case where signing in again is
+// the way out, so the form has to come with needsLogin.
+func TestCorruptSessionOffersTheForm(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DMS_MATRIX_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := testBridge()
+	frames := captureEvents(t, b.connect)
+	if !hasState(frames, "needsLogin") || !hasLoginForm(frames) {
+		t.Errorf("a corrupt session gave no way to sign in: %+v", frames)
+	}
+}
+
+// mautrix retries a failed sync by itself and never returns from the loop for
+// it. Reported here, the host sees connecting during the outage and connected
+// once it is over -- which is what makes it hold the backlog and judge it,
+// rather than announcing it message by message.
+func TestOutageIsReportedAndRecoveryToo(t *testing.T) {
+	b := testBridge()
+	syncer := &publishingSyncer{DefaultSyncer: mautrix.NewDefaultSyncer(), b: b}
+
+	frames := captureEvents(t, func() {
+		_, _ = syncer.OnFailedSync(nil, errors.New("network is unreachable"))
+		_, _ = syncer.OnFailedSync(nil, errors.New("network is unreachable"))
+	})
+	count := 0
+	for _, f := range frames {
+		if f["event"] == "state" && f["state"] == "connecting" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("connecting reported %d times over one outage, want once", count)
+	}
+
+	frames = captureEvents(t, func() { b.afterSync(&mautrix.RespSync{}, "s123") })
+	if !hasState(frames, "connected") {
+		t.Errorf("recovery was not reported: %+v", frames)
+	}
+
+	// A revoked token is not an outage: runSync reports needsLogin for it.
+	fresh := testBridge()
+	revoked := &publishingSyncer{DefaultSyncer: mautrix.NewDefaultSyncer(), b: fresh}
+	frames = captureEvents(t, func() {
+		if _, err := revoked.OnFailedSync(nil, fmt.Errorf("sync: %w", mautrix.MUnknownToken)); err == nil {
+			t.Error("a revoked token was retried")
+		}
+	})
+	if hasState(frames, "connecting") {
+		t.Errorf("a revoked token was reported as an outage: %+v", frames)
+	}
+}
+
+// Only a request that never got an answer is waited out before encryption is
+// set up; a homeserver that answered no will not change its mind.
+func TestUnreachableIsOnlyNoAnswer(t *testing.T) {
+	noAnswer := fmt.Errorf("initialise encryption: %w", mautrix.HTTPError{
+		Message: "request error", WrappedError: errors.New("dial tcp: connection refused"),
+	})
+	if !isUnreachable(noAnswer) {
+		t.Error("a refused connection was not counted as unreachable")
+	}
+
+	refused := mautrix.HTTPError{
+		Response:  &http.Response{StatusCode: 401},
+		RespError: &mautrix.RespError{ErrCode: "M_UNKNOWN_TOKEN"},
+	}
+	if isUnreachable(refused) {
+		t.Error("an answer from the homeserver was counted as unreachable")
+	}
+	if isUnreachable(errors.New("mismatching identity key on server")) {
+		t.Error("a broken store was counted as unreachable")
 	}
 }

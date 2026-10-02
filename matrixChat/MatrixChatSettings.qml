@@ -1,6 +1,5 @@
 import QtQuick
 import qs.Common
-import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
 
@@ -9,12 +8,22 @@ import qs.Modules.Plugins
 // which is what lets it be run and debugged outside DMS.
 //
 // Nothing here is a credential. The homeserver, user id and password are asked
-// for by ./login.sh, exchanged for an access token, and only the token is kept —
-// in ~/.local/share/dms-matrix, readable by its owner alone.
+// for by the chat window's sign-in panel (or ./login.sh), exchanged for an
+// access token, and only the token is kept — in ~/.local/share/dms-matrix,
+// readable by its owner alone.
 PluginSettings {
     id: root
 
     pluginId: "matrixChat"
+
+    // The live chat core, owned by the chat manager plugin's daemon surface --
+    // the only thing holding a connection to the bridge. This used to be a
+    // ChatService singleton in a forked shell; stock DMS has none, and calling
+    // it threw before the recovery key ever left this page.
+    readonly property var chat: {
+        const instances = root.pluginService?.pluginDaemonInstances ?? ({});
+        return instances["chatManager"]?.chat ?? null;
+    }
 
     // Matrix's own room categories.
     //
@@ -71,10 +80,19 @@ PluginSettings {
         if (key === "" || root.verifying)
             return;
 
+        // Said here rather than left to the call: authSubmit returns without
+        // ever answering when the manager is not connected, which would leave
+        // the button reading "Verifying…" for good.
+        if (!root.chat || !root.chat.available) {
+            root.verifyFailed = true;
+            root.verifyResult = "The chat manager is not running, so there is nothing to verify with. Enable the Chat Manager plugin, sign in to Matrix, then try again.";
+            return;
+        }
+
         root.verifying = true;
         root.verifyResult = "";
 
-        ChatService.authSubmit("matrixChat", {
+        root.chat.authSubmit("matrixChat", {
             "recoveryKey": key
         }, (succeeded, error) => {
             root.verifying = false;
@@ -82,7 +100,7 @@ PluginSettings {
             if (succeeded) {
                 // Clear on success so the key is not left sitting in the field.
                 recoveryKeyField.text = "";
-                root.verifyResult = "This device is verified. Encrypted history will decrypt as it syncs.";
+                root.verifyResult = "This device is verified, and your key backup was restored to it if the account has one. Messages it already received but could not read are not fetched again.";
             } else {
                 root.verifyResult = error || "Verification failed.";
             }
@@ -181,7 +199,7 @@ PluginSettings {
 
     StyledText {
         width: parent ? parent.width : 0
-        text: "Matrix has no QR code to scan, so the sign-in panel asks for your homeserver, user id and password instead. What you type is exchanged for an access token and then discarded — only the token is kept, and never in this settings file."
+        text: "Matrix has no QR code to scan, so the chat window's sign-in panel asks for your homeserver, user id and password instead — or run ./login.sh from this plugin's folder. What you type is exchanged for an access token and then discarded — only the token is kept, and never in this settings file."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -189,7 +207,7 @@ PluginSettings {
 
     StyledText {
         width: parent ? parent.width : 0
-        text: "Signing in creates a new device, which cannot read messages sent before it existed. Verify it below to unlock them."
+        text: "Signing in creates a new device, which cannot read messages sent before it existed. Verifying it below marks it as yours and restores your key backup to it."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap

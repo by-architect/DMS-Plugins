@@ -81,18 +81,37 @@ func (b *bridge) roomLocked(roomID id.RoomID) *roomInfo {
 	return info
 }
 
+// updateRoom changes a room's record under the lock.
+//
+// Every write to a room goes through here or holds the lock itself. The sync
+// loop, the hydration workers and the catch-up all write these records while
+// publishing reads them from goroutines of its own, and a write that skipped the
+// lock was a torn string at best -- at worst a member map changing under a range
+// over it, which Go does not count as a race to forgive: it stops the program.
+func (b *bridge) updateRoom(roomID id.RoomID, change func(info *roomInfo)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	change(b.roomLocked(roomID))
+}
+
 // displayName resolves a room's name the way the Matrix spec asks for it.
 //
 // The fallback chain matters more here than in most services, because the
 // common case -- a direct message -- has neither a name nor an alias, and would
 // otherwise show as a raw room id.
+//
+// The read lock is held to the end, not just for the lookup: the member map
+// ranged over below is written by the sync loop while this runs from the
+// publishing goroutines, and the runtime ends the process when it catches a map
+// being written mid-range.
 func (b *bridge) displayName(roomID id.RoomID) string {
 	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	info, ok := b.rooms[roomID]
 	// selfIDLocked, not selfID: taking RLock again while already holding it
 	// deadlocks as soon as a writer is queued between the two acquisitions.
 	self := b.selfIDLocked()
-	b.mu.RUnlock()
 
 	if !ok {
 		return string(roomID)

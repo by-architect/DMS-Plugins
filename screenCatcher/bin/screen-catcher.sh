@@ -14,6 +14,8 @@
 #
 # Contract with the QML side:
 #   - stdout line "STARTED <path>"  -> recording has actually begun, <path> is final output
+#   - stdout line "STOPPED"         -> wf-recorder is done; GIF conversion / clipboard copy
+#                                      may still be running, and further stop signals are ignored
 #   - stdout line "SAVED <path>"    -> action finished, file kept at <path>
 #   - stdout line "COPIED <name>"   -> action finished, clipboard only (nothing kept on disk)
 #   - stdout line "TEXT <text>"     -> OCR result (shot-ocr only)
@@ -23,7 +25,7 @@
 #   - exit code 2   cancelled (slurp aborted) — not an error
 #   - anything else -> error, message is on stderr / last stdout line
 #
-# rec-start stops on SIGINT/SIGTERM. There is no pause/resume: it was removed
+# rec-start stops on SIGINT/SIGTERM (until STOPPED). There is no pause/resume: it was removed
 # on request, and with it the segment-splitting and ffmpeg concat pass that
 # only ever existed to paper over wf-recorder having no pause of its own.
 
@@ -175,18 +177,41 @@ detect_output() {
 }
 
 mix_pids=""
+MIX_DEV=""
 
 setup_mix_audio() {
+    # setup_mix_audio [mic-source] [system-audio-monitor]
+    #
     # Combines mic input + system audio monitor into one virtual source,
     # since wf-recorder only accepts a single -a device. Three pw-loopback
     # taps: a bare mixing sink, plus one feed from the mic and one tapping the
     # default sink's monitor (stream.capture.sink=true is what makes
     # pw-loopback link to a sink's monitor ports instead of expecting a
-    # source). Prints the device name to capture, or nothing on failure.
+    # source). Sets $MIX_DEV to the device name to capture, or leaves it
+    # empty on failure.
+    #
+    # Assigns instead of printing, for the same reason set_target() does: it
+    # used to be called through $(...), so it ran in a subshell and the pids
+    # it collected in $mix_pids were thrown away with it. teardown_mix_audio
+    # then had nothing to kill, and all three pw-loopback processes outlived
+    # every recording made with both mic and system audio on — the mic stayed
+    # open, the screen_catcher_mix sink stayed in the device list, and each
+    # later recording stacked another trio on top (reproduced with stub
+    # binaries: all three still running after the script had exited).
+    #
+    # The two device settings apply here too. This path only ever looked up
+    # the defaults, so with both toggles on, a configured microphone or
+    # system-audio device was silently ignored. The system-audio setting
+    # names a monitor *source* ("<sink>.monitor", the way wf-recorder takes
+    # it), while the tap below wants the sink itself.
+    MIX_DEV=""
     require pw-loopback || return 1
     local src sink
-    src=$(default_source)
-    sink=$(default_sink)
+    src="${1:-}"
+    [ -n "$src" ] || src=$(default_source)
+    sink="${2:-}"
+    sink="${sink%.monitor}"
+    [ -n "$sink" ] || sink=$(default_sink)
     [ -n "$src" ] && [ -n "$sink" ] || return 1
 
     pw-loopback -n screen_catcher_mix >/dev/null 2>&1 &
@@ -200,7 +225,7 @@ setup_mix_audio() {
     mix_pids="$mix_pids $!"
 
     sleep 0.3
-    echo "screen_catcher_mix.monitor"
+    MIX_DEV="screen_catcher_mix.monitor"
 }
 
 teardown_mix_audio() {
@@ -237,6 +262,15 @@ set_target() {
         mkdir -p "$outdir"
         KEEPING=1
         TARGET="$outdir/$name"
+        # Names only go down to the second, so a second capture inside the
+        # same second (a screenshot shortcut pressed twice) got the same name
+        # and grim silently overwrote the first one. Number the newcomer
+        # instead.
+        local base="${name%.*}" ext="${name##*.}" n=2
+        while [ -e "$TARGET" ]; do
+            TARGET="$outdir/${base}_$n.$ext"
+            n=$((n + 1))
+        done
     else
         workdir=$(mktemp -d)
         KEEPING=0
@@ -263,6 +297,19 @@ finish_file() {
             rm -rf "$workdir"
             exit 1
         fi
+        rm -rf "$workdir"
+    fi
+}
+
+# rec-start's EXIT trap: every way out of a recording goes through here,
+# including a stop that lands between two steps of the setup, so the mix's
+# pw-loopback processes and a clipboard-only scratch directory never outlive
+# the script. Safe to run twice — teardown_mix_audio forgets the pids it has
+# killed, and on the normal path finish_file has already removed the scratch
+# directory.
+cleanup_rec() {
+    teardown_mix_audio
+    if [ "$KEEPING" = "0" ] && [ -n "$workdir" ]; then
         rm -rf "$workdir"
     fi
 }
@@ -341,11 +388,30 @@ shot-ocr)
         exit 0
     fi
 
-    [ "$clipboard" = "1" ] && printf '%s' "$text" | wl-copy 2>/dev/null
+    # The text exists nowhere else, so a copy that was asked for and did not
+    # happen (wl-clipboard missing, no Wayland clipboard) is a failed action,
+    # not a quiet success — the same call finish_file makes for a
+    # clipboard-only screenshot. Both this and the toggle-off case used to
+    # notify "Text copied to clipboard" regardless, while the clipboard still
+    # held whatever it had before.
+    copied=0
+    if [ "$clipboard" = "1" ]; then
+        if require wl-copy && printf '%s' "$text" | wl-copy 2>/dev/null; then
+            copied=1
+        else
+            notify "Screenshot to text failed" "Could not copy to the clipboard (is wl-clipboard installed?)"
+            echo "ERROR clipboard-failed"
+            exit 1
+        fi
+    fi
 
     preview="$text"
     [ "${#preview}" -gt 200 ] && preview="${preview:0:200}…"
-    notify "Text copied to clipboard" "$preview"
+    if [ "$copied" = "1" ]; then
+        notify "Text copied to clipboard" "$preview"
+    else
+        notify "Text recognized" "$preview"
+    fi
     printf 'TEXT %s\n' "$text"
     ;;
 
@@ -361,6 +427,8 @@ rec-start)
         exit 1
     fi
 
+    trap cleanup_rec EXIT
+
     geo_args=()
     output_args=()
     if [ "$mode" = "select" ]; then
@@ -372,11 +440,17 @@ rec-start)
         [ -n "$out" ] && output_args=(-o "$out")
     fi
 
+    # Until wf-recorder is running, a stop means "never mind": the panel
+    # offers it as Cancel Recording for this whole stretch, and the mic +
+    # system audio setup alone takes over half a second. Without a trap the
+    # signal simply killed the script and the UI reported a failed recording.
+    trap 'echo "CANCELLED"; exit 2' INT TERM
+
     audio_args=()
     if [ "$mic" = "1" ] && [ "$sysaudio" = "1" ]; then
-        dev=$(setup_mix_audio)
-        if [ -n "$dev" ]; then
-            audio_args=(-a"$dev")
+        setup_mix_audio "$mic_device" "$sys_device"
+        if [ -n "$MIX_DEV" ]; then
+            audio_args=(-a"$MIX_DEV")
         else
             notify "Audio capture unavailable" "Could not combine mic and system audio; recording video only"
         fi
@@ -424,7 +498,18 @@ rec-start)
     while kill -0 "$child_pid" 2>/dev/null; do
         wait "$child_pid" 2>/dev/null
     done
-    trap - INT TERM
+
+    # The recording itself is over; what is left (the GIF palette passes, the
+    # clipboard copy) has to run to the end. A second stop is the natural
+    # reaction to a long GIF conversion, and with the trap simply removed it
+    # killed this script mid-conversion: ffmpeg carried on as an orphan, the
+    # intermediate mp4 was never deleted, the clipboard copy never happened,
+    # and the UI reported a failed recording for a GIF still being written. A
+    # no-op trap rather than an ignored signal, so ffmpeg and wl-copy start
+    # with their own signal handling intact. STOPPED is what tells the UI to
+    # stop the clock.
+    trap ':' INT TERM
+    echo "STOPPED"
 
     teardown_mix_audio
 

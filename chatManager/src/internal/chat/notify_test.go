@@ -205,3 +205,38 @@ func TestCatchUpJudgesHeldMessages(t *testing.T) {
 	// message older than the host is backfill.
 	assert.Equal(t, "backfill", p.suppress(ctx, kept[0], prefs, 0))
 }
+
+// A click on a notification is answered with the conversation it was about, and
+// the record of what was shown stays bounded however long the manager runs.
+func TestNotificationTargetsAreRememberedAndBounded(t *testing.T) {
+	p := NewNotifyPolicy(nil, nil)
+
+	p.remember(7, focusKey{provider: prov, chatID: "dm"})
+	p.remember(8, focusKey{})
+
+	provider, chatID, ok := p.Target(7)
+	require.True(t, ok)
+	assert.Equal(t, prov, provider)
+	assert.Equal(t, "dm", chatID)
+
+	_, chatID, ok = p.Target(8)
+	require.True(t, ok, "a summary notification is known")
+	assert.Empty(t, chatID, "and opens the window rather than one conversation")
+
+	_, _, ok = p.Target(99)
+	assert.False(t, ok, "a notification raised by somebody else is not ours to answer")
+
+	p.Forget(7)
+	_, _, ok = p.Target(7)
+	assert.False(t, ok)
+
+	for id := uint32(100); id < 100+maxRemembered+50; id++ {
+		p.remember(id, focusKey{provider: prov, chatID: "dm"})
+	}
+	assert.LessOrEqual(t, len(p.shown), maxRemembered)
+	assert.Len(t, p.shownOrder, len(p.shown))
+	_, _, ok = p.Target(100)
+	assert.False(t, ok, "the oldest are forgotten first")
+	_, _, ok = p.Target(100 + maxRemembered + 49)
+	assert.True(t, ok, "the newest are kept")
+}

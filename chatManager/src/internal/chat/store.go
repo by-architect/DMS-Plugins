@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,12 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_msg_chat_ts ON messages(provider, chat_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_msg_id      ON messages(provider, id);
+
+-- What answers "when did I last write here" for every row of a conversation
+-- list. Without it that question walked every message in the conversation, for
+-- every conversation listed: the launcher asks it of five thousand at a time,
+-- and a channel nobody ever writes in is all messages and no answer.
+CREATE INDEX IF NOT EXISTS idx_msg_mine    ON messages(provider, chat_id, from_me, ts);
 
 -- Volatile per-provider state (sync cursors, last open chat) belongs here and
 -- not in the shell's settings.json: it changes far too often to be worth
@@ -150,6 +157,14 @@ func OpenHistory(path string) (*HistoryStore, error) {
 		}
 	}
 
+	// Rows written while UpsertChat stored its "no opinion" marker as the
+	// count itself. Nothing else ever makes unread negative, so these are
+	// exactly the ones it left behind.
+	if _, err := db.Exec(`UPDATE chats SET unread = 0 WHERE unread < 0`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("repair unread counts: %w", err)
+	}
+
 	s := &HistoryStore{db: db}
 	if _, err := db.Exec(ftsSchema); err == nil {
 		s.ftsReady = true
@@ -188,6 +203,17 @@ func (s *HistoryStore) UpsertChat(ctx context.Context, c Chat) error {
 		tags = []byte("")
 	}
 
+	// A negative unread is how a caller says it has no opinion, which the
+	// update below honours by leaving the stored count alone. A new row has no
+	// count to leave alone: it starts at none. Writing the -1 itself made every
+	// conversation a bridge announced before its first message start one
+	// below zero, so its badge undercounted by one for good.
+	unread := c.Unread
+	statedUnread := unread >= 0
+	if unread < 0 {
+		unread = 0
+	}
+
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO chats (provider, id, name, is_group, last_ts, last_text, unread, muted, archived,
                    read_upto, avatar_path, subject, participants, folder, handles, tags)
@@ -198,7 +224,7 @@ ON CONFLICT(provider, id) DO UPDATE SET
   last_ts      = MAX(excluded.last_ts, chats.last_ts),
   last_text    = CASE WHEN excluded.last_ts >= chats.last_ts AND excluded.last_text != ''
                       THEN excluded.last_text ELSE chats.last_text END,
-  unread       = CASE WHEN excluded.unread >= 0 THEN excluded.unread ELSE chats.unread END,
+  unread       = CASE WHEN ? THEN excluded.unread ELSE chats.unread END,
   -- muted and archived are deliberately absent: a Go bool cannot say "unset",
   -- so an upsert carrying only a name would silently unarchive the chat. They
   -- change through SetArchived and SetMuted, which are only called when a
@@ -211,13 +237,18 @@ ON CONFLICT(provider, id) DO UPDATE SET
   handles      = CASE WHEN excluded.handles      != '' THEN excluded.handles      ELSE chats.handles      END,
   tags         = CASE WHEN excluded.tags         != '' THEN excluded.tags         ELSE chats.tags         END
 `,
-		c.Provider, c.ID, c.Name, c.IsGroup, c.LastTS, c.LastText, c.Unread, c.Muted, c.Archived,
-		c.ReadUpTo, c.AvatarPath, c.Subject, string(participants), c.Folder, string(handles), string(tags))
+		c.Provider, c.ID, c.Name, c.IsGroup, c.LastTS, c.LastText, unread, c.Muted, c.Archived,
+		c.ReadUpTo, c.AvatarPath, c.Subject, string(participants), c.Folder, string(handles), string(tags),
+		statedUnread)
 	return err
 }
 
 // TouchChat updates a chat's activity line from a message that just landed,
 // creating the chat if a bridge sent a message for one we have never seen.
+//
+// incrementUnread is only honoured for a message newer than where the chat has
+// been read up to: one older than that was seen somewhere else already, and
+// counting it left a badge on a conversation with nothing new in it.
 func (s *HistoryStore) TouchChat(ctx context.Context, provider, chatID, name, lastText string, ts int64, isGroup, incrementUnread bool) error {
 	unread := 0
 	if incrementUnread {
@@ -232,7 +263,7 @@ ON CONFLICT(provider, id) DO UPDATE SET
   is_group  = excluded.is_group OR chats.is_group,
   last_ts   = MAX(excluded.last_ts, chats.last_ts),
   last_text = CASE WHEN excluded.last_ts >= chats.last_ts THEN excluded.last_text ELSE chats.last_text END,
-  unread    = chats.unread + excluded.unread
+  unread    = chats.unread + CASE WHEN excluded.last_ts > chats.read_upto THEN excluded.unread ELSE 0 END
 `, provider, chatID, name, isGroup, ts, lastText, unread)
 	return err
 }
@@ -240,10 +271,11 @@ ON CONFLICT(provider, id) DO UPDATE SET
 const chatSelect = `
 SELECT c.provider, c.id, c.name, c.is_group, c.last_ts, c.last_text, c.unread, c.muted,
        c.archived, c.read_upto, c.avatar_path, c.subject, c.participants, c.folder, c.handles, c.tags,
-       COALESCE((SELECT MAX(m.ts) FROM messages m
+       COALESCE((SELECT m.ts FROM messages m
                   WHERE m.provider = c.provider AND m.chat_id = c.id
                     AND m.from_me = 1
-                    AND m.kind NOT IN ('system','deleted','unsupported')), 0) AS my_last_ts
+                    AND m.kind NOT IN ('system','deleted','unsupported')
+                  ORDER BY m.ts DESC LIMIT 1), 0) AS my_last_ts
 FROM chats c
 `
 
@@ -251,7 +283,9 @@ FROM chats c
 //
 // my_last_ts deliberately excludes protocol kinds: history sync marks those as
 // yours, and counting them would report that you take part in every channel you
-// have ever been added to.
+// have ever been added to. It is asked as "the newest one" rather than as a MAX,
+// which is what lets idx_msg_mine answer it from the first matching entry
+// instead of reading every message in the conversation.
 func (s *HistoryStore) Chats(ctx context.Context, limit int) ([]Chat, error) {
 	if limit <= 0 {
 		limit = 200
@@ -370,6 +404,16 @@ func (s *HistoryStore) IsMuted(ctx context.Context, provider, chatID string) boo
 	return err == nil && muted
 }
 
+// UnreadTotal adds up what is waiting across the conversations that are not
+// archived: a provider's badge, without reading every conversation back to
+// count it.
+func (s *HistoryStore) UnreadTotal(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(unread), 0) FROM chats WHERE archived = 0 AND unread > 0`).Scan(&n)
+	return n, err
+}
+
 // IsArchived reports the archive flag.
 func (s *HistoryStore) IsArchived(ctx context.Context, provider, chatID string) bool {
 	var archived bool
@@ -479,7 +523,9 @@ ON CONFLICT(provider, chat_id, id) DO UPDATE SET
   link_image  = CASE WHEN excluded.link_image != '' THEN excluded.link_image ELSE messages.link_image END
 `
 
-func (s *HistoryStore) putMessage(ctx context.Context, tx *sql.Tx, m Message) error {
+// putMessage stores or merges one message, and reports whether it was new --
+// whether the store had never seen this id in this conversation before.
+func (s *HistoryStore) putMessage(ctx context.Context, tx *sql.Tx, m Message) (bool, error) {
 	if m.Kind == "" {
 		m.Kind = KindText
 	}
@@ -499,9 +545,13 @@ func (s *HistoryStore) putMessage(ctx context.Context, tx *sql.Tx, m Message) er
 	// The two trailing binds drive the status ratchet in the ON CONFLICT arm.
 	// They are computed here rather than in SQL because the rank ordering is a
 	// Go-side concept and belongs next to statusRank.
+	//
+	// The same lookup says whether the row is new, which is what keeps a
+	// redelivered message from counting as unread, or notifying, twice.
 	var existing string
-	_ = tx.QueryRowContext(ctx, `SELECT status FROM messages WHERE provider = ? AND chat_id = ? AND id = ?`,
+	lookup := tx.QueryRowContext(ctx, `SELECT status FROM messages WHERE provider = ? AND chat_id = ? AND id = ?`,
 		m.Provider, m.ChatID, m.ID).Scan(&existing)
+	isNew := errors.Is(lookup, sql.ErrNoRows)
 
 	_, err := tx.ExecContext(ctx, messageUpsert,
 		m.Provider, m.ChatID, m.ID, m.TS, m.FromMe, m.SenderID, m.SenderName, m.SenderAvatarPath, m.Kind, m.Text,
@@ -509,7 +559,7 @@ func (s *HistoryStore) putMessage(ctx context.Context, tx *sql.Tx, m Message) er
 		m.MediaMime, m.MediaW, m.MediaH, m.FileName, m.FileSize, m.Duration,
 		m.LinkURL, m.LinkTitle, m.LinkDesc, m.LinkImage,
 		statusRank(m.Status), statusRank(existing))
-	return err
+	return isNew && err == nil, err
 }
 
 // PutMessage stores or merges one message.
@@ -520,7 +570,7 @@ func (s *HistoryStore) PutMessage(ctx context.Context, m Message) error {
 	}
 	defer tx.Rollback()
 
-	if err := s.putMessage(ctx, tx, m); err != nil {
+	if _, err := s.putMessage(ctx, tx, m); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -531,22 +581,40 @@ func (s *HistoryStore) PutMessage(ctx context.Context, m Message) error {
 // History sync arrives in thousands; one transaction per message turns a
 // first login into minutes of fsync.
 func (s *HistoryStore) PutMessages(ctx context.Context, msgs []Message) error {
+	_, err := s.InsertMessages(ctx, msgs)
+	return err
+}
+
+// InsertMessages stores a batch in one transaction, like PutMessages, and
+// reports which of the messages the store had not seen before, in order.
+//
+// Bridges redeliver: a reconnect replays the last few messages, a sync sends
+// what was already sent live. Only the caller knows what each message means --
+// unread, a notification -- and it can only get that right knowing which ones
+// actually arrived for the first time.
+func (s *HistoryStore) InsertMessages(ctx context.Context, msgs []Message) ([]bool, error) {
 	if len(msgs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
 
-	for _, m := range msgs {
-		if err := s.putMessage(ctx, tx, m); err != nil {
-			return err
+	fresh := make([]bool, len(msgs))
+	for i, m := range msgs {
+		isNew, err := s.putMessage(ctx, tx, m)
+		if err != nil {
+			return nil, err
 		}
+		fresh[i] = isNew
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return fresh, nil
 }
 
 const messageSelect = `

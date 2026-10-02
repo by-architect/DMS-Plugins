@@ -45,15 +45,21 @@ it, same as clicking "Load More" in the reference implementation this was
 modeled after, just without needing the mouse. A small indicator at the
 bottom of the grid shows the running total and whether more pages exist.
 
-**Local** — scans the configured folder once per panel session (or on first
-switch to the tab) for `.jpg`/`.jpeg`/`.png`/`.webp`/`.avif` files, up to 4
-directories deep. Unlike Wallhaven, filtering here is live as you type — it's
+**Local** — scans the configured folder once per panel session (on open when
+the Local tab is showing, otherwise on the first switch to it, and again after
+a Wallhaven download) for `.jpg`/`.jpeg`/`.png`/`.webp`/`.avif` files, up to 4
+directories deep. An unchanged folder keeps its selection. Unlike Wallhaven, filtering here is live as you type — it's
 just a substring match over already-known filenames, so there's no reason to
 gate it behind Enter. Pressing Enter still works (hands focus back to the
 panel, same as it does for Wallhaven) for a consistent "type, then navigate"
 flow across both tabs.
 
 ## Applying a wallpaper
+
+`Ctrl+Enter` works with the search field focused too (which is how every open
+starts): Enter on the query whose results are already on screen no longer
+re-runs the search, which used to empty the grid just before the apply looked
+for the selected result.
 
 `Ctrl+Enter` (Wallhaven) downloads the selected image's full-resolution file
 to the configured install location, then calls `SessionData.setWallpaper(path)`
@@ -99,8 +105,10 @@ README for the fullest detail): a `PanelWindow` declared inline inside a
 `PluginComponent` never becomes a layer surface — it has to come from a
 `LazyLoader`; on Hyprland the shell ignores layer-shell exclusive keyboard
 focus in favour of `hyprland_focus_grab`; the window's `LazyLoader` stays
-permanently active so search results and the local scan persist across
-opens instead of rebuilding from scratch; and `DankTextField`'s own root is a
+permanently active so Wallhaven results persist across opens instead of
+rebuilding from scratch (the local folder, by contrast, is rescanned once per
+open — persisting that scan meant a changed folder setting, or wallpapers
+added since, never showed up until the shell restarted); and `DankTextField`'s own root is a
 plain `Rectangle`, not a `FocusScope`, so `field.activeFocus` never reflects
 the inner `TextInput`'s real focus state — `SearchBar.hasFocus`, forwarded
 through `DankTextField`'s own `focusStateChanged(bool)` signal, is what
@@ -118,7 +126,21 @@ The `Ctrl+Enter` download runs `mkdir -p` and `curl` as one shell command
 rather than calling `Paths.mkdir()` (which is fire-and-forget
 `execDetached`, with no way to know when — or whether — it finished) followed
 by a separate download command; otherwise there's a real, if narrow, race on
-the very first download to a not-yet-existing install directory.
+the very first download to a not-yet-existing install directory. The folder,
+URL and file name go in as positional parameters (`sh -c '…' sh "$dir" …`),
+never spliced into the script text: they used to sit between single quotes,
+so a quote in the install folder broke every download, and one in the API
+response would have run as shell. `curl --fail` keeps an HTTP error page (a
+404, the rate limiter's 429) from being saved and applied as the wallpaper,
+the file is written as `.part` and renamed once complete, and curl's own
+limits (stall after 30s under 1 KB/s, 10 minutes overall) replace the 10s
+default `Proc` timeout, which cut full-resolution downloads short and left
+curl running as an orphan.
+
+Every Wallhaven request has its own `Proc` entry and is tagged with the search
+it belongs to. They used to share one id, and `Proc` keeps only the newest
+callback per id — so a second search sent before the first came back got the
+first one's response as its page 1, and the grid mixed both queries' results.
 
 The fresh-search auto-prefetch and `Space`-to-load-more both call the same
 `fetchWallhavenPage(page, append, autoChain)`, distinguished only by

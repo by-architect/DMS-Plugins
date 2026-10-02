@@ -1,7 +1,13 @@
 import QtQuick
 import qs.Common
+import qs.Services
 
 // Gates activation on the manager binary existing.
+//
+// qs.Services is imported for PluginService. A component only sees the
+// singletons it imports itself, and without it the first line below threw --
+// which the shell takes as the check passing, so a manager that had never been
+// built was let through and the window sat empty.
 //
 // The manager is Go and has to be compiled for the machine it runs on, so it is
 // not shipped prebuilt. Without this the plugin would enable, the link would

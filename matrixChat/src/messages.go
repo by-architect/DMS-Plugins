@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto/attachment"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -29,8 +32,10 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 	// the original; re-emitting under the *original* id makes the host's upsert
 	// replace the text in place instead of appending a near-duplicate.
 	targetID := evt.ID
+	edit := false
 	if rel := content.RelatesTo; rel != nil && rel.Type == event.RelReplace && rel.EventID != "" {
 		targetID = rel.EventID
+		edit = true
 		if content.NewContent != nil {
 			content = content.NewContent
 		}
@@ -45,10 +50,27 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 	// something that actually happened in the timeline.
 	b.noteLastEvent(evt.RoomID, evt.ID, evt.Timestamp)
 
+	// Only a message that has just arrived goes out on its own, because the
+	// single message event is the one the host may notify for. An initial
+	// sync's timeline is the last few dozen messages of every room the account
+	// is in -- history, held back and sent as a batch once the response has
+	// been read through -- and an edit changes a message that is already
+	// there. Sent singly, both were announced as news: a fresh sign-in notified
+	// for whatever the last half hour held, and a correction arrived as a new
+	// message. Neither fetches its attachment ahead of time either.
+	if isInitialSync(ctx) {
+		b.holdHistory(*msg)
+		return
+	}
+	if edit {
+		emitMessages([]messageObj{*msg})
+		return
+	}
+
 	emitEvent("message", map[string]any{"message": msg})
 
 	if msg.MediaRef != "" && msg.MediaPath == "" {
-		go b.autoDownload(*msg)
+		b.queueDownload(*msg)
 	}
 
 	// Keep the room's activity line in step so the chat list reorders now
@@ -57,6 +79,45 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 	chat.LastTS = msg.TS
 	chat.LastText = previewOf(msg)
 	emitEvent("chat", map[string]any{"chat": chat})
+}
+
+// isInitialSync reports whether an event came from a sync with no position to
+// start from: the first one a new device makes. mautrix puts the position each
+// response was asked from in the context it dispatches with.
+func isInitialSync(ctx context.Context) bool {
+	since, ok := ctx.Value(mautrix.SyncTokenContextKey).(string)
+	return ok && since == ""
+}
+
+// holdHistory keeps a message of history back until flushHistory.
+func (b *bridge) holdHistory(msg messageObj) {
+	b.mu.Lock()
+	b.history = append(b.history, msg)
+	b.mu.Unlock()
+}
+
+// flushHistory sends what holdHistory kept back.
+//
+// Called once the response it came in has been read through, and before
+// anything that names a message by id -- a deletion, a read status -- so the
+// message is in the host's store before the reference to it arrives.
+func (b *bridge) flushHistory() {
+	b.mu.Lock()
+	msgs := b.history
+	b.history = nil
+	b.mu.Unlock()
+
+	emitMessages(msgs)
+}
+
+// emitMessages sends messages as the batch event, which the host stores
+// without notifying for any of them.
+func emitMessages(msgs []messageObj) {
+	const batchSize = 100
+	for start := 0; start < len(msgs); start += batchSize {
+		end := min(start+batchSize, len(msgs))
+		emitEvent("messages", map[string]any{"messages": msgs[start:end]})
+	}
 }
 
 func (b *bridge) convert(evt *event.Event, content *event.MessageEventContent, msgID id.EventID) *messageObj {
@@ -128,21 +189,28 @@ func (b *bridge) convert(evt *event.Event, content *event.MessageEventContent, m
 
 // applyMedia fills in the attachment fields.
 //
-// The mxc:// URI is kept as the ref rather than resolved now: an encrypted room
-// sends the file encrypted, and downloading it eagerly for every message would
-// pull the whole history's media on first sync.
+// What is needed to fetch the file is kept as the ref rather than resolved now:
+// downloading it eagerly for every message would pull the whole history's media
+// on first sync.
 func (b *bridge) applyMedia(msg *messageObj, content *event.MessageEventContent) {
-	url := content.URL
-	if content.File != nil && content.File.URL != "" {
-		// Encrypted attachment: the URL lives inside the file block, and the
-		// keys beside it.
-		url = content.File.URL
-	}
-	if url == "" {
+	switch {
+	case content.File != nil && content.File.URL != "":
+		// Encrypted attachment: the URL lives inside the file block, beside the
+		// key that opens it. Both go in the ref -- the host keeps it opaque and
+		// hands it back to fetchMedia as it was -- because a ref of the URL
+		// alone fetched only the ciphertext, and every attachment in an
+		// encrypted room arrived as noise. See parseMediaRef.
+		ref, err := json.Marshal(content.File)
+		if err != nil {
+			return
+		}
+		msg.MediaRef = string(ref)
+	case content.URL != "":
+		msg.MediaRef = string(content.URL)
+	default:
 		return
 	}
 
-	msg.MediaRef = string(url)
 	msg.FileName = content.GetFileName()
 
 	if info := content.Info; info != nil {
@@ -195,6 +263,9 @@ func (b *bridge) onRedaction(ctx context.Context, evt *event.Event) {
 	if evt.Redacts == "" {
 		return
 	}
+	// Anything held back as history first, so the message is stored before
+	// the deletion that names it arrives.
+	b.flushHistory()
 	emitEvent("deleted", map[string]any{
 		"chatId":    string(evt.RoomID),
 		"messageId": string(evt.Redacts),
@@ -237,6 +308,9 @@ func (b *bridge) onReceipt(ctx context.Context, evt *event.Event) {
 				// Somebody else read it. Only public receipts say that, and a
 				// private one is never anyone else's to see.
 				if receiptType == event.ReceiptTypeRead {
+					// After anything held back as history: a status for a
+					// message not yet stored is lost.
+					b.flushHistory()
 					emitEvent("status", map[string]any{
 						"messageId": string(eventID),
 						"status":    "read",
@@ -376,29 +450,40 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 
 	roomID := id.RoomID(params.ChatID)
 
-	// An attachment goes as its own event, because a Matrix message carries one
-	// file and no caption. Sending several as one event would silently drop all
-	// but the first.
-	if len(params.Attachments) > 0 {
-		var lastID id.EventID
-		for _, path := range params.Attachments {
-			sent, err := b.sendFile(ctx, client, roomID, path)
-			if err != nil {
-				fail(c.ID, "send_failed", "%v", err)
-				return
-			}
-			lastID = sent
-		}
+	// An encrypted room, with encryption not working on this device. mautrix
+	// encrypts only when it holds a crypto helper; without one it sends in
+	// plain text and says nothing -- into a room whose members expect nothing
+	// to leave a device readable. Refusing is the only honest answer.
+	encrypted, canEncrypt := b.roomEncryption(ctx, client, roomID)
+	if encrypted && !canEncrypt {
+		fail(c.ID, "no_encryption", "This room is end-to-end encrypted and encryption is not working on this device, so nothing was sent.")
+		return
+	}
 
-		if strings.TrimSpace(params.Text) != "" {
-			sent, err := b.sendText(ctx, client, roomID, params.Text, params.ReplyTo)
+	// An attachment goes as its own event, because a Matrix message carries one
+	// file. Sending several as one event would silently drop all but the first.
+	//
+	// The caption and the reply ride in the first, in the same event: the host
+	// recorded them on that one row. Sent as an event of its own, the caption
+	// came back as a second message, and the row the host had kept for it --
+	// which carried the attachment -- showed the file a second time.
+	if len(params.Attachments) > 0 {
+		var first id.EventID
+		for i, path := range params.Attachments {
+			caption, replyTo := "", ""
+			if i == 0 {
+				caption, replyTo = params.Text, params.ReplyTo
+			}
+			sent, err := b.sendFile(ctx, client, roomID, path, caption, replyTo, encrypted)
 			if err != nil {
 				fail(c.ID, "send_failed", "%v", err)
 				return
 			}
-			lastID = sent
+			if i == 0 {
+				first = sent
+			}
 		}
-		ok(c.ID, map[string]any{"messageId": string(lastID)})
+		ok(c.ID, map[string]any{"messageId": string(first)})
 		return
 	}
 
@@ -427,7 +512,14 @@ func (b *bridge) sendText(ctx context.Context, client matrixSender, roomID id.Ro
 }
 
 // sendFile uploads an attachment and sends it as its own event.
-func (b *bridge) sendFile(ctx context.Context, client matrixSender, roomID id.RoomID, path string) (id.EventID, error) {
+//
+// A caption goes in the same event, the way Matrix 1.10 carries one: the body
+// is the caption and filename names the file. In an encrypted room the file
+// itself is encrypted before it is uploaded, with its key inside the event --
+// which is encrypted in turn -- the way every Matrix client sends one.
+// Uploaded as it was, the homeserver kept a readable copy of every attachment
+// sent into a room that nobody else could read.
+func (b *bridge) sendFile(ctx context.Context, client matrixSender, roomID id.RoomID, path, caption, replyTo string, encrypted bool) (id.EventID, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read attachment: %w", err)
@@ -436,19 +528,39 @@ func (b *bridge) sendFile(ctx context.Context, client matrixSender, roomID id.Ro
 	name := filepath.Base(path)
 	mime := mimeOf(name)
 
-	uploaded, err := client.UploadBytes(ctx, data, mime)
-	if err != nil {
-		return "", fmt.Errorf("upload attachment: %w", err)
-	}
-
 	content := &event.MessageEventContent{
-		MsgType: msgTypeFor(mime),
-		Body:    name,
-		URL:     uploaded.ContentURI.CUString(),
+		MsgType:  msgTypeFor(mime),
+		Body:     name,
+		FileName: name,
 		Info: &event.FileInfo{
 			MimeType: mime,
 			Size:     len(data),
 		},
+	}
+	if strings.TrimSpace(caption) != "" {
+		content.Body = caption
+	}
+	if replyTo != "" {
+		content.RelatesTo = (&event.RelatesTo{}).SetReplyTo(id.EventID(replyTo))
+	}
+
+	uploadMime := mime
+	if encrypted {
+		content.File = &event.EncryptedFileInfo{EncryptedFile: *attachment.NewEncryptedFile()}
+		content.File.EncryptInPlace(data)
+		// What is uploaded is ciphertext; its real type travels in the info.
+		uploadMime = "application/octet-stream"
+	}
+
+	uploaded, err := client.UploadBytes(ctx, data, uploadMime)
+	if err != nil {
+		return "", fmt.Errorf("upload attachment: %w", err)
+	}
+
+	if content.File != nil {
+		content.File.URL = uploaded.ContentURI.CUString()
+	} else {
+		content.URL = uploaded.ContentURI.CUString()
 	}
 
 	resp, err := client.SendMessageEvent(ctx, roomID, event.EventMessage, content)
@@ -456,6 +568,28 @@ func (b *bridge) sendFile(ctx context.Context, client matrixSender, roomID id.Ro
 		return "", err
 	}
 	return resp.EventID, nil
+}
+
+// roomEncryption reports whether a room is end-to-end encrypted, and whether
+// this device can encrypt at the moment.
+//
+// The room cache answers first: it is fed by the same state events as
+// mautrix's own store, and it survives an encryption store that failed to
+// open -- exactly when the question matters. mautrix's store is asked as well
+// once encryption is running, since that is what decides whether mautrix
+// encrypts the event itself.
+func (b *bridge) roomEncryption(ctx context.Context, client *mautrix.Client, roomID id.RoomID) (encrypted, canEncrypt bool) {
+	b.mu.RLock()
+	canEncrypt = b.crypto != nil
+	if info := b.rooms[roomID]; info != nil {
+		encrypted = info.Encrypted
+	}
+	b.mu.RUnlock()
+
+	if !encrypted && canEncrypt && client.StateStore != nil {
+		encrypted, _ = client.StateStore.IsEncrypted(ctx, roomID)
+	}
+	return encrypted, canEncrypt
 }
 
 func msgTypeFor(mime string) event.MessageType {
@@ -588,7 +722,9 @@ func (b *bridge) handleFetchMedia(ctx context.Context, c call) {
 		return
 	}
 
-	path, err := b.download(ctx, params.Ref, params.MessageID)
+	// No limit: the user asked for this one. It is streamed to disk, so a
+	// large file costs disk space rather than its size in memory.
+	path, err := b.download(ctx, params.Ref, params.MessageID, 0)
 	if err != nil {
 		fail(c.ID, "fetch_failed", "%v", err)
 		return
@@ -596,21 +732,46 @@ func (b *bridge) handleFetchMedia(ctx context.Context, c call) {
 	ok(c.ID, map[string]any{"path": path})
 }
 
-// download resolves an mxc:// URI into a file the host can cache.
-func (b *bridge) download(ctx context.Context, ref, messageID string) (string, error) {
+// errTooLarge is an attachment bigger than the limit it was fetched under.
+var errTooLarge = errors.New("attachment is larger than the auto-download limit")
+
+// parseMediaRef turns a ref from applyMedia back into what to download, and
+// the key to open it with when it came from an encrypted room.
+func parseMediaRef(ref string) (id.ContentURI, *event.EncryptedFileInfo, error) {
+	if strings.HasPrefix(ref, "{") {
+		var file event.EncryptedFileInfo
+		if err := json.Unmarshal([]byte(ref), &file); err != nil {
+			return id.ContentURI{}, nil, fmt.Errorf("unreadable attachment reference: %w", err)
+		}
+		uri, err := file.URL.Parse()
+		if err != nil {
+			return id.ContentURI{}, nil, fmt.Errorf("not a Matrix media URI: %w", err)
+		}
+		return uri, &file, nil
+	}
+
+	uri, err := id.ParseContentURI(ref)
+	if err != nil {
+		return id.ContentURI{}, nil, fmt.Errorf("not a Matrix media URI: %w", err)
+	}
+	return uri, nil, nil
+}
+
+// download resolves an attachment ref into a file the host can cache.
+//
+// limit caps how much is read, zero meaning no cap. DownloadBytes read the
+// whole file into memory with no ceiling at all, so an attachment that claimed
+// no size -- which the auto-download limit could not check -- was taken in
+// whole, however large.
+func (b *bridge) download(ctx context.Context, ref, messageID string, limit int64) (string, error) {
 	client := b.getClient()
 	if client == nil {
 		return "", fmt.Errorf("Matrix is not connected")
 	}
 
-	uri, err := id.ParseContentURI(ref)
+	uri, file, err := parseMediaRef(ref)
 	if err != nil {
-		return "", fmt.Errorf("not a Matrix media URI: %w", err)
-	}
-
-	data, err := client.DownloadBytes(ctx, uri)
-	if err != nil {
-		return "", fmt.Errorf("download attachment: %w", err)
+		return "", err
 	}
 
 	b.mu.RLock()
@@ -619,8 +780,15 @@ func (b *bridge) download(ctx context.Context, ref, messageID string) (string, e
 	if dir == "" {
 		return "", fmt.Errorf("no media directory was configured")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create media dir: %w", err)
+
+	resp, err := client.Download(ctx, uri)
+	if err != nil {
+		return "", fmt.Errorf("download attachment: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if limit > 0 && resp.ContentLength > limit {
+		return "", errTooLarge
 	}
 
 	// Named after the media id, not the filename: two people can send
@@ -629,33 +797,129 @@ func (b *bridge) download(ctx context.Context, ref, messageID string) (string, e
 	if name == "" {
 		name = strings.NewReplacer("/", "_", ":", "_", "$", "_").Replace(messageID)
 	}
-	path := filepath.Join(dir, filepath.Base(name))
+	return saveAttachment(dir, name, resp.Body, file, limit)
+}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+// saveAttachment writes a downloaded attachment into dir, decrypting it on the
+// way when it came from an encrypted room.
+//
+// Written under a temporary name and renamed into place, so the host is never
+// pointed at half a file -- nor at one whose hash did not match, which is not
+// the file that was sent.
+func saveAttachment(dir, name string, body io.Reader, file *event.EncryptedFileInfo, limit int64) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create media dir: %w", err)
+	}
+
+	if limit > 0 {
+		// One byte over is enough to know it is too large.
+		body = io.LimitReader(body, limit+1)
+	}
+
+	var decrypting io.ReadSeekCloser
+	if file != nil {
+		// Checked before reading anything: a key that cannot be used will not
+		// open the file afterwards either, and mautrix's decrypting reader
+		// assumes this has already been done.
+		if err := file.PrepareForDecryption(); err != nil {
+			return "", fmt.Errorf("cannot decrypt this attachment: %w", err)
+		}
+		decrypting = file.DecryptStream(body)
+		body = decrypting
+	}
+
+	tmp, err := os.CreateTemp(dir, ".matrix-download-*")
+	if err != nil {
+		return "", fmt.Errorf("write attachment: %w", err)
+	}
+
+	written, err := io.Copy(tmp, body)
+	if err == nil && limit > 0 && written > limit {
+		err = errTooLarge
+	}
+	if err == nil && decrypting != nil {
+		// Close is where the hash is checked, once everything has been read.
+		err = decrypting.Close()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("write attachment: %w", err)
+	}
+
+	path := filepath.Join(dir, filepath.Base(name))
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
 		return "", fmt.Errorf("write attachment: %w", err)
 	}
 	return path, nil
 }
 
-// autoDownload fetches an attachment in the background and re-emits the message
-// once it has landed, so an image appears without the user opening it.
-func (b *bridge) autoDownload(msg messageObj) {
+const (
+	// How many attachments are fetched at once, and how many may wait. A sync
+	// after a day away can carry hundreds: a goroutine for each started every
+	// download at once, and the homeserver rate-limited the lot.
+	downloadWorkers = 4
+	downloadQueue   = 64
+)
+
+// queueDownload hands an arriving attachment to the background downloads, if
+// the settings want it fetched ahead of time.
+func (b *bridge) queueDownload(msg messageObj) {
 	if !b.settingBool("autoDownloadMedia", true) {
 		return
 	}
-	maxMB := int64(b.settingInt("autoDownloadMaxMB", 16))
-	if maxMB > 0 && msg.FileSize > maxMB*1024*1024 {
+	if limit := b.autoDownloadLimit(); limit > 0 && msg.FileSize > limit {
 		return
 	}
 
-	path, err := b.download(context.Background(), msg.MediaRef, msg.ID)
+	b.downloadsOnce.Do(func() {
+		b.downloads = make(chan messageObj, downloadQueue)
+		for range downloadWorkers {
+			go func() {
+				for queued := range b.downloads {
+					b.autoDownload(queued)
+				}
+			}()
+		}
+	})
+
+	select {
+	case b.downloads <- msg:
+	default:
+		// Full: more arrived at once than is worth fetching ahead of time.
+		// These are fetched when they are opened instead.
+	}
+}
+
+// autoDownloadLimit is the largest attachment fetched without being asked
+// for, in bytes. Zero is no limit.
+func (b *bridge) autoDownloadLimit() int64 {
+	maxMB := int64(b.settingInt("autoDownloadMaxMB", 16))
+	if maxMB <= 0 {
+		return 0
+	}
+	return maxMB * 1024 * 1024
+}
+
+// autoDownload fetches an attachment in the background and re-states the
+// message once it has landed, so an image appears without the user opening it.
+func (b *bridge) autoDownload(msg messageObj) {
+	// The limit is enforced on the download as well as checked against the
+	// size the sender stated, which may be missing or wrong.
+	path, err := b.download(context.Background(), msg.MediaRef, msg.ID, b.autoDownloadLimit())
 	if err != nil {
 		logf("debug", "could not pre-fetch attachment: %v", err)
 		return
 	}
 
 	msg.MediaPath = path
-	emitEvent("message", map[string]any{"message": &msg})
+	// As a batch: the message went out when it arrived, and this only adds
+	// where its file now is. Sent as a message of its own it was a second
+	// arrival, and the host notified for the same message twice.
+	emitMessages([]messageObj{msg})
 }
 
 // matrixSender is the slice of the Matrix client that sending needs.

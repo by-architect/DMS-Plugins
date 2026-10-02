@@ -121,12 +121,15 @@ PanelWindow {
                 case Qt.Key_V:
                     ScreenCatcherService.setSaveToVideos(!ScreenCatcherService.saveToVideos);
                     break;
+                // Not while one is still being set up either — the Record rows
+                // are hidden then, and the key used to close the panel for a
+                // start that startRecording() was always going to refuse.
                 case Qt.Key_R:
-                    if (!ScreenCatcherService.isRecording)
+                    if (!ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting)
                         win.runAction(() => ScreenCatcherService.startRecording(full ? "full" : "select"));
                     break;
                 case Qt.Key_G:
-                    if (!ScreenCatcherService.isRecording)
+                    if (!ScreenCatcherService.isRecording && !ScreenCatcherService.isSelecting)
                         win.runAction(() => ScreenCatcherService.recordGif(full ? "full" : "select"));
                     break;
                 case Qt.Key_X:
@@ -217,7 +220,7 @@ PanelWindow {
                             }
 
                             StyledText {
-                                text: ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter for the selection, Shift for the whole screen — Esc closes")
+                                text: ScreenCatcherService.isFinishing ? (ScreenCatcherService.recordingFormat === "gif" ? "Recording stopped · converting to GIF…" : "Recording stopped · saving…") : (ScreenCatcherService.isRecording ? ("Recording " + ScreenCatcherService.recordingLabel + " · " + ScreenCatcherService.elapsedLabel + " — X stops") : (ScreenCatcherService.isSelecting ? "Starting a recording — X cancels" : "Press a letter for the selection, Shift for the whole screen — Esc closes"))
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: (ScreenCatcherService.isRecording || ScreenCatcherService.isSelecting) ? Theme.error : Theme.surfaceVariantText
                             }
@@ -499,7 +502,10 @@ PanelWindow {
 
                             // Visible during the selection/startup phase as well,
                             // so a recording that is waiting on slurp can always be
-                            // called off from the panel it was started from.
+                            // called off from the panel it was started from. Once
+                            // stopped it says what is still happening (a long GIF
+                            // conversion, mostly) instead of offering a stop with
+                            // nothing left to stop.
                             ActionRow {
                                 width: parent.width
                                 height: 44
@@ -507,7 +513,7 @@ PanelWindow {
                                 danger: true
                                 letter: "X"
                                 icon: "stop_circle"
-                                label: ScreenCatcherService.isRecording ? ("Stop Recording · " + ScreenCatcherService.elapsedLabel) : "Cancel Recording"
+                                label: ScreenCatcherService.isFinishing ? ((ScreenCatcherService.recordingFormat === "gif" ? "Converting to GIF… · " : "Saving… · ") + ScreenCatcherService.elapsedLabel) : (ScreenCatcherService.isRecording ? ("Stop Recording · " + ScreenCatcherService.elapsedLabel) : "Cancel Recording")
                                 onActivated: ScreenCatcherService.stopRecording()
                             }
                         }

@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,6 +51,13 @@ type Notification struct {
 	Body     string
 	FilePath string
 	Timeout  int32
+
+	// Actions are key and label pairs offered on the notification. "default"
+	// is the one a notification server invokes when the notification itself
+	// is clicked. Left empty, a notification carrying a file offers to open
+	// it and its folder -- which only does anything while somebody is
+	// listening for the answer, see Listen.
+	Actions []string
 }
 
 func Send(n Notification) (uint32, error) {
@@ -68,8 +76,8 @@ func Send(n Notification) (uint32, error) {
 	n.Summary = clip(n.Summary, maxSummaryRunes)
 	n.Body = clip(n.Body, maxBodyRunes)
 
-	var actions []string
-	if n.FilePath != "" {
+	actions := n.Actions
+	if actions == nil && n.FilePath != "" {
 		actions = []string{
 			"open", "Open",
 			"folder", "Open Folder",
@@ -109,6 +117,68 @@ func Send(n Notification) (uint32, error) {
 	}
 
 	return notificationID, nil
+}
+
+// Listen reports what happens to notifications after they are shown, until ctx
+// ends: onAction when one of a notification's actions is invoked -- "default"
+// for a click on the notification itself -- and onClosed when it goes away.
+//
+// A notification's actions are only an offer. The server answers on the bus,
+// and without somebody listening a button does nothing at all, which is what
+// chat's "Open" buttons did.
+func Listen(ctx context.Context, onAction func(id uint32, action string), onClosed func(id uint32)) error {
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return fmt.Errorf("dbus session failed: %w", err)
+	}
+
+	if err := conn.AddMatchSignal(
+		dbus.WithMatchObjectPath(notifyPath),
+		dbus.WithMatchInterface(notifyInterface),
+	); err != nil {
+		return fmt.Errorf("watch notifications: %w", err)
+	}
+
+	signals := make(chan *dbus.Signal, 32)
+	conn.Signal(signals)
+	defer conn.RemoveSignal(signals)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case sig, ok := <-signals:
+			if !ok {
+				return nil
+			}
+			if sig == nil || sig.Path != notifyPath || len(sig.Body) < 1 {
+				continue
+			}
+			id, ok := sig.Body[0].(uint32)
+			if !ok {
+				continue
+			}
+			switch sig.Name {
+			case notifyInterface + ".ActionInvoked":
+				if len(sig.Body) < 2 {
+					continue
+				}
+				if action, ok := sig.Body[1].(string); ok && onAction != nil {
+					onAction(id, action)
+				}
+			case notifyInterface + ".NotificationClosed":
+				if onClosed != nil {
+					onClosed(id)
+				}
+			}
+		}
+	}
+}
+
+// OpenPath hands a file or directory to the desktop's opener, detached, so it
+// outlives whoever asked.
+func OpenPath(path string) {
+	openPath(path)
 }
 
 func SpawnActionListener(notificationID uint32, filePath string) {
@@ -203,5 +273,10 @@ func openPath(path string) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true,
 	}
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	// Reaped, so a caller that runs for days does not collect a defunct
+	// process per click.
+	go cmd.Wait()
 }

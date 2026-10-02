@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Common
 import qs.Services
 
 // Launcher provider backed by `ps`. The process list doesn't depend on what's
@@ -118,11 +119,13 @@ Item {
             action: () => root._runKill(e, a.id)
         }));
 
+        // Proc.dmsBin, not a bare "dms": the shell hands its children
+        // $DMS_EXECUTABLE, but doesn't always have dms itself on PATH.
         actions.push({
             icon: "content_copy",
             text: "Copy PID",
             action: () => {
-                Quickshell.execDetached(["dms", "cl", "copy", String(e.pid)]);
+                Quickshell.execDetached([Proc.dmsBin, "cl", "copy", String(e.pid)]);
                 root._toast("Copied", String(e.pid));
             }
         });
@@ -130,7 +133,7 @@ Item {
             icon: "content_copy",
             text: "Copy command line",
             action: () => {
-                Quickshell.execDetached(["dms", "cl", "copy", e.args]);
+                Quickshell.execDetached([Proc.dmsBin, "cl", "copy", e.args]);
                 root._toast("Copied", e.args);
             }
         });
@@ -158,6 +161,12 @@ Item {
             if (code === 0) {
                 _processes = _parseProcesses(out);
                 _fetchError = "";
+            } else if (code === -1) {
+                // The worker's own timeout - also what a ps binary that
+                // couldn't be started at all looks like (a wrong path in
+                // settings), since that never reports an exit of its own.
+                // "ps exited with code -1" said neither.
+                _fetchError = "'" + psBin + "' did not start, or did not answer in time. Check the ps binary in this plugin's settings.";
             } else {
                 _fetchError = _firstErrorLine(err) || ("ps exited with code " + code + ".");
             }
@@ -286,15 +295,29 @@ Item {
             return;
         }
 
-        actionWorker.run([psBin, "-p", String(entry.pid), "-o", "args="], (out, err, code) => {
+        // "ww" so the command line comes back at full width, exactly as the
+        // poll that built the list read it - the comparison below depends on
+        // the two matching character for character.
+        actionWorker.run([psBin, "-p", String(entry.pid), "-o", "args=", "ww"], (out, err, code) => {
             const current = out.trim();
             if (code !== 0 || current.length === 0) {
                 _toastError("Already gone", entry.display + " (PID " + entry.pid + ") is no longer running.");
-                _lastFetchAt = 0;
+                _refreshAfterKill();
                 return;
             }
             if (_looksLikeQuickshell(current)) {
                 _toastError("Refused", "That's quickshell — the shell running this launcher. Killing it would end your session.");
+                return;
+            }
+            // The pid answering at all only proves *something* has it now.
+            // If the process the list showed has exited and the pid was
+            // handed to a new one since, its command line won't match the
+            // one the list was built from - and that new process is not what
+            // was picked, so it's left alone. Without this the reuse case
+            // the re-check exists for would sail straight through to kill.
+            if (current !== entry.args) {
+                _toastError("Not killed", "PID " + entry.pid + " now belongs to " + _displayName(current) + ", not " + entry.display + " - the list was out of date and has been refreshed.");
+                _refreshAfterKill();
                 return;
             }
 
@@ -309,9 +332,18 @@ Item {
                 } else {
                     _toastError("Could not kill", _firstErrorLine(err2) || ("kill exited with code " + code2 + "."));
                 }
-                _lastFetchAt = 0;
+                _refreshAfterKill();
             });
         });
+    }
+
+    // Re-poll as soon as a kill has an answer instead of on the next
+    // keystroke. A kill picked from the right-click menu leaves the launcher
+    // open on the same list, which used to keep showing the process it had
+    // just killed until something else was typed.
+    function _refreshAfterKill() {
+        _lastFetchAt = 0;
+        _maybePoll();
     }
 
     function _looksLikeQuickshell(args) {

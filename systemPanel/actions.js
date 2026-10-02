@@ -24,10 +24,20 @@ function parseDump(raw) {
         try {
             data = JSON.parse(body);
         } catch (e) {
-            // A file caught halfway through a write parses as nothing. The
-            // caller keeps the previous snapshot of that action rather than
-            // blinking the row out and back.
-            data = null;
+            // Anything the writer appended after the record — a trailing
+            // header line, a log line — would otherwise cost the whole row, so
+            // try again at the last closing brace before giving up. A file
+            // caught halfway through a write still parses as nothing, and the
+            // caller keeps its previous snapshot rather than blinking the row
+            // out and back.
+            var end = body.lastIndexOf("}");
+            if (end > 0) {
+                try {
+                    data = JSON.parse(body.slice(0, end + 1));
+                } catch (e2) {
+                    data = null;
+                }
+            }
         }
         out.push({
             file: c.slice(0, nl),
@@ -235,6 +245,12 @@ function normalize(file, d, nowMs) {
         pct = (isFinite(done) && isFinite(total) && total > 0) ? (done / total) * 100 : -1;
     if (pct > 100)
         pct = 100;
+    // A writer with nothing to report yet writes zeros, not nulls — a git
+    // clone receiving objects, or a copy in its first moments. "0.0%" against
+    // an empty bar claims a measurement that does not exist; unknown is
+    // honest, and it turns into a number the moment one arrives.
+    if (pct === 0 && !(isFinite(total) && total > 0) && !(isFinite(done) && done > 0) && !str(pick(d, "rate", "speed")))
+        pct = -1;
 
     return {
         key: file,

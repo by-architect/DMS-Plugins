@@ -43,6 +43,11 @@ Plugins.
 - Its own `ps` call is filtered out of the results — otherwise every refresh
   would show a fresh `ps` process momentarily measuring itself at a high
   CPU%, which is noise, not a real answer to "what's using my CPU."
+- DMS also asks launcher plugins for results on plain searches typed
+  *without* a trigger, unless the plugin is switched off under **Settings →
+  Launcher → Plugin visibility**. Left on, searching `firefox` to launch it
+  also lists the running firefox processes — whose Enter action is a kill —
+  below the app. Switching Process Runner off there keeps it to `kill <name>`.
 
 ## Selecting a result
 
@@ -57,10 +62,14 @@ Right-click also offers **Copy PID** and **Copy command line**.
 Every kill re-verifies the target immediately beforehand (`ps -p <pid>`),
 for two reasons: the process may have already exited (and its PID reused for
 something else entirely) since the list was last refreshed, and this is
-where the one safety rail below is enforced. `kill`'s own exit code decides
-what the toast says — a failed signal (e.g. trying to kill another user's or
-root's process without privilege) is reported as a failure, not silently
-assumed to have worked.
+where the one safety rail below is enforced. A PID whose command line no
+longer matches the row you picked belongs to some other process now, so it
+is left alone and the list is refreshed instead. `kill`'s own exit code
+decides what the toast says — a failed signal (e.g. trying to kill another
+user's or root's process without privilege) is reported as a failure, not
+silently assumed to have worked. Either way the list is re-read as soon as
+the kill has an answer, so a process killed from the right-click menu drops
+out of the still-open list without typing anything.
 
 ## Safety
 

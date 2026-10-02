@@ -14,7 +14,7 @@ nix c++            →  metacharacters are literal, not regex
 Symlink it into the DMS plugin directory and rescan:
 
 ```sh
-ln -s "$PWD/plugins/nixSearch" ~/.config/DankMaterialShell/plugins/nixSearch
+ln -s "$PWD/nixSearch" ~/.config/DankMaterialShell/plugins/nixSearch
 dms ipc call plugin-scan scan
 ```
 
@@ -52,6 +52,13 @@ scorer keeps it instead of re-sorting and dropping description-only matches.
 
 Per-query results are cached (40 queries, LRU), so backspacing through a query
 is instant.
+
+DMS also asks launcher plugins for results on plain searches typed *without* a
+trigger, unless the plugin is switched off under **Settings → Launcher → Plugin
+visibility**. For this plugin that means a `nix search` for whatever is typed
+there — looking up `firefox` to launch it starts an eval of nixpkgs — so
+switching Nix Search off in that list is worth it. `nix <query>` works the same
+either way.
 
 ## Settings
 
