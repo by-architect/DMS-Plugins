@@ -72,9 +72,21 @@ credentials for — this is a quick-connect surface, not a credentials flow.
 
 While the panel is open it holds a `NetworkService` reference, the same way
 DMS's own network detail does, which is what makes the shell scan for
-networks (once on open, then every 10 seconds); it is released on close.
-Without it the WiFi list was whatever the last scan anyone else asked for had
-found.
+networks every 10 seconds; it is released on close. Every open also asks for
+a scan straight away when WiFi is on (the reference alone only does that when
+nothing else holds one), and switching WiFi on while the panel is open scans
+as soon as the radio is up. Without this the WiFi list was whatever the last
+scan anyone else asked for had found.
+
+Bluetooth works the same way: while the panel is open and Bluetooth is on,
+the adapter looks for devices, and the Bluetooth list shows the ones in range
+that are not paired yet under the paired ones, marked **Nearby**. Enter or a
+click pairs one. Devices with no name of their own are left out. Closing the
+panel stops the search, unless something else (the shell's own Bluetooth
+detail) started it.
+
+The shell's pairing prompt and WiFi password prompt open underneath this
+fullscreen panel, so the panel closes itself when either one appears.
 
 ## Install
 

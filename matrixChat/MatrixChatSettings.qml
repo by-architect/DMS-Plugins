@@ -100,7 +100,7 @@ PluginSettings {
             if (succeeded) {
                 // Clear on success so the key is not left sitting in the field.
                 recoveryKeyField.text = "";
-                root.verifyResult = "This device is verified, and your key backup was restored to it if the account has one. Messages it already received but could not read are not fetched again.";
+                root.verifyResult = "This device is verified, and your key backup was restored to it if the account has one. Messages it received but could not read yet are being tried again.";
             } else {
                 root.verifyResult = error || "Verification failed.";
             }

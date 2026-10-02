@@ -314,6 +314,46 @@ cleanup_rec() {
     fi
 }
 
+# A recording is only ever stopped by the shell's Process, so a shell that went
+# away mid-recording -- a crash, `dms restart`, a reload that took this script
+# down with it -- left wf-recorder writing to the disk with nobody left to stop
+# it. This runs beside the recording and stops it the way the stop button does,
+# with SIGINT so the file is finalized, as soon as this script's parent is no
+# longer the shell that started it, or the script is gone altogether. The
+# parent is read from /proc rather than probed by pid, so a recycled pid cannot
+# fool it. A script that is still alive carries on as after any other stop --
+# conversion, clipboard, notification. One that is not leaves nobody to undo
+# the audio mix or say where the recording went, so this does both.
+watch_shell() {
+    # watch_shell <shell pid> <script pid> <recorder pid> <file>
+    local shell_pid="$1" script_pid="$2" rec_pid="$3" file="$4" stat alive
+    # Never the script's own EXIT trap: cleanup_rec would delete a
+    # clipboard-only recording out from under it.
+    trap - EXIT INT TERM
+    while kill -0 "$rec_pid" 2>/dev/null; do
+        stat=""
+        { read -r stat <"/proc/$script_pid/stat"; } 2>/dev/null
+        # shellcheck disable=SC2086 # split "state ppid ..." into fields
+        set -- ${stat##*) }
+        # A killed script lingers as a zombie, parent unchanged, until that
+        # parent collects it -- dead all the same.
+        alive=0
+        [ -n "$stat" ] && [ "${1:-}" != "Z" ] && alive=1
+        if [ "$alive" = 1 ] && [ "${2:-}" = "$shell_pid" ]; then
+            sleep 1
+            continue
+        fi
+        kill -INT "$rec_pid" 2>/dev/null
+        # Decided now, not once the recorder is done: by then a script that was
+        # merely orphaned may have finished -- and said so -- already.
+        [ "$alive" = 1 ] && return 0
+        while kill -0 "$rec_pid" 2>/dev/null; do sleep 0.2; done
+        teardown_mix_audio
+        notify "Recording stopped" "The shell went away mid-recording. Saved: $file"
+        return 0
+    done
+}
+
 case "$cmd" in
 
 shot-full | shot-select)
@@ -428,6 +468,9 @@ rec-start)
     fi
 
     trap cleanup_rec EXIT
+    # With the shell gone, stdout is a pipe nobody reads, and the next echo
+    # would kill this script before it saved what was recorded.
+    trap '' PIPE
 
     geo_args=()
     output_args=()
@@ -490,6 +533,9 @@ rec-start)
     # which is what makes it flush and finalize the container instead of
     # leaving an unplayable file behind.
     trap 'kill -INT "$child_pid" 2>/dev/null' INT TERM
+
+    # Away from stdout, which the shell reads until the last writer closes it.
+    watch_shell "$PPID" "$$" "$child_pid" "$rawfile" </dev/null >/dev/null 2>&1 &
 
     echo "STARTED $finalfile"
 

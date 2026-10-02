@@ -28,20 +28,7 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 		return
 	}
 
-	// An edit is not a new message. Matrix sends it as a fresh event pointing at
-	// the original; re-emitting under the *original* id makes the host's upsert
-	// replace the text in place instead of appending a near-duplicate.
-	targetID := evt.ID
-	edit := false
-	if rel := content.RelatesTo; rel != nil && rel.Type == event.RelReplace && rel.EventID != "" {
-		targetID = rel.EventID
-		edit = true
-		if content.NewContent != nil {
-			content = content.NewContent
-		}
-	}
-
-	msg := b.convert(evt, content, targetID)
+	msg, edit := b.messageFor(evt, content)
 	if msg == nil {
 		return
 	}
@@ -81,6 +68,24 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 	emitEvent("chat", map[string]any{"chat": chat})
 }
 
+// messageFor converts a timeline message, and reports whether it is an edit.
+//
+// An edit is not a new message. Matrix sends it as a fresh event pointing at
+// the original; re-emitting under the *original* id makes the host's upsert
+// replace the text in place instead of appending a near-duplicate.
+func (b *bridge) messageFor(evt *event.Event, content *event.MessageEventContent) (*messageObj, bool) {
+	targetID := evt.ID
+	edit := false
+	if rel := content.RelatesTo; rel != nil && rel.Type == event.RelReplace && rel.EventID != "" {
+		targetID = rel.EventID
+		edit = true
+		if content.NewContent != nil {
+			content = content.NewContent
+		}
+	}
+	return b.convert(evt, content, targetID), edit
+}
+
 // isInitialSync reports whether an event came from a sync with no position to
 // start from: the first one a new device makes. mautrix puts the position each
 // response was asked from in the context it dispatches with.
@@ -102,6 +107,13 @@ func (b *bridge) holdHistory(msg messageObj) {
 // anything that names a message by id -- a deletion, a read status -- so the
 // message is in the host's store before the reference to it arrives.
 func (b *bridge) flushHistory() {
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+	b.flushHeldLocked()
+}
+
+// flushHeldLocked sends what is held, for a caller already holding flushMu.
+func (b *bridge) flushHeldLocked() {
 	b.mu.Lock()
 	msgs := b.history
 	b.history = nil
@@ -263,9 +275,16 @@ func (b *bridge) onRedaction(ctx context.Context, evt *event.Event) {
 	if evt.Redacts == "" {
 		return
 	}
+	// Under the lock a decrypted message goes out under, so a message still
+	// waiting for its key is either filled in before this deletion or never:
+	// filled in after it, it would come back. See deliverRecovered.
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+	b.forgetWaiting(evt.Redacts)
+
 	// Anything held back as history first, so the message is stored before
 	// the deletion that names it arrives.
-	b.flushHistory()
+	b.flushHeldLocked()
 	emitEvent("deleted", map[string]any{
 		"chatId":    string(evt.RoomID),
 		"messageId": string(evt.Redacts),
@@ -722,9 +741,15 @@ func (b *bridge) handleFetchMedia(ctx context.Context, c call) {
 		return
 	}
 
+	ref, err := b.keyedRef(ctx, id.RoomID(params.ChatID), id.EventID(params.MessageID), params.Ref)
+	if err != nil {
+		fail(c.ID, "fetch_failed", "%v", err)
+		return
+	}
+
 	// No limit: the user asked for this one. It is streamed to disk, so a
 	// large file costs disk space rather than its size in memory.
-	path, err := b.download(ctx, params.Ref, params.MessageID, 0)
+	path, err := b.download(ctx, ref, params.MessageID, 0)
 	if err != nil {
 		fail(c.ID, "fetch_failed", "%v", err)
 		return
@@ -755,6 +780,96 @@ func parseMediaRef(ref string) (id.ContentURI, *event.EncryptedFileInfo, error) 
 		return id.ContentURI{}, nil, fmt.Errorf("not a Matrix media URI: %w", err)
 	}
 	return uri, nil, nil
+}
+
+// keyedRef finds the key for an attachment whose ref was stored without one.
+//
+// Before refs carried the encrypted file's key, an attachment in an encrypted
+// room was stored as its bare URL: fetched, it was the ciphertext, and nothing
+// to open it with -- so it opened as noise. The key was in the message all
+// along, and the message id is the event id: fetching the event again, and
+// decrypting it, finds the key where it always was.
+//
+// The event is fetched whatever the room is thought to be, since it is the
+// event that knows whether it was encrypted. When it cannot be fetched, the
+// plain download is still tried in a room not known to be encrypted; in one
+// that is, the plain download is the noise this replaces.
+func (b *bridge) keyedRef(ctx context.Context, roomID id.RoomID, eventID id.EventID, ref string) (string, error) {
+	client := b.getClient()
+	if client == nil {
+		// The download says that it is not connected.
+		return ref, nil
+	}
+	encrypted, _ := b.roomEncryption(ctx, client, roomID)
+
+	var dec eventDecrypter
+	if helper := b.currentCrypto(); helper != nil {
+		dec = helper
+	}
+	return legacyRef(ctx, client, dec, encrypted, roomID, eventID, ref)
+}
+
+// legacyRef is keyedRef with what it needs passed in.
+func legacyRef(ctx context.Context, src eventSource, dec eventDecrypter, encrypted bool, roomID id.RoomID, eventID id.EventID, ref string) (string, error) {
+	uri, file, err := parseMediaRef(ref)
+	if err != nil || file != nil || roomID == "" || !strings.HasPrefix(string(eventID), "$") {
+		// Unreadable, already keyed, or not a Matrix event: the download
+		// takes it as it is.
+		return ref, nil
+	}
+
+	evt, err := fetchEvent(ctx, src, dec, roomID, eventID)
+	switch {
+	case errors.Is(err, errNotDecrypted):
+		return "", fmt.Errorf("this attachment is encrypted, and its message cannot be decrypted on this device yet: %w", err)
+	case err != nil && encrypted:
+		return "", fmt.Errorf("this attachment is encrypted, and its message could not be read to find the key: %w", err)
+	case err != nil:
+		return ref, nil
+	}
+
+	key, found := attachmentIn(evt, uri)
+	switch {
+	case key != nil:
+		keyed, err := json.Marshal(key)
+		if err != nil {
+			return "", fmt.Errorf("unusable attachment key: %w", err)
+		}
+		return string(keyed), nil
+	case found:
+		// Sent unencrypted -- a sticker, or a message from before the room
+		// was encrypted -- so the plain download is the right one.
+		return ref, nil
+	case encrypted || evt.Mautrix.WasEncrypted:
+		return "", fmt.Errorf("this attachment is encrypted, and its key is not in the message it came with")
+	}
+	return ref, nil
+}
+
+// attachmentIn finds the attachment a ref names in the message it came from:
+// its encrypted file info when it was encrypted, and whether the message
+// carries it at all. An edit may have put it in the replacement content.
+func attachmentIn(evt *event.Event, uri id.ContentURI) (*event.EncryptedFileInfo, bool) {
+	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
+	if !ok {
+		return nil, false
+	}
+	for _, c := range []*event.MessageEventContent{content, content.NewContent} {
+		if c == nil {
+			continue
+		}
+		if c.File != nil {
+			if fileURI, err := c.File.URL.Parse(); err == nil && fileURI == uri {
+				return c.File, true
+			}
+		}
+		if c.URL != "" {
+			if plainURI, err := c.URL.Parse(); err == nil && plainURI == uri {
+				return nil, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // download resolves an attachment ref into a file the host can cache.

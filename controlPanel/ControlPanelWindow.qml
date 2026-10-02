@@ -80,10 +80,13 @@ PanelWindow {
     }
 
     // ------------------------------------------------------- bluetooth data
+    // Paired devices first, then -- while discovery is running -- the ones in
+    // range that are not paired yet. A device with no name of its own (BlueZ
+    // falls back to its address) is left out: a scan anywhere busy turns up
+    // dozens of nameless beacons nobody means to pair with.
     readonly property var bluetoothFiltered: {
         const q = queryFor("bluetooth");
-        const devices = BluetoothService.pairedDevices || [];
-        return devices.filter(d => Commands.matches(d.name || d.deviceName, q)).map(d => ({
+        const paired = (BluetoothService.pairedDevices || []).filter(d => Commands.matches(d.name || d.deviceName, q)).map(d => ({
                     key: (d.address || d.name || d.deviceName || ""),
                     label: d.name || d.deviceName || "Unknown device",
                     meta: d.connected ? "Connected" : (d.paired ? "Paired" : ""),
@@ -92,11 +95,39 @@ PanelWindow {
                     icon: BluetoothService.getDeviceIcon(d) || "bluetooth",
                     device: d
                 }));
+        if (!BluetoothService.discovering || !BluetoothService.devices)
+            return paired;
+        const nearby = BluetoothService.devices.values.filter(d => d && !d.paired && !d.trusted && !d.blocked && (d.signalStrength === undefined || d.signalStrength > 0) && hasOwnName(d) && Commands.matches(d.name || d.deviceName, q));
+        return paired.concat(BluetoothService.sortDevices(nearby).map(d => ({
+                        key: d.address,
+                        label: d.name || d.deviceName,
+                        meta: "Nearby · pair",
+                        connected: false,
+                        busy: BluetoothService.isDeviceBusy(d),
+                        icon: BluetoothService.getDeviceIcon(d) || "bluetooth",
+                        device: d,
+                        nearby: true
+                    })));
+    }
+
+    function hasOwnName(device) {
+        const name = device.name || device.deviceName || "";
+        return name !== "" && !/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(name);
     }
 
     function connectBluetooth(item) {
-        if (item)
+        if (!item)
+            return;
+        if (!item.nearby) {
             BluetoothService.connectDeviceWithTrust(item.device);
+            return;
+        }
+        // A device that wants a code confirmed asks through the shell's
+        // pairing prompt, which closes this window when it opens (below).
+        BluetoothService.pairDevice(item.device, response => {
+            if (response && response.error)
+                ToastService.showError("Pairing failed", response.error);
+        });
     }
 
     // --------------------------------------------------------- speaker data
@@ -182,14 +213,85 @@ PanelWindow {
             NetworkService.removeRef();
     }
 
+    // Bluetooth discovery runs while the window is open and the adapter is
+    // on. Only a discovery this window started is stopped again on close, so
+    // closing the panel never cuts short a scan the shell's own Bluetooth
+    // detail is running.
+    property var discoveryAdapter: null
+
+    function syncDiscovery() {
+        const adapter = BluetoothService.adapter;
+        const wanted = open && BluetoothService.enabled && adapter !== null;
+        if (discoveryAdapter && (!wanted || discoveryAdapter !== adapter)) {
+            if (discoveryAdapter.enabled && discoveryAdapter.discovering)
+                discoveryAdapter.discovering = false;
+            discoveryAdapter = null;
+        }
+        if (wanted && !discoveryAdapter && !adapter.discovering) {
+            adapter.discovering = true;
+            discoveryAdapter = adapter;
+        }
+    }
+
+    Connections {
+        target: NetworkService
+
+        // Switched on while the panel is open: scan as soon as the radio is
+        // up, rather than on the shell's next 10-second tick.
+        function onWifiEnabledChanged() {
+            if (win.open && NetworkService.wifiEnabled)
+                wifiRescan.restart();
+        }
+    }
+
+    Timer {
+        id: wifiRescan
+
+        interval: 1500
+        onTriggered: {
+            if (win.open && NetworkService.wifiEnabled)
+                NetworkService.scanWifi();
+        }
+    }
+
+    Connections {
+        target: BluetoothService
+
+        function onEnabledChanged() {
+            win.syncDiscovery();
+        }
+        function onAdapterChanged() {
+            win.syncDiscovery();
+        }
+    }
+
+    // The shell's pairing prompt and WiFi password prompt open on the layer
+    // below this one, where a fullscreen panel would hide them and hold the
+    // keyboard they need. Step aside, the way the shell's control center does.
+    readonly property bool promptOpen: NetworkService.credentialsRequested === true || (PopoutService.bluetoothPairingModal?.shouldBeVisible ?? false) || (PopoutService.wifiPasswordModal?.shouldBeVisible ?? false)
+
+    onPromptOpenChanged: {
+        if (promptOpen && open)
+            closeRequested();
+    }
+
     // Every open starts in panel mode with an empty search. The window is
     // only hidden on close, never destroyed, so closing it while typing (bar
     // pill, close button, the IPC toggle) used to bring it back with the
     // field still focused — the letters typed text instead of toggling,
     // contrary to the README — and the lists still filtered by the old query.
+    //
+    // It also looks again for what is in range, on whichever radios are on.
+    // The reference above only starts a WiFi scan when it is the first one
+    // held -- with the shell's own network detail or settings page open as
+    // well, the list waited for the next 10-second tick -- so a scan is asked
+    // for outright; the shell skips it if one is already running.
     onOpenChanged: {
         syncScanRef();
+        syncDiscovery();
         if (open) {
+            if (NetworkService.wifiEnabled)
+                NetworkService.scanWifi();
             clearSearch();
             focusAnchor.forceActiveFocus();
         }
@@ -203,6 +305,8 @@ PanelWindow {
         TailscaleService.refCount--;
         if (holdsScanRef)
             NetworkService.removeRef();
+        if (discoveryAdapter && discoveryAdapter.discovering)
+            discoveryAdapter.discovering = false;
     }
 
     visible: open
@@ -416,7 +520,7 @@ PanelWindow {
                         toggleOn: BluetoothService.enabled
                         items: win.bluetoothFiltered
                         topKey: win.topKeyFor("bluetooth", win.bluetoothFiltered)
-                        emptyText: BluetoothService.enabled ? "No paired devices" : "Bluetooth is off"
+                        emptyText: BluetoothService.enabled ? (BluetoothService.discovering ? "Looking for devices…" : "No paired devices") : "Bluetooth is off"
                         onToggleRequested: BluetoothService.setBluetoothEnabled(!BluetoothService.enabled)
                         onActivated: item => win.connectBluetooth(item)
                     }

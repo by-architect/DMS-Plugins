@@ -176,6 +176,104 @@ function forge(name) {
     return [{ op: "regex", value: "^(https?://|ssh://|git@)([^/]*[.@])?" + name + "\\.", caseSensitive: false }];
 }
 
+// Sites yt-dlp can pull a video from, besides YouTube (which has its own
+// actions). Matched on the hostname, so a link that merely mentions one in its
+// path does not count.
+var VIDEO_SITES = "x\\.com|twitter\\.com|instagram\\.com|tiktok\\.com|vimeo\\.com|reddit\\.com|v\\.redd\\.it|twitch\\.tv|dailymotion\\.com|streamable\\.com|facebook\\.com|fb\\.watch|bsky\\.app|bilibili\\.com";
+
+function onSite(hosts) {
+    return [{ op: "regex", value: "^https?://([^/?#]*\\.)?(" + hosts + ")([/:?#]|$)", caseSensitive: false }];
+}
+
+// Query parameters that only exist to say where a link was clicked. The same
+// list decides when "Remove tracking" is offered and what it removes.
+var TRACKING = "utm_\\w+|fbclid|gclid|dclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igsh|igshid|si|ref_src|ref_url|_hsenc|_hsmi|mkt_tok|yclid|twclid|ttclid|srsltid|_ga|_gl";
+
+// The query is filtered as written rather than parsed and rebuilt, so every
+// parameter that stays keeps its exact encoding.
+var URL_CLEAN = [
+    'C=$(python3 -c \'import re,sys,urllib.parse as p;u=p.urlsplit(sys.argv[1]);j=re.compile(r"^(' + TRACKING + ')$",re.I);q="&".join(x for x in u.query.split("&") if x and not j.match(p.unquote_plus(x.split("=",1)[0])));print(p.urlunsplit(u._replace(query=q)))\' ${clipboard})',
+    'printf %s "$C" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    'notify-send -a "Clipboard Runner" "Clean link copied" "$C"'
+].join("\n");
+
+// One palette built from the clip itself, instead of a generic 256 colours, is
+// what keeps a GIF's gradients and UI greys from banding; stats_mode=diff
+// spends it on what moves, which suits screen recordings. Never wider than the
+// source, so a small clip is not blown up.
+var VIDEO_GIF = 'ffmpeg -y -i ${path} -vf "fps=12,scale=min(640\\,iw):-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" -loop 0 "${2:r}.gif"';
+
+// Small enough for a chat app's upload limit: the long edge at most 1280,
+// never enlarged, H.264 and AAC so anything plays it, and the index up front
+// so it starts before it has finished downloading.
+var VIDEO_SMALL = 'ffmpeg -y -i ${path} -vf "scale=w=min(1280\\,iw):h=min(1280\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2" -c:v libx264 -preset veryfast -crf 26 -c:a aac -b:a 128k -movflags +faststart "${2:r}-small.mp4"';
+
+var IMAGE_OCR = [
+    'T=$(tesseract ${path} - -l eng -c page_separator= 2>/dev/null)',
+    'if [ -n "${T//[[:space:]]/}" ]; then',
+    '    printf %s "$T" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    '    notify-send -a "Clipboard Runner" "Text copied" "${T[1,300]}"',
+    'else',
+    '    notify-send -a "Clipboard Runner" ${basename} "No text found"',
+    'fi'
+].join("\n");
+
+// Brief mode, through stdin so a text starting with "-" is not read as an
+// option; translate-shell needs the network, hence the timeout.
+var TEXT_TRANSLATE = [
+    'R=$(printf %s ${clipboard} | timeout 30 trans -b :en 2>/dev/null)',
+    'if [ -n "$R" ]; then',
+    '    printf %s "$R" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    '    notify-send -a "Clipboard Runner" "Translation copied" "${R[1,300]}"',
+    'else',
+    '    notify-send -a "Clipboard Runner" "Translation failed" "translate-shell gave nothing back -- offline?"',
+    'fi'
+].join("\n");
+
+var TEXT_JSON = [
+    'R=$(printf %s ${clipboard} | jq . 2>&1)',
+    'if [ $? -eq 0 ]; then',
+    '    printf %s "$R" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    '    notify-send -a "Clipboard Runner" "Formatted JSON copied" "${#${(f)R}} lines"',
+    'else',
+    '    notify-send -a "Clipboard Runner" "Not valid JSON" "$R"',
+    'fi'
+].join("\n");
+
+// The filter only lets digits and operators through, and the command checks
+// again before Python evaluates anything, with no builtins and a timeout -- so
+// "9^9^9" gives up rather than eating the machine.
+var TEXT_CALC = [
+    'R=$(timeout 3 python3 -c \'import re,sys;e=sys.argv[1].replace("^","**");re.fullmatch(r"[\\d\\s.+\\-*/%()]+",e) or sys.exit(1);v=eval(e,{"__builtins__":{}});print(int(v) if isinstance(v,float) and v.is_integer() else round(v,10))\' ${clipboard} 2>/dev/null)',
+    'if [ -n "$R" ]; then',
+    '    printf %s "$R" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    '    notify-send -a "Clipboard Runner" "= $R (copied)" ${clipboard}',
+    'else',
+    '    notify-send -a "Clipboard Runner" "Could not calculate" ${clipboard}',
+    'fi'
+].join("\n");
+
+// Ghostscript's ebook preset resamples images to 150 dpi, which is what makes a
+// scanned or photo-heavy PDF small. One that is mostly text can come out
+// larger instead, and then the original is kept as the only copy.
+var PDF_SMALL = [
+    'O="${2:r}-small.pdf"',
+    'if ! gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.5 -dPDFSETTINGS=/ebook -dNOPAUSE -dBATCH -dQUIET -sOutputFile="$O" ${path}; then',
+    '    notify-send -a "Clipboard Runner" -u critical ${basename} "Ghostscript could not read it"',
+    'elif [ "$(stat -c %s "$O")" -lt "$(stat -c %s ${path})" ]; then',
+    '    notify-send -a "Clipboard Runner" "PDF shrunk" "${O:t}: $(du -h ${path} | cut -f1) → $(du -h "$O" | cut -f1)"',
+    'else',
+    '    rm -f "$O"',
+    '    notify-send -a "Clipboard Runner" ${basename} "Already as small as it gets -- nothing written"',
+    'fi'
+].join("\n");
+
+var FILE_SHA256 = [
+    'H=$(sha256sum ${path} | cut -d" " -f1)',
+    'printf %s "$H" | "${DMS_EXECUTABLE:-dms}" cl copy',
+    'notify-send -a "Clipboard Runner" "SHA-256 copied" "${basename}: $H"'
+].join("\n");
+
 function all() {
     return [
         // ------------------------------------------------------------ links
@@ -188,6 +286,14 @@ function all() {
         a("url.nvim", "url", "Open the page source in nvim", "code",
           'F=$(mktemp --suffix=.html); curl -fsSL ${clipboard} > "$F" && ${terminal} nvim "$F"',
           { when: http(), notify: false }),
+        a("url.clean", "url", "Remove tracking from the link (copies it)", "link_off",
+          URL_CLEAN, { when: [{ op: "regex", value: "[?&](" + TRACKING + ")=", caseSensitive: false }], notify: false }),
+        a("url.mpv", "url", "mpv: play it", "live_tv",
+          "mpv ${clipboard}", { when: onSite("youtube\\.com|youtu\\.be|" + VIDEO_SITES), notify: false }),
+
+        // Other video sites
+        a("site.video", "url", "yt-dlp: download video", "smart_display",
+          'cd ${downloads} && yt-dlp ${clipboard}', { when: onSite(VIDEO_SITES) }),
 
         // YouTube
         a("yt.video", "url", "yt-dlp: download video", "smart_display",
@@ -266,6 +372,10 @@ function all() {
         a("file.scan", "path", "Virus scan", "shield",
           'R=$(clamdscan --fdpass --no-summary ${path} 2>&1)\nnotify-send -a "Clipboard Runner" "${basename}" "$R"',
           { notify: false }),
+        a("file.copyPath", "path", "Copy the path as text", "content_copy",
+          'printf %s ${path} | "${DMS_EXECUTABLE:-dms}" cl copy', { notify: false }),
+        a("file.sha256", "path", "SHA-256 checksum (copies it)", "fingerprint",
+          FILE_SHA256, { target: "file", notify: false }),
 
         // Audio
         a("audio.mp3", "path", "ffmpeg → mp3", "music_note",
@@ -285,7 +395,13 @@ function all() {
         a("video.webm", "path", "ffmpeg → webm", "movie",
           'ffmpeg -y -i ${path} -c:v libvpx-vp9 -crf 32 -b:v 0 -c:a libopus "${2:r}.webm"', { ext: without(VIDEO_EXT, "webm") }),
         a("video.gif", "path", "ffmpeg → gif", "gif",
-          'ffmpeg -y -i ${path} -vf "fps=12,scale=640:-1:flags=lanczos" "${2:r}.gif"', { ext: VIDEO_EXT }),
+          VIDEO_GIF, { ext: VIDEO_EXT }),
+        a("video.small", "path", "ffmpeg: shrink for sharing (mp4)", "compress",
+          VIDEO_SMALL, { ext: VIDEO_EXT }),
+        a("video.frame", "path", "ffmpeg: save a still frame", "photo",
+          'ffmpeg -y -i ${path} -vf thumbnail -frames:v 1 -update 1 "${2:r}-frame.png"', { ext: VIDEO_EXT }),
+        a("video.mute", "path", "ffmpeg: remove the sound", "volume_off",
+          'ffmpeg -y -i ${path} -c copy -an "${2:r}-silent.${3}"', { ext: VIDEO_EXT }),
         a("video.audio", "path", "ffmpeg: pull the audio out", "music_note",
           'ffmpeg -y -i ${path} -vn -codec:a libmp3lame -q:a 2 "${2:r}.mp3"', { ext: VIDEO_EXT }),
 
@@ -300,10 +416,19 @@ function all() {
           'magick ${path} -quality 55 "${2:r}.avif"', { ext: without(IMAGE_EXT, "avif") }),
         a("image.pdf", "path", "magick → pdf", "picture_as_pdf",
           'magick ${path} "${2:r}.pdf"', { ext: IMAGE_EXT }),
+        a("image.ocr", "path", "tesseract: copy the text in it", "document_scanner",
+          IMAGE_OCR, { ext: IMAGE_EXT, notify: false }),
+        a("image.small", "path", "magick: shrink for sharing", "compress",
+          'magick ${path} -auto-orient -resize "1920x1920>" -quality 85 "${2:r}-small.${3}"', { ext: without(IMAGE_EXT, "gif") }),
+        // Turned upright first: the orientation is part of what -strip removes.
+        a("image.strip", "path", "magick: remove location and camera data", "location_off",
+          'magick ${path} -auto-orient -strip "${2:r}-clean.${3}"', { ext: "jpg, jpeg, png, webp, tiff, tif, avif, heic, heif" }),
 
         // Documents
         a("doc.pdf", "path", "libreoffice → pdf", "picture_as_pdf",
           'soffice --headless --convert-to pdf --outdir ${dirname} ${path}', { ext: DOC_EXT }),
+        a("pdf.small", "path", "ghostscript: shrink the PDF", "compress",
+          PDF_SMALL, { ext: "pdf", notify: false }),
 
         // Folders
         a("dir.zip", "path", "Compress to zip", "folder_zip",
@@ -343,14 +468,22 @@ function all() {
           'xdg-open "https://duckduckgo.com/?q=$(python3 -c \'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))\' ${clipboard})"',
           { notify: false }),
         a("text.save", "text", "Save it to downloads", "save",
-          'printf %s ${clipboard} > "${9}/clipboard-$(date +%Y%m%d-%H%M%S).txt"')
+          'printf %s ${clipboard} > "${9}/clipboard-$(date +%Y%m%d-%H%M%S).txt"'),
+        a("text.translate", "text", "Translate to English (copies it)", "translate",
+          TEXT_TRANSLATE, { notify: false }),
+        a("text.json", "text", "Format JSON (copies it)", "data_object",
+          TEXT_JSON, { when: [{ op: "regex", value: "^\\s*[\\[{]", caseSensitive: false }], notify: false }),
+        // Offered only for arithmetic: digits, an operator between two of them,
+        // and nothing else.
+        a("text.calc", "text", "Calculate (copies the result)", "calculate",
+          TEXT_CALC, { when: [{ op: "regex", value: "^[\\d\\s.+\\-*/%()^]*\\d\\s*[+\\-*/%^]\\s*[\\d(.][\\d\\s.+\\-*/%()^]*$", caseSensitive: false }], notify: false })
     ];
 }
 
 // Bumped whenever a shipped command changes. On a bump, an action still
 // carrying its shipped command is brought up to date; one the user has
 // rewritten is left exactly as they wrote it.
-var SEED_VERSION = 5;
+var SEED_VERSION = 6;
 
 // The filters shipped before presetConditions was recorded, for the presets
 // whose filters have changed since. Anything not listed here keeps whatever

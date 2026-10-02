@@ -693,6 +693,65 @@ func TestMarkReadReceiptsTheMessagesThatArrived(t *testing.T) {
 	}
 }
 
+// The host lists what it marked read, from its store, so a message from before
+// this bridge started -- which nothing here remembers -- gets its receipt too,
+// alongside the ones that did arrive here, each named once. The rules for
+// groups and for receipts switched off are the same as without the list.
+func TestMarkReadReceiptsWhatTheHostListed(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "requests")
+	t.Setenv("SIGNAL_CLI_RECORD", record)
+
+	b := testBridge()
+	client := newRPCClient()
+	startHelper(t, client, "serve")
+	b.rpc = client
+
+	markRead := func(chatID, messages string) {
+		b.handleMarkRead(context.Background(), call{ID: 1, Method: "markRead",
+			Params: json.RawMessage(fmt.Sprintf(`{"chatId":%q,"upTo":5000,"messages":%s}`, chatID, messages))})
+	}
+
+	captureEvents(t, func() {
+		// Arrived since the restart; the host has not filed it yet.
+		b.onDataMessage(envelope{SourceUUID: "uuid-ada"}, &dataMessage{Timestamp: 4500, Message: "just now"}, false)
+		// From before the restart, as the host stored them: newest first, the
+		// second attachment of a message as a row of its own.
+		markRead("dm:uuid-ada", `[
+			{"id":"uuid-ada:3000","senderId":"uuid-ada","ts":3000},
+			{"id":"uuid-ada:2000#1","senderId":"uuid-ada","ts":2000},
+			{"id":"uuid-ada:2000","senderId":"uuid-ada","ts":2000}]`)
+	})
+
+	reqs := recordedRequests(t, record)
+	if len(reqs) != 1 || reqs[0]["method"] != "sendReceipt" {
+		t.Fatalf("expected one sendReceipt, got %+v", reqs)
+	}
+	params := reqs[0]["params"].(map[string]any)
+	targets, _ := params["targetTimestamp"].([]any)
+	got := map[float64]int{}
+	for _, ts := range targets {
+		got[ts.(float64)]++
+	}
+	if len(targets) != 3 || got[3000] != 1 || got[2000] != 1 || got[4500] != 1 {
+		t.Errorf("receipt names %v, want 3000, 2000 and 4500, once each", targets)
+	}
+	if params["recipient"] != "uuid-ada" || params["type"] != "read" {
+		t.Errorf("receipt params %+v", params)
+	}
+	if len(b.unread) != 0 {
+		t.Errorf("read messages still remembered: %+v", b.unread)
+	}
+
+	captureEvents(t, func() {
+		markRead("grp:abc==", `[{"id":"uuid-ada:3000","senderId":"uuid-ada","ts":3000}]`)
+		b.settings["sendReadReceipts"] = false
+		markRead("dm:uuid-ada", `[{"id":"uuid-ada:4000","senderId":"uuid-ada","ts":4000}]`)
+	})
+	if reqs := recordedRequests(t, record); len(reqs) != 1 {
+		t.Errorf("sent receipts it should not have: %+v", reqs[1:])
+	}
+}
+
 // The attachment that lands later is the same message again, so it goes out as
 // a batch: a second message event would be a second announcement.
 func TestAutoDownloadSendsTheMessageAgainAsABatch(t *testing.T) {

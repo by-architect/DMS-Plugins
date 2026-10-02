@@ -16,8 +16,15 @@ const ProtocolVersion = 1
 
 // Methods the host calls on a bridge.
 const (
-	MethodConfigure  = "configure"
-	MethodSend       = "send"
+	MethodConfigure = "configure"
+	MethodSend      = "send"
+	// MethodMarkRead says a conversation has been read: chatId, and upTo, the
+	// time it has been read as far as. messages itemises what that made read --
+	// each incoming message's id, senderId and ts as the bridge reported them,
+	// newest first, a few hundred at most -- because a service that posts read
+	// receipts names exact messages, and a bridge only remembers the ones that
+	// arrived while it was running. An older host sends no messages, so a
+	// bridge still has to make do with upTo alone.
 	MethodMarkRead   = "markRead"
 	MethodFetchMedia = "fetchMedia"
 	MethodHistory    = "history"

@@ -55,7 +55,7 @@ it is almost always a file operation.
 
 ## What it ships with
 
-56 actions are written into your list the first time the plugin runs. They are
+71 actions are written into your list the first time the plugin runs. They are
 ordinary entries from that moment on — rename them, retune the filters, delete
 the ones you have no use for. The **Restore built-in actions** button in
 settings puts back any you removed, and leaves the ones you edited alone.
@@ -68,6 +68,9 @@ settings puts back any you removed, and leaves the ones you edited alone.
 | Open the repository in the browser | `git@host:owner/repo`, `ssh://git@…` | rewrites it to its https page, then `xdg-open` |
 | Download with aria2c | `http(s)://` | `aria2c` into your downloads folder |
 | Open the page source in nvim | `http(s)://` | `curl` to a temp file, then nvim |
+| Remove tracking from the link | a link carrying `utm_…`, `fbclid`, `gclid`, `si`, `igshid` and the like | drops those parameters, keeps the rest exactly as written, copies the clean link |
+| mpv: play it | YouTube and the video sites below | `mpv` streams it (through yt-dlp) |
+| yt-dlp: download video | x.com/twitter, instagram, tiktok, vimeo, reddit, twitch, dailymotion, streamable, facebook, bluesky, bilibili | `yt-dlp` into your downloads folder |
 | yt-dlp: download video | youtube.com, youtu.be | `yt-dlp` |
 | yt-dlp: download audio | youtube.com, youtu.be | `yt-dlp -x --audio-format mp3` |
 | sm: install into the music library | youtube.com, youtu.be, deezer.com | `sm music install` |
@@ -104,15 +107,17 @@ straight back where you needed it.
 
 ### Files
 
-Every file gets **Open**, **Open the containing folder**, **Open in nvim** and
-**Virus scan**. On top of that:
+Every file gets **Open**, **Open the containing folder**, **Open in nvim**,
+**Virus scan**, **Copy the path as text** and **SHA-256 checksum** (copied, and
+shown in a notification). On top of that:
 
 | Group | Actions |
 |---|---|
 | Audio (`mp3 flac wav m4a aac ogg opus wma aiff alac`) | ffmpeg → mp3, flac, opus, wav |
-| Video (`mp4 mkv avi mov webm flv wmv m4v mpg mpeg ts`) | ffmpeg → mp4, mkv, webm, gif; pull the audio out as mp3 |
-| Images (`png jpg jpeg webp gif bmp tiff avif heic heif`) | magick → png, jpg, webp, avif, pdf |
+| Video (`mp4 mkv avi mov webm flv wmv m4v mpg mpeg ts`) | ffmpeg → mp4, mkv, webm, gif; shrink for sharing; save a still frame; remove the sound; pull the audio out as mp3 |
+| Images (`png jpg jpeg webp gif bmp tiff avif heic heif`) | magick → png, jpg, webp, avif, pdf; shrink for sharing; remove location and camera data; tesseract: copy the text in it |
 | Documents (`doc docx odt ods odp xls xlsx ppt pptx rtf txt md csv`) | libreoffice → pdf |
+| PDF | ghostscript: shrink the PDF |
 | Archives (`zip 7z rar tar gz tgz bz2 xz zst lz4 lzma cab arj lzh iso cpio wim deb rpm`) | extract here, extract into downloads, show what is inside |
 | Android (`apk xapk apks aab`) | what is this written in; adb install on the connected device |
 | AppImage | install it; run it once |
@@ -121,6 +126,29 @@ Every file gets **Open**, **Open the containing folder**, **Open in nvim** and
 A conversion never offers itself for a file that is already in that format —
 ffmpeg would otherwise be handed the same path as input and output and truncate
 the file.
+
+What the newer ones do, exactly:
+
+- **→ gif** builds one palette from the clip itself rather than using a generic
+  one, so gradients and interface greys do not band, at 12 fps and at most
+  640 px wide (a smaller clip is not enlarged).
+- **Shrink for sharing** (video) makes an H.264/AAC mp4 with the long edge at
+  most 1280 px, never enlarged, with the index at the front so it starts
+  playing before it has downloaded — small enough for a chat app's limit.
+  `name-small.mp4`.
+- **Save a still frame** picks a representative frame rather than the first
+  (which is often black). `name-frame.png`.
+- **Remove the sound** copies the video stream untouched. `name-silent.<ext>`.
+- **Shrink for sharing** (image) turns it upright, caps it at 1920 px and saves
+  at quality 85. `name-small.<ext>`.
+- **Remove location and camera data** turns the picture upright first — the
+  orientation is part of what gets stripped — then drops every metadata block.
+  `name-clean.<ext>`.
+- **Copy the text in it** runs `tesseract` (English; edit `-l eng` to
+  `-l eng+tur` or whatever you read) and puts the text on the clipboard.
+- **Shrink the PDF** uses ghostscript's ebook setting (images at 150 dpi). A
+  PDF that is mostly text can come out larger; then nothing is written and the
+  notification says so.
 
 Folders and files are told apart by asking the filesystem, not by guessing from
 the name. Every action in the file group carries an **applies to** setting —
@@ -142,6 +170,13 @@ writes it into `~/.cache/dms-clipboard-runner/` and treats the result as the
 image file it now is, so every conversion in the file group applies. The file is
 named after the clipboard entry and reused, so asking twice does not fetch it
 twice.
+
+A **video** copied the same way — Screen Catcher's "copy recordings to the
+clipboard" puts the recording there as `video/mp4` — gets the same treatment,
+and so do sounds, PDFs, archives and office documents copied as data. Copy a
+recording, pick **ffmpeg → gif**, and the GIF is on the clipboard ready to
+paste. Before this, the clipboard manager handed such a video back as its raw
+bytes read as text, and the list offered text actions for it.
 
 **The result goes back on the clipboard.** When the thing being acted on came
 from the cache rather than from disk, whatever the action produced is copied
@@ -166,7 +201,14 @@ the app is still launchable.
 
 ### Text
 
-Open in nvim (via a temp file), search the web for it, save it to downloads.
+Open in nvim (via a temp file), search the web for it, save it to downloads,
+and **Translate to English** (translate-shell; the translation is copied). Two
+more appear only when they apply:
+
+| Action | Shown for | Does |
+|---|---|---|
+| Format JSON | text starting with `{` or `[` | `jq .`, copies the result; says why if it is not valid JSON |
+| Calculate | arithmetic only — digits and `+ - * / % ^ ( )` | copies the result; `^` is a power. The command checks the text again before Python evaluates it, with no builtins and a 3-second limit |
 
 ## Share to a chat
 
@@ -281,6 +323,11 @@ Colour ·  (no filter)             ·  notify-send "Colour" ${color}
 Text   ·  excludes "secret"       ·  notify-send "Clipboard" ${clipboard}
 ```
 
+A placeholder can stand on its own or sit inside a longer quoted string —
+`notify-send "Got ${clipboard}"`, `'saved to ${downloads}'`,
+`"q=$(urlencode ${clipboard})"` all do what they look like. Either way the
+value goes in as data, never as more shell.
+
 ## Behavior
 
 - The clipboard is read ahead of time — once when the runner is first used, and
@@ -291,8 +338,10 @@ Text   ·  excludes "secret"       ·  notify-send "Clipboard" ${clipboard}
 - Reading uses `clipboard.paste`, which returns the **whole** clipboard, not the
   100-character preview the history list shows. Long links match on their tail
   as well as their head.
-- An image-only clipboard, an empty clipboard, or a disconnected DMS each show
-  an explanatory row rather than an empty list.
+- The newest clipboard entry's type is looked at first. Images, videos, sounds
+  and other files copied as data are written out to the cache and offered the
+  file actions (above); everything else is read as text. An empty clipboard or
+  a disconnected DMS shows an explanatory row rather than an empty list.
 - The row under each action name is the command as it will actually run, with
   the clipboard values filled in and quoted.
 - Right-click (or the action panel) offers "Copy the command".
@@ -311,7 +360,7 @@ says so. Status is what was on this machine when the plugin was written.
 | `zsh` | `zsh` | present | every action |
 | `notify-send` | `libnotify` | present | every action with notify on |
 | `xdg-open` | `xdg-utils` | present | open, containing folder, releases page, web search |
-| `python3` | `python3` | present | the three colour conversions, url-encoding the web search |
+| `python3` | `python3` | present | the three colour conversions, url-encoding the web search, removing tracking from links, calculate |
 | `curl` | `curl` | present | open the page source in nvim |
 | `nvim` | `neovim` | present | the three open-in-nvim actions |
 | `ghostty` | `ghostty` | present | the same three (any terminal will do — it is a setting) |
@@ -333,7 +382,13 @@ says so. Status is what was on this machine when the plugin was written.
 | `appimage-run` | `appimage-run` | present | run an AppImage once |
 | `clamdscan` | `clamav` | present, **daemon not running** | virus scan |
 | `soffice` | `libreoffice` | **missing** | libreoffice → pdf |
-| `dms` | DankMaterialShell | resolved via `$DMS_EXECUTABLE` | the colour conversions, to put the result back on the clipboard |
+| `dms` | DankMaterialShell | resolved via `$DMS_EXECUTABLE` | every action that copies its result, and writing copied images and videos out to a file |
+| `tesseract` | `tesseract` | present | copy the text in an image |
+| `jq` | `jq` | present | format JSON |
+| `trans` | `translate-shell` | present (needs the network) | translate to English |
+| `mpv` | `mpv` | present | mpv: play it |
+| `gs` | `ghostscript` | present | shrink the PDF |
+| `sha256sum` | `coreutils` | present | SHA-256 checksum |
 
 Two things are not ready to use as they stand:
 

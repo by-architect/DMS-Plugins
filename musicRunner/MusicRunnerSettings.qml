@@ -77,7 +77,7 @@ PluginSettings {
     StringSetting {
         settingKey: "mpdHost"
         label: "MPD host (optional)"
-        description: "Leave blank to use the MPD_HOST environment variable, same as running mpc yourself."
+        description: "Leave blank to use MPD_HOST as your login shell sets it, the same address mpc uses in a terminal."
         placeholder: "blank = use MPD_HOST"
         defaultValue: ""
     }
@@ -85,7 +85,7 @@ PluginSettings {
     StringSetting {
         settingKey: "mpdPort"
         label: "MPD port (optional)"
-        description: "Leave blank to use the MPD_PORT environment variable."
+        description: "Leave blank to use MPD_PORT as your login shell sets it."
         placeholder: "blank = use MPD_PORT"
         defaultValue: ""
     }

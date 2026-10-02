@@ -67,6 +67,11 @@ func (b *bridge) handleVerify(ctx context.Context, c call) {
 
 	ok(c.ID, map[string]any{"restoredBackup": restored})
 
+	// Whatever has been waiting for its key is tried again now, with the
+	// backup just restored -- and as a device the account's others will
+	// share keys with, so the keys still missing are asked for too.
+	b.wakeRetry(true)
+
 	if restored {
 		logf("info", "this device is verified, and its room keys were restored from backup")
 	} else {
@@ -177,6 +182,11 @@ func (b *bridge) restoreKeyBackup(ctx context.Context, mach *crypto.OlmMachine, 
 	if err != nil {
 		return false, fmt.Errorf("the stored backup key is not usable: %w", err)
 	}
+
+	// Kept for later, before the download that may fail: keys the backup only
+	// gains afterwards are looked up one at a time for messages still waiting
+	// on them. See restoreFromBackup.
+	keepBackupKey(ctx, mach, raw)
 
 	version, err := mach.DownloadAndStoreLatestKeyBackup(ctx, backupKey)
 	if err != nil {

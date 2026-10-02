@@ -490,6 +490,38 @@ UPDATE chats SET unread = (
 	return tx.Commit()
 }
 
+// UnreadUpTo returns the messages that reading a conversation as far as ts
+// makes read: what arrived after its current read position, up to and
+// including ts, newest first.
+//
+// Asked before SetReadUpTo moves the position, because afterwards nothing tells
+// these messages apart from ones read long ago. It is what read receipts are
+// built from: a service that takes them names the exact messages, and a bridge
+// only remembers the ones that arrived while it was running -- so reading
+// anything older than its last restart used to tell nobody. The same rows the
+// unread count goes by: your own messages and protocol rows are nobody's to
+// receipt.
+func (s *HistoryStore) UnreadUpTo(ctx context.Context, provider, chatID string, ts int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 300
+	}
+
+	rows, err := s.db.QueryContext(ctx, messageSelect+`
+WHERE provider = ? AND chat_id = ?
+  AND from_me = 0
+  AND kind NOT IN (?,?,?)
+  AND ts > COALESCE((SELECT read_upto FROM chats WHERE provider = ? AND id = ?), 0)
+  AND ts <= ?
+ORDER BY ts DESC
+LIMIT ?`, provider, chatID, KindSystem, KindDeleted, KindUnsupported, provider, chatID, ts, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
 // ---------------------------------------------------------------- messages
 
 const messageUpsert = `

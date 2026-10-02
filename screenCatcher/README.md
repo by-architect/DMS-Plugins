@@ -271,6 +271,27 @@ being written. A stop that lands while the recording is still being set up
 (slurp, output detection, the audio mix) reports a cancelled recording rather
 than a failed one.
 
+### When the shell goes away mid-recording
+
+The shell is the only thing that ever stops a recording, so a shell that
+crashed, was restarted (`dms restart`) or reloaded mid-recording used to leave
+`wf-recorder` filling the disk with nobody left to stop it. Now a small watcher
+runs beside every recording and stops it the same way the stop button does —
+`SIGINT`, so the file is finalized — the moment the script's parent is no
+longer the shell that started it, or the script itself is gone:
+
+- **The shell died, the script lives on:** the script finishes as after any
+  stop — GIF conversion, clipboard copy, the *Recording saved* notification.
+  It no longer dies on its first write to the shell's closed pipe.
+- **The script was killed with it:** the watcher stops the recording, undoes
+  the mic + system audio mix, and posts *Recording stopped — the shell went
+  away mid-recording*, with where the file is. A GIF recording is left as its
+  mp4, since the conversion was the script's job.
+
+The parent is read from `/proc/<pid>/stat` once a second rather than probed by
+pid, so a recycled pid cannot fool it, and a killed script that lingers as a
+zombie counts as gone.
+
 ## How it works
 
 All the actual work — `grim`, `slurp`, `wf-recorder`, `ffmpeg`, `tesseract`,

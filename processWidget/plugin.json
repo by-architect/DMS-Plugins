@@ -1,0 +1,15 @@
+{
+    "id": "processWidget",
+    "name": "Process Widget",
+    "description": "Bar pill with the total CPU usage, read from /proc/stat; the popout adds per-core bars, memory, load average and the busiest processes, each with a kill button",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring"],
+    "icon": "memory",
+    "component": "./ProcessWidget.qml",
+    "settings": "./ProcessWidgetSettings.qml",
+    "dependencies": ["ps"],
+    "requires": ["ps"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}

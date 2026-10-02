@@ -1,0 +1,15 @@
+{
+    "id": "hostStatus",
+    "name": "Host Status",
+    "description": "Bar pill and popout for the hosts in SSH Hosts: which ones answer, and each one's CPU, memory, swap and disk usage, checked over ssh on a timer",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring"],
+    "icon": "dns",
+    "component": "./HostStatusWidget.qml",
+    "settings": "./HostStatusSettings.qml",
+    "startupCheck": "./HostStatusStartupCheck.qml",
+    "dependencies": ["ssh"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}

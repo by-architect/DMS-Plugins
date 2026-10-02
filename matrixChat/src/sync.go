@@ -34,6 +34,13 @@ func (b *bridge) registerHandlers(syncer *mautrix.DefaultSyncer) {
 	syncer.OnEventType(event.EventRedaction, b.onRedaction)
 	syncer.OnEventType(event.EphemeralEventReceipt, b.onReceipt)
 
+	// With encryption running, the crypto helper takes encrypted events and
+	// reports the ones it cannot open -- see watchDecryption. Without it,
+	// nothing would.
+	if b.currentCrypto() == nil {
+		syncer.OnEventType(event.EventEncrypted, b.onEncryptedWithoutCrypto)
+	}
+
 	// Deliberately not syncer.OnSync: mautrix runs those listeners before it
 	// dispatches the response's events, so a callback there sees an empty room
 	// cache and names every room after its id. See publishingSyncer.
@@ -52,7 +59,11 @@ type publishingSyncer struct {
 }
 
 func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.RespSync, since string) error {
-	if err := s.DefaultSyncer.ProcessResponse(ctx, resp, since); err != nil {
+	s.b.setDispatching(true)
+	err := s.DefaultSyncer.ProcessResponse(ctx, resp, since)
+	s.b.setDispatching(false)
+
+	if err != nil {
 		// What the response did get through is sent rather than dropped: the
 		// position was saved before processing, so nothing re-delivers it.
 		s.b.flushHistory()
@@ -60,6 +71,12 @@ func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.Re
 	}
 	s.b.afterSync(resp, since)
 	return nil
+}
+
+func (b *bridge) setDispatching(on bool) {
+	b.mu.Lock()
+	b.dispatching = on
+	b.mu.Unlock()
 }
 
 // OnFailedSync is mautrix about to retry a sync that did not go through: the
@@ -96,6 +113,11 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	// before connected: it is the conversation everything after it follows on
 	// from. See onMessage for why it was held back.
 	b.flushHistory()
+
+	// Whatever this response left waiting for its key, written down now: the
+	// position it came from is already saved, so nothing will deliver those
+	// events again if the shell is killed rather than stopped.
+	b.saveWaiting()
 
 	// Membership first, and on every sync rather than only incremental ones:
 	// an invitation is mentioned once and never again, so a response skipped

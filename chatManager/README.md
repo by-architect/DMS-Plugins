@@ -154,6 +154,21 @@ direction of *already seen*, which is the direction that matters: a
 conversation read on a phone this morning should not be waiting here this
 afternoon.
 
+The other direction is `markRead`, which tells the provider. Besides the
+conversation and how far it has been read, the host lists the messages that
+made read — incoming ones the unread count would have counted, newest first, at
+most 300, looked up before the read position moves:
+
+```json
+{"id":7,"method":"markRead","params":{"chatId":"…","upTo":1755300000000,"messages":[{"id":"…","senderId":"…","ts":1755299990000}]}}
+```
+
+WhatsApp and Signal take read receipts by message, not by time, and a bridge
+only remembers the messages that arrived since it last started; the store
+remembers them all. Without the list, reading anything older than the last
+restart sent no receipt at all. A bridge should still cope without
+`messages`, which an older host does not send.
+
 Unread is counted from what actually arrives. A message the store has seen
 before -- bridges redeliver on reconnect, and a sync resends what came in live --
 is not counted again and does not notify again, and one older than where the

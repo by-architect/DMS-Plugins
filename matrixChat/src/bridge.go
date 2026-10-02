@@ -57,6 +57,22 @@ type bridge struct {
 	// read through, so it reaches the host as a batch -- see onMessage.
 	history []messageObj
 
+	// dispatching is set while a sync response is being read through, which
+	// is when a placeholder for an undecryptable message is held back with
+	// the history rather than sent on its own -- see noteUndecryptable.
+	dispatching bool
+
+	// flushMu orders placeholders against the messages that replace them:
+	// held while a placeholder is sent or queued, while what is queued is
+	// sent, and while a decrypted message goes out. See deliverRecovered.
+	flushMu sync.Mutex
+
+	// waiting is the list of messages waiting for their keys, and retryWake
+	// and retryFull what asks for them to be tried again. See undecryptable.go.
+	waiting   *waitingStore
+	retryWake chan struct{}
+	retryFull bool
+
 	// downloads is the queue the background downloads work from, and
 	// downloadsOnce starts their workers. See queueDownload.
 	downloads     chan messageObj
@@ -68,8 +84,9 @@ type bridge struct {
 
 func newBridge() *bridge {
 	return &bridge{
-		settings: map[string]any{},
-		rooms:    map[id.RoomID]*roomInfo{},
+		settings:  map[string]any{},
+		rooms:     map[id.RoomID]*roomInfo{},
+		retryWake: make(chan struct{}, 1),
 	}
 }
 
@@ -180,6 +197,10 @@ func (b *bridge) startClient(sess *session) error {
 	// position, so without the cache every room would be named after its id.
 	rooms, roomStore := loadRoomCache()
 
+	// Before encryption starts: from then on a message can fail to decrypt,
+	// and this is where it is written down.
+	waiting := loadWaiting(id.UserID(sess.UserID))
+
 	syncer := mautrix.NewDefaultSyncer()
 	// Wrapped so room publishing happens after the response is applied rather
 	// than before it; the wrapper still satisfies ExtensibleSyncer, which the
@@ -196,6 +217,7 @@ func (b *bridge) startClient(sess *session) error {
 	b.sess = sess
 	b.store = store
 	b.roomStore = roomStore
+	b.waiting = waiting
 	if len(rooms) > 0 {
 		b.rooms = rooms
 	}
@@ -236,9 +258,17 @@ func (b *bridge) startClient(sess *session) error {
 		return nil
 	}
 	b.syncDone = done
+	helper := b.crypto
 	b.mu.Unlock()
 
 	go b.runSync(ctx, client, done)
+
+	// Messages that could not be decrypted are tried again for as long as
+	// this session lasts. Without encryption there is nothing to try them
+	// with; they wait for a start that has it.
+	if helper != nil {
+		go b.retryWaiting(ctx, b.retryKitFor(client, helper))
+	}
 	return nil
 }
 
@@ -318,6 +348,9 @@ func (b *bridge) startCrypto(ctx context.Context, sess *session, client *mautrix
 		_ = db.Close()
 		return fmt.Errorf("initialise encryption: %w", err)
 	}
+	// Before the sync starts, which is the first thing that can fail to
+	// decrypt or bring a key.
+	b.watchDecryption(helper)
 
 	b.mu.Lock()
 	if ctx.Err() != nil {
@@ -416,14 +449,19 @@ func (b *bridge) dropClient() {
 	b.stopSync()
 
 	b.mu.Lock()
-	helper, db := b.crypto, b.db
+	helper, db, waiting := b.crypto, b.db, b.waiting
 	b.client, b.sess, b.store, b.roomStore = nil, nil, nil, nil
-	b.crypto, b.db = nil, nil
+	b.crypto, b.db, b.waiting = nil, nil, nil
 	b.rooms = map[id.RoomID]*roomInfo{}
 	b.firstSyncDone, b.degraded = false, false
 	b.history = nil
+	b.dispatching, b.retryFull = false, false
 	b.mu.Unlock()
 
+	// Kept on disk past the session: see waitingFile.
+	if waiting != nil {
+		waiting.save()
+	}
 	if helper != nil {
 		_ = helper.Close()
 	}
@@ -651,6 +689,7 @@ func (b *bridge) shutdown() {
 		// Written on the way out so a clean stop does not lose whatever the
 		// last sync learned.
 		b.persistRooms()
+		b.saveWaiting()
 
 		if helper != nil {
 			_ = helper.Close()

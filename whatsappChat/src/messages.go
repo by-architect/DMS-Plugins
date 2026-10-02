@@ -806,10 +806,75 @@ func kindForMime(mime string) string {
 
 // ---------------------------------------------------------------- markRead
 
+// readMessage is one message the host says a markRead made read, under the id
+// and sender this bridge reported it with.
+type readMessage struct {
+	ID       string `json:"id"`
+	SenderID string `json:"senderId"`
+}
+
+// receipt is one read receipt: a sender, and the messages of theirs it is for.
+type receipt struct {
+	sender types.JID
+	ids    []types.MessageID
+}
+
+// readReceipts works out the receipts reading a conversation owes, one per
+// sender in the order they first appear: in a group each receipt names whose
+// messages it is about, so it cannot mix senders.
+//
+// reported is what the host listed from its store, which is the only record of
+// messages from before this bridge started; remembered is what arrived since,
+// which also covers what the host's list leaves out -- kinds it does not count
+// as unread, a message that has not reached its store yet. Each message is
+// named once. Senders are compared without their device, which is all a
+// receipt keeps of them: the same person's messages from the phone and from
+// the desktop, or live and from history, are one receipt rather than two.
+func readReceipts(chat types.JID, reported []readMessage, remembered []unreadRef) []receipt {
+	refs := make([]unreadRef, 0, len(reported)+len(remembered))
+	for _, m := range reported {
+		// Stored as types.JID.String() wrote it, so it parses straight back.
+		// A history message in a direct conversation has no sender at all,
+		// which is fine there: the receipt goes to the conversation.
+		sender, err := types.ParseJID(m.SenderID)
+		if err != nil {
+			sender = types.EmptyJID
+		}
+		refs = append(refs, unreadRef{id: types.MessageID(m.ID), sender: sender})
+	}
+	refs = append(refs, remembered...)
+
+	var out []receipt
+	at := map[types.JID]int{}
+	seen := map[types.MessageID]bool{}
+	for _, ref := range refs {
+		if ref.id == "" || seen[ref.id] {
+			continue
+		}
+		// A group receipt has to say whose message it is for. One with no
+		// sender names nobody, and is better not sent at all.
+		if ref.sender.IsEmpty() && chat.Server == types.GroupServer {
+			continue
+		}
+		seen[ref.id] = true
+
+		sender := ref.sender.ToNonAD()
+		i, ok := at[sender]
+		if !ok {
+			i = len(out)
+			at[sender] = i
+			out = append(out, receipt{sender: sender})
+		}
+		out[i].ids = append(out[i].ids, ref.id)
+	}
+	return out
+}
+
 func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 	var params struct {
-		ChatID string `json:"chatId"`
-		UpTo   int64  `json:"upTo"`
+		ChatID   string        `json:"chatId"`
+		UpTo     int64         `json:"upTo"`
+		Messages []readMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(c.Params, &params); err != nil {
 		fail(c.ID, "bad_request", "%v", err)
@@ -830,29 +895,19 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 		return
 	}
 
-	// WhatsApp marks messages read by id, and the host sends only how far the
-	// conversation has been read. This used to pass no ids at all, which
-	// whatsmeow refuses ("no message IDs specified") -- so no receipt ever
-	// went out: the phone kept the conversation unread and senders never saw
-	// it read. The ids are the incoming messages remembered as they arrived.
+	// WhatsApp marks messages read by id. This used to pass no ids at all,
+	// which whatsmeow refuses ("no message IDs specified") -- so no receipt
+	// ever went out: the phone kept the conversation unread and senders never
+	// saw it read. The host now lists the messages it marked read; an older
+	// one sends only how far, which leaves the ones remembered as they
+	// arrived. Those are taken either way: they have been read now, and
+	// keeping them would only send a stale receipt later.
 	upTo := params.UpTo
 	if upTo <= 0 {
 		upTo = time.Now().UnixMilli()
 	}
-	refs := b.takeUnread(params.ChatID, upTo)
-
-	// One receipt per sender: in a group each one names whose messages it is
-	// about. In a direct conversation there is only the one sender.
-	bySender := map[types.JID][]types.MessageID{}
-	var order []types.JID
-	for _, ref := range refs {
-		if _, seen := bySender[ref.sender]; !seen {
-			order = append(order, ref.sender)
-		}
-		bySender[ref.sender] = append(bySender[ref.sender], ref.id)
-	}
-	for _, sender := range order {
-		if err := client.MarkRead(ctx, bySender[sender], time.Now(), chat, sender); err != nil {
+	for _, r := range readReceipts(chat, params.Messages, b.takeUnread(params.ChatID, upTo)) {
+		if err := client.MarkRead(ctx, r.ids, time.Now(), chat, r.sender); err != nil {
 			logf("debug", "read receipt not accepted: %v", err)
 		}
 	}

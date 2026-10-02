@@ -60,6 +60,50 @@ function classify(text) {
     return "text";
 }
 
+// Content copied as data rather than as a file: a recording put on the
+// clipboard as video/mp4, a voice message, a PDF out of a viewer. The clipboard
+// manager answers "paste" with any of these as if it were text -- the raw bytes
+// -- so they are recognised by type first and written out to a file instead,
+// where the file actions apply. Images have their own path and text-like types
+// are left to paste. Returns the extension to give the file, or "" when the
+// type is not one of these.
+var DATA_EXT = {
+    "video/mp4": "mp4", "video/x-matroska": "mkv", "video/matroska": "mkv", "video/webm": "webm",
+    "video/quicktime": "mov", "video/x-msvideo": "avi", "video/avi": "avi", "video/mpeg": "mpg",
+    "video/x-flv": "flv", "video/x-ms-wmv": "wmv", "video/x-m4v": "m4v", "video/mp2t": "ts",
+    "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/flac": "flac", "audio/x-flac": "flac",
+    "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav", "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a", "audio/aac": "aac", "audio/ogg": "ogg", "audio/opus": "opus",
+    "audio/aiff": "aiff", "audio/x-aiff": "aiff",
+    "application/pdf": "pdf", "application/zip": "zip", "application/x-7z-compressed": "7z",
+    "application/gzip": "gz", "application/x-tar": "tar", "application/vnd.rar": "rar",
+    "application/x-rar-compressed": "rar", "application/vnd.android.package-archive": "apk",
+    "application/vnd.oasis.opendocument.text": "odt", "application/vnd.oasis.opendocument.spreadsheet": "ods",
+    "application/vnd.oasis.opendocument.presentation": "odp", "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.ms-excel": "xls", "application/vnd.ms-powerpoint": "ppt", "application/rtf": "rtf",
+    "application/epub+zip": "epub", "video/3gpp": "3gp", "video/ogg": "ogv", "audio/x-ms-wma": "wma",
+    "application/x-iso9660-image": "iso",
+    "application/octet-stream": "bin"
+};
+
+function dataExt(mime) {
+    var m = String(mime || "").toLowerCase().split(";")[0].trim();
+    if (DATA_EXT[m])
+        return DATA_EXT[m];
+    if (!/^(video|audio|application)\/[a-z0-9.+\-]+$/.test(m))
+        return "";
+    if (/(json|xml|javascript|ecmascript|x-sh|shellscript|yaml|toml|sql|urlencoded)/.test(m))
+        return "";
+    var sub = m.split("/")[1];
+    // A vendor type's name says nothing a file manager would recognise.
+    if (sub.indexOf("vnd.") === 0)
+        return "bin";
+    return sub.replace(/^x-/, "").replace(/[^a-z0-9]/g, "") || "bin";
+}
+
 function decodeFileUri(uri) {
     var raw = uri.replace(/^file:\/\//i, "");
     var hash = raw.indexOf("#");
@@ -336,11 +380,75 @@ function actionLabel(action) {
 // replacement supplies its own. Without this, the natural "${clipboard}" would
 // expand to ""${1}"" -- an empty string, an *unquoted* parameter, and another
 // empty string -- and the value would word-split after all.
+// Replaces each known ${name} with replacer(slot, quoting), where quoting is
+// what the placeholder sits inside: "none", "double" or "single". The command
+// is walked the way the shell reads it, because the right replacement depends
+// on that -- `"Got ${clipboard}"` needs a bare ${1} where the string already
+// is, while a lone ${clipboard} needs quotes of its own to stay one word.
+// Eating a quote on either side of the placeholder instead, as this once did,
+// turned `notify-send "Got ${clipboard}"` into `"Got "${1}"`: a quote left
+// open, and a command that never ran. A backslash-escaped \${name} outside
+// single quotes is left as typed. A $( ... ) starts afresh whatever it sits in
+// -- `"?q=$(urlencode ${clipboard})"` is an unquoted word inside a command --
+// so the quoting around one is put aside until its closing parenthesis.
 function substitute(command, replacer) {
-    return String(command || "").replace(/"?\$\{([A-Za-z]+)\}"?/g, function (match, name) {
-        var slot = PLACEHOLDERS[name];
-        return slot === undefined ? match : replacer(slot);
-    });
+    var text = String(command || "");
+    var out = "";
+    var quoting = "none";
+    var outer = [];   // per open $( ... ): the quoting around it, and its own ( depth
+    var i = 0;
+    while (i < text.length) {
+        var c = text[i];
+        if (quoting !== "single" && c === "\\" && i + 1 < text.length) {
+            out += c + text[i + 1];
+            i += 2;
+            continue;
+        }
+        if (quoting !== "single" && c === "$" && text[i + 1] === "(") {
+            outer.push({ quoting: quoting, parens: 0 });
+            quoting = "none";
+            out += "$(";
+            i += 2;
+            continue;
+        }
+        if (c === "$" && text[i + 1] === "{") {
+            var m = /^\$\{([A-Za-z]+)\}/.exec(text.slice(i));
+            if (m && PLACEHOLDERS[m[1]] !== undefined) {
+                out += replacer(PLACEHOLDERS[m[1]], quoting);
+                i += m[0].length;
+                continue;
+            }
+        }
+        if (c === "'" && quoting !== "double")
+            quoting = quoting === "single" ? "none" : "single";
+        else if (c === '"' && quoting !== "single")
+            quoting = quoting === "double" ? "none" : "double";
+        else if (quoting === "none" && outer.length > 0 && c === "(")
+            outer[outer.length - 1].parens++;
+        else if (quoting === "none" && outer.length > 0 && c === ")") {
+            if (outer[outer.length - 1].parens > 0)
+                outer[outer.length - 1].parens--;
+            else
+                quoting = outer.pop().quoting;
+        }
+        out += c;
+        i++;
+    }
+    return out;
+}
+
+// The shell text that reads positional `slot` in the given quoting. Every
+// value stays one word -- except the terminal, which is a command plus its
+// flags ("ghostty -e") and has to be split into separate argv entries to be
+// runnable at all; inside double quotes nothing is split, terminal included.
+// Single quotes expand nothing, so the placeholder steps out of them and back.
+function shellRef(slot, quoting) {
+    var bare = slot === 10 ? '${=' + slot + '}' : '"${' + slot + '}"';
+    if (quoting === "double")
+        return '${' + slot + '}';
+    if (quoting === "single")
+        return "'" + bare + "'";
+    return bare;
 }
 
 function shellEscape(str) {
@@ -410,12 +518,7 @@ function resolveCommand(action, detail, ctx) {
     if (!action || !detail)
         return null;
 
-    // Every value is quoted so it stays one word -- except the terminal, which
-    // is a command plus its flags ("ghostty -e") and has to be split into
-    // separate argv entries to be runnable at all.
-    var script = substitute(action.command, function (slot) {
-        return slot === 10 ? '${=' + slot + '}' : '"${' + slot + '}"';
-    });
+    var script = substitute(action.command, shellRef);
     if (!script.trim())
         return null;
 
@@ -441,7 +544,12 @@ function preview(action, detail, ctx) {
     if (!action || !detail)
         return "";
     var vals = values(action, detail, ctx);
-    return substitute(action.command, function (slot) {
-        return shellEscape(vals[slot]);
+    return substitute(action.command, function (slot, quoting) {
+        var value = String(vals[slot] === undefined || vals[slot] === null ? "" : vals[slot]);
+        if (quoting === "double")
+            return value.replace(/[\\"$`]/g, "\\$&");
+        if (quoting === "single")
+            return "'" + shellEscape(value) + "'";
+        return shellEscape(value);
     });
 }

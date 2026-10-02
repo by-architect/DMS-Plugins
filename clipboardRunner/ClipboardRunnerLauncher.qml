@@ -141,9 +141,10 @@ Item {
             pluginService.requestLauncherUpdate(pluginId);
     }
 
-    // clipboard.paste hands back the full current clipboard as text, unlike the
-    // history previews which stop at 100 characters. It fails for a clipboard
-    // holding an image and nothing else, which is where _readImage takes over.
+    // The newest entry's type is asked first, and only that entry -- a search
+    // capped at one, where the full state would carry the whole history. A
+    // video, a sound or another file copied as data is written out to a file
+    // (see Clipboard.dataExt); anything else is read as text.
     function _readClipboard() {
         if (reading)
             return;
@@ -154,6 +155,23 @@ Item {
         }
 
         reading = true;
+        DMSService.sendRequest("clipboard.search", {
+            "limit": 1
+        }, function (response) {
+            const entries = (!response.error && response.result && response.result.entries) || [];
+            const newest = entries.length > 0 ? entries[0] : null;
+            const ext = newest && !newest.isImage ? Clipboard.dataExt(newest.mimeType) : "";
+            if (ext !== "")
+                root._materialise(newest, ext);
+            else
+                root._readText();
+        });
+    }
+
+    // clipboard.paste hands back the full current clipboard as text, unlike the
+    // history previews which stop at 100 characters. It fails for a clipboard
+    // holding an image and nothing else, which is where _readImage takes over.
+    function _readText() {
         DMSService.sendRequest("clipboard.paste", null, function (response) {
             if (response.error) {
                 root._readImage();
@@ -179,19 +197,28 @@ Item {
                 root._fail(response.error || "Clipboard has nothing this can act on");
                 return;
             }
-
-            const file = root.cacheDir + "/clipboard-" + current.id + "." + root._extForMime(current.mimeType);
-            Proc.runCommand("clipboardRunner.materialise", ["zsh", "-c", 'mkdir -p "${1:h}" || exit 1
-if [ ! -s "$1" ]; then
-    "${DMS_EXECUTABLE:-dms}" cl get "$2" | base64 -d > "$1" || exit 1
-fi', "materialise", file, String(current.id)], function (output, exitCode) {
-                if (exitCode !== 0) {
-                    root._fail("Could not write the clipboard image out");
-                    return;
-                }
-                root._settle(file);
-            });
+            root._materialise(current, root._extForMime(current.mimeType));
         });
+    }
+
+    // Named after the entry, so the same copy is written out once however
+    // often the list is opened. `cl get` prints the entry's bytes as base64,
+    // whatever their type. pipefail, because otherwise a failed `cl get` is
+    // reported as base64's success on no input: an empty file, then actions
+    // offered on nothing. A half-written file is removed, never reused.
+    function _materialise(entry, ext) {
+        const file = root.cacheDir + "/clipboard-" + entry.id + "." + ext;
+        Proc.runCommand("clipboardRunner.materialise", ["zsh", "-c", 'setopt pipefail
+mkdir -p "${1:h}" || exit 1
+if [ ! -s "$1" ]; then
+    "${DMS_EXECUTABLE:-dms}" cl get "$2" | base64 -d > "$1.part" && [ -s "$1.part" ] && mv -f "$1.part" "$1" || { rm -f "$1.part"; exit 1; }
+fi', "materialise", file, String(entry.id)], function (output, exitCode) {
+            if (exitCode !== 0) {
+                root._fail(entry.isImage ? "Could not write the clipboard image out" : "Could not write the copied " + (entry.mimeType || "data") + " out");
+                return;
+            }
+            root._settle(file);
+        }, 0, 60000);
     }
 
     function _extForMime(mime) {

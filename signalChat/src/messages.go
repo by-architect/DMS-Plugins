@@ -299,6 +299,11 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 		UpTo      int64    `json:"upTo"`
 		MessageID string   `json:"messageId"`
 		Messages  []string `json:"messageIds"`
+		// Read is what the host says this made read, from its store, under the
+		// ids this bridge gave them. An older host leaves it out.
+		Read []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
 	}
 	_ = json.Unmarshal(c.Params, &params)
 
@@ -337,6 +342,15 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 	if params.MessageID != "" {
 		ids = append(ids, params.MessageID)
 	}
+	// A Signal receipt has to name the exact messages it is for, by the
+	// timestamp their id carries. The receipt this used to send named the read
+	// position itself -- the current time, a message that does not exist -- so
+	// no sender ever saw one. The host now lists what it marked read, out of
+	// its store, which is the only way a message from before this bridge
+	// started gets a receipt: nothing here remembers it.
+	for _, m := range params.Read {
+		ids = append(ids, m.ID)
+	}
 
 	var timestamps []int64
 	seen := map[int64]bool{}
@@ -346,11 +360,10 @@ func (b *bridge) handleMarkRead(ctx context.Context, c call) {
 			timestamps = append(timestamps, ts)
 		}
 	}
-	// The host itemises nothing: it says how far the conversation has been
-	// read. A Signal receipt has to name the exact messages it is for, and
-	// the receipt this used to send named the read position itself -- the
-	// current time, a message that does not exist -- so no sender ever saw
-	// one. The messages are the ones remembered as they arrived.
+	// The messages remembered as they arrived, too. With an older host, which
+	// says only how far the conversation has been read, they are all there is;
+	// with a newer one they cover what its list leaves out -- a message that
+	// has not reached the store yet. Each timestamp is named once either way.
 	for _, ref := range waiting {
 		if !seen[ref.ts] {
 			seen[ref.ts] = true

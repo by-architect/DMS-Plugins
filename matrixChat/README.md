@@ -59,9 +59,30 @@ sign in before enabling the plugin, or are working on the bridge outside DMS.
 
 **Signing in creates a new device**, exactly as adding Element on a new phone
 does. A new device has no keys to messages sent before it existed. Those
-messages are not shown here at all -- this bridge does not fetch older history
--- and an encrypted message that arrives but cannot be decrypted is dropped
-rather than kept to be tried again later.
+messages are not shown here at all -- this bridge does not fetch older history.
+
+An encrypted message that arrives but cannot be decrypted yet -- most of what a
+new device sees in its first sync, or a message whose sender shared the key
+late -- is not dropped. It shows in the conversation as *Waiting for this
+message — it could not be decrypted yet*, a system line that is never counted
+as unread and never notifies, and the bridge writes it down
+(`undecryptable.json`, the newest 1000) and tries it again:
+
+- as soon as a room key for it arrives, from the sender or forwarded by another
+  device of yours;
+- straight after you verify this device with your recovery key, which restores
+  the key backup;
+- every 15 minutes. Once this device has been verified with the recovery key,
+  that also looks the missing keys up in your key backup, which your other
+  devices keep adding to, and asks your other signed-in devices for them. An
+  unverified device asks nobody: the answer would be a refusal, and a refused
+  key can no longer be taken from the backup either.
+
+When the key turns up, the real message replaces the placeholder in place. A
+message that can never be decrypted -- the sender's device refused this one
+the key, say -- says *This message could not be decrypted* instead. Reactions
+and edits that cannot be decrypted show nothing; an edit is applied once it
+can be.
 
 Matrix normally verifies a new device by asking you to confirm it on one you are
 already signed in to. If DMS is your only signed-in client there is nothing to
@@ -74,11 +95,15 @@ key Element gave you when you turned on Secure Backup; the passphrase you chose
 works there too. It unlocks secret storage on your homeserver, which holds both
 the cross-signing keys that mark this device as genuinely yours and your key
 backup. Verifying is what makes other people's clients trust this device and
-share their keys with it; the backup is restored too, but nothing already
-missed is fetched again to use it on.
+share their keys with it; the backup is restored too, and every message still
+waiting for its key is tried again with it.
 
-The key is sent to the bridge, used, and dropped. It is never written to plugin
-settings or logged.
+The recovery key is sent to the bridge, used, and dropped. It is never written
+to plugin settings or logged. The backup key it unlocks is kept, in the
+encryption store beside the room keys it protects and encrypted the same way,
+so that keys your other devices back up later can be fetched for messages
+still waiting on them. If you verified before this version, verify once more
+to let it do that.
 
 If the account has no Secure Backup, the field says so: turn it on in another
 client first, and keep the recovery key it gives you.
@@ -91,6 +116,7 @@ Unencrypted rooms are readable immediately either way.
 |---|---|
 | Send and receive text | yes |
 | End-to-end encrypted rooms | yes, via pure-Go olm |
+| Messages that cannot be decrypted yet | shown as waiting, and filled in when their key arrives — see above |
 | Replies | yes |
 | Message edits | yes — the edit replaces the original in place |
 | Images, video, audio, files | yes, including encrypted attachments |
@@ -167,6 +193,7 @@ On the plugin's own settings page, **Settings → Plugins → Matrix Chat**:
 | Sync position | `~/.local/share/dms-matrix/sync.json` | matrixChat |
 | One-off catch-up marker | `~/.local/share/dms-matrix/catchup` | matrixChat |
 | Room names and pending invitations | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
+| Messages waiting for their keys | `~/.local/share/dms-matrix/undecryptable.json`, mode 0600 | matrixChat |
 | Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |
 | Plugin settings | `~/.config/DankMaterialShell/plugin_settings.json` | DMS |
@@ -182,7 +209,10 @@ client (Element: Settings → Sessions) does the same locally on the bridge's ne
 sync, and puts the sign-in form back. The crypto store goes with the session
 deliberately: keeping it would leave a later login inheriting keys for a device
 that no longer exists. The sync position goes too, because a new device resumed
-from the old one's position never learns which rooms are encrypted.
+from the old one's position never learns which rooms are encrypted. The list of
+messages waiting for their keys stays: their placeholders are still in the
+conversations, and signing back in to the same account and verifying can fill
+them in. Signing in as somebody else starts it over.
 
 ## Troubleshooting
 
@@ -202,9 +232,9 @@ output there too.
 | Stuck at "needsLogin" | No session, or the token was revoked. Sign in again in the chat window, or with `./login.sh` |
 | Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
 | Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
-| Messages in an encrypted room never appear | They could not be decrypted, and are not retried. Verify this device with your recovery key, so that new messages are shared with it |
+| Messages say *Waiting for this message* | This device does not have their key yet. Verify it with your recovery key: the backup is restored, other people's devices start sharing with it, and every waiting message is tried again. Keeping another of your devices (Element) signed in lets it answer this one's requests for missing keys |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
-| Attachment will not open | The download error is in the shell's log (`quickshell log`). Encrypted attachments received before this version were stored without their key and cannot be opened |
+| Attachment will not open | The download error is in the shell's log (`quickshell log`). Encrypted attachments received before the version that kept their key are opened by fetching their message again for it, which needs that message to be decryptable on this device. One that was already downloaded back then was saved still encrypted, and DMS keeps opening that copy |
 
 If the homeserver revokes the token, the bridge stops rather than retrying
 forever, clears the session and reports `needsLogin`, which puts the sign-in form

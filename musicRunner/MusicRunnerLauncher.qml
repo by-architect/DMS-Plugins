@@ -49,6 +49,19 @@ Item {
     property string mpcBin: "mpc"
     property string mpdHost: ""
     property string mpdPort: ""
+
+    // MPD's address as the user's own shell has it, for when neither these
+    // settings nor the shell's own environment name one.
+    //
+    // "Same as running mpc yourself" was the promise of leaving the host blank,
+    // and it did not hold: a terminal reads MPD_HOST from the login shell's
+    // startup files, but the bar is started by the compositor and never ran
+    // them. So mpc in a terminal reached the server while every search here
+    // went to localhost and reported MPD as not connected. The login shell is
+    // asked once, and its answer is used exactly where a terminal would use it.
+    property string _shellMpdHost: ""
+    property string _shellMpdPort: ""
+    property bool _shellAsked: false
     property bool searchSongs: true
     property bool searchPlaylists: true
     property bool searchArtists: true
@@ -116,6 +129,32 @@ Item {
         searchPlaylistTracks = pluginService.loadPluginData(pluginId, "searchPlaylistTracks", true);
         searchNowPlaying = pluginService.loadPluginData(pluginId, "searchNowPlaying", true);
         maxPerCategory = pluginService.loadPluginData(pluginId, "maxPerCategory", 6);
+        _askShellForMpd();
+    }
+
+    function _askShellForMpd() {
+        if (_shellAsked)
+            return;
+        // Nothing to look up when the address is already known here.
+        if (mpdHost.trim() !== "" || (Quickshell.env("MPD_HOST") || "") !== "")
+            return;
+        _shellAsked = true;
+
+        const shell = Quickshell.env("SHELL") || "sh";
+        Proc.runCommand("musicRunner.shellMpd", [shell, "-lc", 'printf "%s\\n%s\\n" "${MPD_HOST-}" "${MPD_PORT-}"'], (out, code) => {
+            if (code !== 0)
+                return;
+            const lines = (out || "").split("\n");
+            const host = (lines[0] || "").trim();
+            const port = (lines[1] || "").trim();
+            if (host === "" && port === "")
+                return;
+            root._shellMpdHost = host;
+            root._shellMpdPort = port;
+            // Anything already tried went to the default address; try again
+            // where the server actually is.
+            root._retryNow();
+        }, 0, 5000);
     }
 
     // ---------------------------------------------------------------- launcher
@@ -250,16 +289,7 @@ Item {
             return;
 
         if (item.action === "retryConnection") {
-            // Reset the poll throttle so this doesn't just wait out the
-            // normal 8s/30s cycle, then immediately retry whatever's
-            // relevant: the playlist/queue poll, and the active query if
-            // there is one.
-            _plNamesLastFetchAt = 0;
-            _plTracksLastFetchAt = 0;
-            _queueLastFetchAt = 0;
-            _maybePoll();
-            if (_desiredText.length >= _minChars)
-                _maybeStartQuery(_desiredScope, _desiredText, true);
+            _retryNow();
             return;
         }
 
@@ -362,7 +392,31 @@ Item {
     }
 
     function _reportMpdError(code, err) {
-        _mpdError = code === -1 ? "Timed out connecting to MPD." : (_firstErrorLine(err) || ("mpc exited with code " + code + "."));
+        let message = code === -1 ? "Timed out connecting to MPD." : (_firstErrorLine(err) || ("mpc exited with code " + code + "."));
+        // With no address anywhere, mpc tried this machine. Saying so is the
+        // difference between "MPD is down" and "the bar is asking the wrong
+        // computer".
+        if (_effectiveHost() === "")
+            message += " No MPD host is set, so mpc tried this machine; set one in Settings → Plugins → Music Runner.";
+        _mpdError = message;
+    }
+
+    // Retries everything that talks to MPD now, rather than on the next poll:
+    // the playlist/queue poll throttles are reset, and the active query, if
+    // there is one, runs again.
+    function _retryNow() {
+        _plNamesLastFetchAt = 0;
+        _plTracksLastFetchAt = 0;
+        _queueLastFetchAt = 0;
+        _maybePoll();
+        if (_desiredText.length >= _minChars)
+            _maybeStartQuery(_desiredScope, _desiredText, true);
+    }
+
+    // Where mpc is pointed: this plugin's setting, else the login shell's
+    // MPD_HOST, else the bar's own environment -- "" when none of them say.
+    function _effectiveHost() {
+        return mpdHost.trim() || _shellMpdHost || (Quickshell.env("MPD_HOST") || "");
     }
 
     Timer {
@@ -908,10 +962,12 @@ Item {
 
     function _mpcPrefix() {
         const args = [];
-        if (mpdHost.trim().length > 0)
-            args.push("--host=" + mpdHost.trim());
-        if (mpdPort.trim().length > 0)
-            args.push("--port=" + mpdPort.trim());
+        const host = mpdHost.trim() || _shellMpdHost;
+        const port = mpdPort.trim() || _shellMpdPort;
+        if (host.length > 0)
+            args.push("--host=" + host);
+        if (port.length > 0)
+            args.push("--port=" + port);
         return args;
     }
 

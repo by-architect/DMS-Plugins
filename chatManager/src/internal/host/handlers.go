@@ -627,6 +627,12 @@ func (m *Manager) sendOne(ctx context.Context, b *bridge, provider, chatID, text
 	return messageID, nil
 }
 
+// markReadLimit caps how many messages one markRead itemises for a bridge.
+// Newest first, so what goes without a receipt past it is the oldest -- the
+// part of a conversation left for months that nobody is waiting on a tick for
+// -- and opening it does not turn into thousands of receipts at once.
+const markReadLimit = 300
+
 func handleMarkRead(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
 	provider, chatID, ok := chatTarget(conn, req)
 	if !ok {
@@ -638,6 +644,29 @@ func handleMarkRead(ctx context.Context, conn *models.Conn, req models.Request, 
 		upTo = time.Now().UnixMilli()
 	}
 
+	b, err := m.bridgeFor(provider)
+	upstream := err == nil && b.HasCapability(CapMarkRead)
+
+	params := map[string]any{"chatId": chatID, "upTo": upTo}
+	if upstream {
+		// The messages this makes read, itemised. WhatsApp and Signal receipt
+		// a message by its id and sender, not a point in time, and a bridge
+		// only remembers what arrived while it was running -- so after a
+		// restart, reading older messages here told nobody. Listed before the
+		// read position moves, since afterwards nothing tells them apart from
+		// messages read long ago. If the list cannot be had the bridge still
+		// gets upTo, and makes do with what it remembers.
+		if reading, err := m.Store().UnreadUpTo(ctx, provider, chatID, upTo, markReadLimit); err == nil {
+			refs := make([]map[string]any, 0, len(reading))
+			for _, msg := range reading {
+				refs = append(refs, map[string]any{"id": msg.ID, "senderId": msg.SenderID, "ts": msg.TS})
+			}
+			params["messages"] = refs
+		} else {
+			log.Warnf("chat: could not list the messages being read: %v", err)
+		}
+	}
+
 	if err := m.Store().SetReadUpTo(ctx, provider, chatID, upTo); err != nil {
 		models.RespondError(conn, req.ID, err.Error())
 		return
@@ -645,8 +674,8 @@ func handleMarkRead(ctx context.Context, conn *models.Conn, req models.Request, 
 
 	// Best effort upstream: the local badge is cleared regardless, since a
 	// provider that cannot post a read receipt should not leave a stuck count.
-	if b, err := m.bridgeFor(provider); err == nil && b.HasCapability(CapMarkRead) {
-		b.notify(MethodMarkRead, map[string]any{"chatId": chatID, "upTo": upTo})
+	if upstream {
+		b.notify(MethodMarkRead, params)
 	}
 
 	m.markDirty()

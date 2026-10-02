@@ -74,6 +74,34 @@ Singleton {
 
     // path -> { raw, lastChangeMs, phase, endedMs, action }
     property var _seen: ({})
+
+    // An action that was not running at the previous poll, and the screen
+    // whose pill should show it (see _peekScreen). Never raised for what is
+    // already running when polling starts -- the shell coming up halfway
+    // through a long copy is not that copy starting.
+    signal actionStarted(var action, string screenName)
+    property bool _primed: false
+    property bool peekOnStart: true
+
+    // The pills, each counted in by itself, so a new action is shown once --
+    // on the focused screen when that one has a pill -- not on every monitor.
+    property var _pills: []
+
+    function addPill(pill) {
+        root._pills = root._pills.concat([pill]);
+    }
+
+    function removePill(pill) {
+        root._pills = root._pills.filter(p => p !== pill);
+    }
+
+    function _peekScreen() {
+        const names = root._pills.map(p => p && p.parentScreen ? p.parentScreen.name : "");
+        const focused = CompositorService.getFocusedScreenName();
+        if (focused && names.indexOf(focused) >= 0)
+            return focused;
+        return names.length > 0 ? names[0] : "";
+    }
     // Rows for actions whose file vanished before the journal caught up, and
     // the only history there is if the journal cannot be read at all.
     property var _fallbackHistory: []
@@ -130,6 +158,7 @@ Singleton {
 
     function _ingestLive(raw) {
         const before = root.activeCount;
+        const known = root._seen;
         const next = Actions.ingest(root._seen, root._fallbackHistory, raw, {
             nowMs: Date.now(),
             staleMs: root.staleSeconds * 1000,
@@ -145,6 +174,13 @@ Singleton {
         root.everPolled = true;
         root.active = next.active;
         root._seen = next.seen;
+
+        if (root._primed && root.peekOnStart) {
+            const fresh = next.active.filter(a => known[a.file] === undefined);
+            if (fresh.length > 0)
+                root.actionStarted(fresh[0], root._peekScreen());
+        }
+        root._primed = true;
 
         if (next.historyChanged) {
             root._fallbackHistory = next.history;
@@ -195,6 +231,7 @@ Singleton {
         historyLimit = PluginService.loadPluginData(pluginId, "historyLimit", 20);
         staleSeconds = PluginService.loadPluginData(pluginId, "staleSeconds", 45);
         hideWhenIdle = PluginService.loadPluginData(pluginId, "hideWhenIdle", false);
+        peekOnStart = PluginService.loadPluginData(pluginId, "peekOnStart", true);
     }
 
     Component.onCompleted: _loadSettings()
@@ -210,6 +247,7 @@ Singleton {
 
     onWatchDirSettingChanged: {
         root._seen = {};
+        root._primed = false;
         root.active = [];
         Qt.callLater(root.refresh);
     }

@@ -537,6 +537,70 @@ func TestUnreadMessages(t *testing.T) {
 	assert.Empty(t, hits)
 }
 
+// What a markRead itemises for read receipts: the incoming messages between
+// where a conversation had been read and where it is being read to -- asked
+// before the position moves, since afterwards they look like any other read
+// message.
+func TestUnreadUpTo(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	const dm = "dm"
+	const unfiled = "unfiled"
+	require.NoError(t, store.TouchChat(ctx, prov, dm, "Ada", "", 1000, false, false))
+
+	put := func(chatID, id string, ts int64, fromMe bool, kind string) {
+		require.NoError(t, store.PutMessage(ctx, Message{
+			Provider: prov, ChatID: chatID, ID: id, TS: ts, FromMe: fromMe, Kind: kind,
+			SenderID: "ada@s.whatsapp.net", Text: id,
+		}))
+	}
+	ids := func(msgs []Message) []string {
+		out := []string{}
+		for _, m := range msgs {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+
+	put(dm, "read-1", 1000, false, KindText)
+	put(dm, "at-position", 2000, false, KindText)
+	put(dm, "new-1", 3000, false, KindText)
+	put(dm, "mine", 3500, true, KindText)
+	put(dm, "noise", 3600, false, KindSystem)
+	put(dm, "gone", 3700, false, KindDeleted)
+	put(dm, "odd", 3800, false, KindUnsupported)
+	put(dm, "new-2", 4000, false, KindImage)
+	put(dm, "later", 8000, false, KindText)
+	put(unfiled, "elsewhere", 3000, false, KindText)
+
+	require.NoError(t, store.SetReadUpTo(ctx, prov, dm, 2000))
+
+	msgs, err := store.UnreadUpTo(ctx, prov, dm, 4000, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"new-2", "new-1"}, ids(msgs),
+		"after the read position and up to and including the new one, newest first; "+
+			"your own messages and protocol rows are nobody's to receipt")
+	assert.Equal(t, "ada@s.whatsapp.net", msgs[0].SenderID, "the sender comes back as the bridge sent it")
+	assert.EqualValues(t, 4000, msgs[0].TS)
+
+	msgs, err = store.UnreadUpTo(ctx, prov, dm, 9000, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"later", "new-2"}, ids(msgs), "capped from the oldest end")
+
+	// Once the position has moved, the same messages are not listed again.
+	require.NoError(t, store.SetReadUpTo(ctx, prov, dm, 4000))
+	msgs, err = store.UnreadUpTo(ctx, prov, dm, 4000, 0)
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+
+	// A conversation with messages but no row of its own has read nothing yet,
+	// rather than everything.
+	msgs, err = store.UnreadUpTo(ctx, prov, unfiled, 9000, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"elsewhere"}, ids(msgs))
+}
+
 // InsertMessages says which messages the store had never seen, which is what
 // keeps a redelivered message from being counted, or announced, twice.
 func TestInsertMessagesReportsWhatIsNew(t *testing.T) {

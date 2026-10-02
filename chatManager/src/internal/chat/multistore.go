@@ -269,6 +269,14 @@ func (m *MultiStore) SetReadUpTo(ctx context.Context, provider, chatID string, t
 	return s.SetReadUpTo(ctx, provider, chatID, ts)
 }
 
+func (m *MultiStore) UnreadUpTo(ctx context.Context, provider, chatID string, ts int64, limit int) ([]Message, error) {
+	s, err := m.For(provider)
+	if err != nil {
+		return nil, err
+	}
+	return s.UnreadUpTo(ctx, provider, chatID, ts, limit)
+}
+
 func (m *MultiStore) PutMessage(ctx context.Context, msg Message) error {
 	s, err := m.For(msg.Provider)
 	if err != nil {

@@ -141,6 +141,21 @@ measurement nobody made.
 plugin's to truncate, so the sweep button (and a right-click on the pill) means
 "everything older than now is no longer interesting".
 
+**A new action shows itself.** When an action starts, the popout opens for
+three seconds, like a message, and closes again on its own. Hover it to keep it
+up; click the pill while it shows to keep it open as the ordinary popout.
+
+It opens *without the keyboard*: an ordinary popout takes keyboard focus and
+lays a screen-wide click catcher over everything else, and the copy that just
+started was almost certainly typed into a terminal you are still typing into.
+For those three seconds your keys and clicks go where they were going. The
+popout appears once, on the focused screen when that one has the pill and
+otherwise on the first pill's screen, and not at all when the popout is
+already open or another popout is up on that screen — it never replaces one
+you opened. Actions that were already running when the shell started do not
+count as starting. "Show the popout when an action starts" in the settings
+turns it off.
+
 ## When it looks idle and should not
 
 The two readers are plain shell scripts, runnable by hand — they print what
@@ -180,6 +195,7 @@ actually looked at for the same reason.
 | Setting | Default | |
 |---|---|---|
 | Status directory | `matrix/fct`, or `matrix/dejavu` if that is what exists | where live files are |
+| Show the popout when an action starts | on | three seconds, without the keyboard (above) |
 | Hide when nothing is running | off | remove the pill from the bar entirely while idle |
 | Refresh while active | 800 ms | how often the directory is re-read during an action |
 | Refresh while idle | 3000 ms | how often it is checked for a new one |

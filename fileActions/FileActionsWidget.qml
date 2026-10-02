@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Wayland
 import qs.Common
 import qs.Widgets
 import qs.Modules.Plugins
@@ -37,15 +38,116 @@ PluginComponent {
     // Counted in and out, so the service only polls while a pill exists.
     Component.onCompleted: {
         FileActionsService.consumers++;
+        FileActionsService.addPill(root);
         applyIdleVisibility();
     }
-    Component.onDestruction: FileActionsService.consumers = Math.max(0, FileActionsService.consumers - 1)
+    Component.onDestruction: {
+        FileActionsService.consumers = Math.max(0, FileActionsService.consumers - 1);
+        FileActionsService.removePill(root);
+        if (root.peeking)
+            root._endPeek(false);
+    }
 
     Connections {
         target: FileActionsService
 
         function onHideWhenIdleChanged() {
             root.applyIdleVisibility();
+        }
+
+        function onActionStarted(action, screenName) {
+            if ((root.parentScreen ? root.parentScreen.name : "") === screenName)
+                root.peek();
+        }
+    }
+
+    // ---------------------------------------------------------------- peek
+    // A new action opens the popout for a few seconds, the way a message
+    // would: with no keyboard focus and without the screen-wide click catcher
+    // an ordinary popout brings, because the action was almost certainly just
+    // started from a terminal that is still being typed into. Hovering it
+    // keeps it up; clicking the pill while it shows turns it into the
+    // ordinary popout, keyboard and all. One already open is left alone, and
+    // so is another popout on the same screen, which this would replace.
+    readonly property int peekMs: 3000
+    property bool peeking: false
+    property bool peekHovered: false
+    property var _popoutHandle: null
+
+    // PluginComponent keeps its popout to itself (it is an id in that file),
+    // so it is found among the children by what it has: the two properties
+    // the peek turns down for its few seconds.
+    function _findPopout() {
+        if (root._popoutHandle)
+            return root._popoutHandle;
+        const kids = root.data;
+        for (let i = 0; i < kids.length; i++) {
+            const o = kids[i];
+            if (o && o.pluginContent !== undefined && o.customKeyboardFocus !== undefined && o.backgroundInteractive !== undefined) {
+                root._popoutHandle = o;
+                break;
+            }
+        }
+        return root._popoutHandle;
+    }
+
+    function _screenHasPopout() {
+        const name = root.parentScreen ? root.parentScreen.name : "";
+        const current = PopoutManager.currentPopoutsByScreen[name];
+        return !!current && current.shouldBeVisible === true;
+    }
+
+    function peek() {
+        if (root.peeking) {
+            peekTimer.restart();
+            return;
+        }
+        if (!root.hasPopout || !root.effectiveVisible || root.interactionActive || root._screenHasPopout())
+            return;
+        const popout = root._findPopout();
+        if (!popout)
+            return;
+        popout.customKeyboardFocus = WlrKeyboardFocus.None;
+        popout.backgroundInteractive = false;
+        root.peeking = true;
+        root.triggerPopout();
+        // Set after opening, or triggerPopout would have run it instead.
+        root.pillClickAction = () => root._endPeek(false);
+        peekTimer.restart();
+    }
+
+    // Puts back what the peek turned down. close=false keeps the popout open,
+    // as the ordinary popout from then on.
+    function _endPeek(close) {
+        peekTimer.stop();
+        root.pillClickAction = null;
+        root.peeking = false;
+        root.peekHovered = false;
+        if (close)
+            root.closePopout();
+        const popout = root._popoutHandle;
+        if (popout) {
+            popout.customKeyboardFocus = null;
+            popout.backgroundInteractive = true;
+        }
+    }
+
+    // Closed some other way while peeking -- its own close button, another
+    // popout taking the screen.
+    onInteractionActiveChanged: {
+        if (!root.interactionActive && root.peeking)
+            root._endPeek(false);
+    }
+
+    Timer {
+        id: peekTimer
+
+        interval: root.peekMs
+        onTriggered: {
+            if (root.peekHovered)
+                restart();
+            else
+                root._endPeek(true);
         }
     }
 
@@ -162,6 +264,10 @@ PluginComponent {
     }
 
     popoutContent: Component {
-        FileActionsPopout {}
+        FileActionsPopout {
+            HoverHandler {
+                onHoveredChanged: root.peekHovered = hovered
+            }
+        }
     }
 }

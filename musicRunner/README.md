@@ -165,7 +165,7 @@ end of queue" is one right-click away.
 | Musics / Lists / Artists / Albums / Musics in Lists / Now Playing | all on | Independent toggles; a scope prefix overrides these for one search |
 | Results per category | 6 | Cap before the combined list is ranked and shown |
 | mpc binary | `mpc` | Absolute path if not on the shell's PATH |
-| MPD host / port | *(blank)* | Blank uses the `MPD_HOST`/`MPD_PORT` environment variables, same as running `mpc` yourself. Only set these if the shell process doesn't already have them (e.g. a different systemd user session) |
+| MPD host / port | *(blank)* | Blank uses `MPD_HOST`/`MPD_PORT` as your login shell sets them — the address `mpc` reaches in a terminal. The bar is started by the compositor and never reads your shell's startup files, so the plugin asks the login shell once (`$SHELL -lc`); set these only to point somewhere else |
 
 ## Requirements
 

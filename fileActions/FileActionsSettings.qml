@@ -15,6 +15,13 @@ PluginSettings {
     }
 
     ToggleSetting {
+        settingKey: "peekOnStart"
+        label: "Show the popout when an action starts"
+        description: "Open it for three seconds, like a message, without taking the keyboard from what you are typing in. Hover it to keep it up; click the pill to keep it open"
+        defaultValue: true
+    }
+
+    ToggleSetting {
         settingKey: "hideWhenIdle"
         label: "Hide when nothing is running"
         description: "Take the pill out of the bar entirely while there is no active action, instead of showing it dimmed"

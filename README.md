@@ -2,9 +2,9 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twenty plugins in six shapes: **launcher** plugins that answer a trigger word
+Twenty-two plugins in six shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
-keybind, a **bar widget** that lives in the bar and opens a popout under itself,
+keybind, **bar widgets** that live in the bar and open a popout under themselves,
 the **chat manager** that is the chat system itself, **chat providers** that
 connect an outside messaging service to it, and an **overlay** that replaces a
 piece of shell chrome.
@@ -27,6 +27,8 @@ piece of shell chrome.
 | [notificationLine](notificationLine/) | overlay | every notification | — |
 | [fileActions](fileActions/) | bar widget | the pill, and its popout | `fct`, or any writer of per-action status files |
 | [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
+| [processWidget](processWidget/) | bar widget | the pill, and its popout | `ps` |
+| [hostStatus](hostStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; `sshpass` for password hosts |
 | [chatManager](chatManager/) | chat window + daemon | keybind / IPC, notifications, chatRunner | Go, to build |
 | [whatsappChat](whatsappChat/) | chat provider | the chat window | chatManager; Go, to build |
 | [signalChat](signalChat/) | chat provider | the chat window | chatManager; Go, to build; `signal-cli` |
@@ -296,13 +298,21 @@ copy anything else                   then  clip  →  translate, define, pastebi
 
 ![Converting what was just copied, then archiving the results, without leaving the launcher](clipboardRunner/docs/demo.gif)
 
-56 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
-links, aria2c for magnets, clone / `pm create` / fork for GitHub and GitLab
-(https or ssh addresses), ffmpeg and
-imagemagick conversions for audio, video and images, libreoffice for documents,
-framework detection and `adb install` for APKs, AppImage installation, 7z and
-tar for folders and archives, colour conversions, and a virus scan. They are seeded into your list as ordinary
-entries, so they are all editable.
+71 actions come with it — yt-dlp and `sm music install` for YouTube and Deezer
+links, yt-dlp and mpv for other video sites, aria2c for magnets, clone /
+`pm create` / fork for GitHub and GitLab (https or ssh addresses), stripping
+tracking parameters from links, ffmpeg and imagemagick conversions for audio,
+video and images (video → GIF with its own palette, shrink for sharing, a
+still frame, strip a photo's location), text out of an image with tesseract,
+libreoffice and ghostscript for documents, framework detection and
+`adb install` for APKs, AppImage installation, 7z and tar for folders and
+archives, colour conversions, translate, format JSON, calculate, checksums and a
+virus scan. They are seeded into your list as ordinary entries, so they are all
+editable.
+
+A video copied as data — a Screen Catcher recording put on the clipboard — is
+written out to a file first, like a copied image, so **ffmpeg → gif** turns a
+recording into a GIF that lands back on the clipboard ready to paste.
 
 An action carries filters — `includes`, `excludes`, `is exactly`, `starts with`,
 a regex, and so on — so `includes youtube.com` under **Link** never fires for
@@ -554,6 +564,31 @@ rather than an exit code, which is the difference between "it did not work" and
 "close the file manager sitting in that directory".
 
 → [mountManager/README.md](mountManager/README.md)
+
+
+## processWidget
+
+The CPU's total usage as one number in the bar, read from `/proc/stat` every
+two seconds without starting a process, turning amber and red past thresholds
+you set. The popout adds the last two minutes as a graph, memory and swap, one
+bar per core, the load average, and the busiest processes from `ps`, listed
+only while it is open. ✕ sends SIGTERM and right-click ✕ SIGKILL, each only
+after re-checking that the PID still runs the listed command; quickshell itself
+is always refused.
+
+→ [processWidget/README.md](processWidget/README.md)
+
+## hostStatus
+
+Every host from sshManager in the bar: which ones answer, and each one's CPU,
+memory, swap and disk usage. The pill reads `3/4` — amber when a host is down,
+red when none answer — and the popout has a row per host with usage bars, when
+it was last checked, and a button that opens an ssh session through sshManager.
+One ssh per host every 60 s, only while the pill is on a bar; a small POSIX `sh`
+probe reads `/proc` and `df`, so the hosts need nothing installed. Password
+hosts need `sshpass` and a stored password, passed via `SSHPASS`, never argv.
+
+→ [hostStatus/README.md](hostStatus/README.md)
 
 ---
 
