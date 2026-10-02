@@ -21,6 +21,7 @@ function a(presetId, group, name, icon, command, opts) {
     return {
         presetId: presetId,
         presetCommand: command,
+        presetConditions: opts.when || [],
         enabled: true,
         name: name,
         icon: "material:" + icon,
@@ -160,11 +161,28 @@ var SM_INSTALL_PLAY = [
     '[ -n "$NEW" ] && mpc add "$NEW" && mpc play'
 ].join("\n");
 
+// A git remote as the web page it belongs to, in $U. The ssh forms,
+// git@host:owner/repo.git and ssh://git@host/owner/repo.git, have no page of
+// their own, so they are rewritten to https before anything opens or forks
+// them; an https link only loses a trailing slash and ".git".
+var WEB_URL = [
+    'U=${clipboard}',
+    'if [[ $U == git@*:* || $U == ssh://git@* ]]; then U=${U#ssh://}; U=${U#*@}; U=${U/:/\\/}; U="https://$U"; fi',
+    'U=${U%/}; U=${U%.git}'
+].join("\n");
+
+// Any forge, by the word in its hostname, whether the link is https or ssh.
+function forge(name) {
+    return [{ op: "regex", value: "^(https?://|ssh://|git@)([^/]*[.@])?" + name + "\\.", caseSensitive: false }];
+}
+
 function all() {
     return [
         // ------------------------------------------------------------ links
         a("url.open", "url", "Open in browser", "open_in_new",
-          "xdg-open ${clipboard}", { notify: false }),
+          "xdg-open ${clipboard}", { when: [{ op: "notRegex", value: "^(git@|ssh://)", caseSensitive: false }], notify: false }),
+        a("git.open", "url", "Open the repository in the browser", "open_in_new",
+          WEB_URL + '\nxdg-open "$U"', { when: [{ op: "regex", value: "^(git@[^:]+:|ssh://git@)", caseSensitive: false }], notify: false }),
         a("url.download", "url", "Download with aria2c", "download",
           'cd ${downloads} && aria2c ${clipboard}', { when: http() }),
         a("url.nvim", "url", "Open the page source in nvim", "code",
@@ -193,20 +211,37 @@ function all() {
 
         // GitHub
         a("gh.clone", "url", "Clone into downloads", "download_for_offline",
-          'cd ${downloads} && git clone ${clipboard}', { when: includes("github.com") }),
+          'cd ${downloads} && git clone ${clipboard}', { when: forge("github") }),
         a("gh.project", "url", "pm: create a project", "create_new_folder",
-          "pm create ${clipboard}", { when: includes("github.com") }),
+          "pm create ${clipboard}", { when: forge("github") }),
         a("gh.fork", "url", "gh: fork, then create a project", "fork_right",
           [
               'set -e',
-              'gh repo fork ${clipboard} --clone=false',
+              WEB_URL,
+              'gh repo fork "$U" --clone=false',
               'OWNER=$(gh api user -q .login)',
-              'U=${clipboard}',
-              'REPO=${U:t:r}',
-              'pm create "https://github.com/$OWNER/$REPO"'
-          ].join("\n"), { when: includes("github.com") }),
+              'pm create "https://github.com/$OWNER/${U:t}"'
+          ].join("\n"), { when: forge("github") }),
         a("gh.releases", "url", "Open the releases page", "package_2",
-          'U=${clipboard}\nxdg-open "${U%/}/releases"', { when: includes("github.com"), notify: false }),
+          WEB_URL + '\nxdg-open "$U/releases"', { when: forge("github"), notify: false }),
+
+        // GitLab, gitlab.com or any instance with gitlab in its hostname.
+        // Releases live under /-/ there, and a fork lands on the same host.
+        a("gl.clone", "url", "Clone into downloads", "download_for_offline",
+          'cd ${downloads} && git clone ${clipboard}', { when: forge("gitlab") }),
+        a("gl.project", "url", "pm: create a project", "create_new_folder",
+          "pm create ${clipboard}", { when: forge("gitlab") }),
+        a("gl.fork", "url", "glab: fork, then create a project", "fork_right",
+          [
+              'set -e',
+              WEB_URL,
+              'HOST=${${U#https://}%%/*}',
+              'GITLAB_HOST=$HOST glab repo fork "$U" --clone=false',
+              'OWNER=$(GITLAB_HOST=$HOST glab api user | jq -r .username)',
+              'pm create "https://$HOST/$OWNER/${U:t}"'
+          ].join("\n"), { when: forge("gitlab") }),
+        a("gl.releases", "url", "Open the releases page", "package_2",
+          WEB_URL + '\nxdg-open "$U/-/releases"', { when: forge("gitlab"), notify: false }),
 
         // ----------------------------------------------------------- colors
         a("color.tohex", "color", "rgb → hex (copies the result)", "tag",
@@ -315,7 +350,22 @@ function all() {
 // Bumped whenever a shipped command changes. On a bump, an action still
 // carrying its shipped command is brought up to date; one the user has
 // rewritten is left exactly as they wrote it.
-var SEED_VERSION = 4;
+var SEED_VERSION = 5;
+
+// The filters shipped before presetConditions was recorded, for the presets
+// whose filters have changed since. Anything not listed here keeps whatever
+// filters it has.
+var EARLIER_CONDITIONS = {
+    "url.open": [],
+    "gh.clone": includes("github.com"),
+    "gh.project": includes("github.com"),
+    "gh.fork": includes("github.com"),
+    "gh.releases": includes("github.com")
+};
+
+function same(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
 
 // Seeding runs once. seededIds records every preset that has ever been written
 // into the list, so a later version can tell a genuinely new action from one
@@ -368,18 +418,33 @@ function seedIfNeeded(pluginService, pluginId) {
         var preset = item.presetId ? byId[item.presetId] : null;
         if (!preset)
             return item;
+        var copy = JSON.parse(JSON.stringify(item));
+        var changed = false;
+
         // Untouched means the live command still equals the one shipped with
         // it. On the pre-seededIds installs there is no presetCommand to
         // compare against, so treat those as untouched too.
         var untouched = item.presetCommand === undefined || item.command === item.presetCommand;
-        if (!untouched)
-            return item;
-        if (item.command === preset.command && item.presetCommand === preset.command)
+        if (untouched && !(item.command === preset.command && item.presetCommand === preset.command)) {
+            copy.command = preset.command;
+            copy.presetCommand = preset.command;
+            changed = true;
+        }
+
+        // Filters the same way, judged on their own so that retuning one
+        // does not freeze the other. Entries from before presetConditions
+        // was recorded are compared with what that version shipped.
+        var shippedBefore = item.presetConditions !== undefined ? item.presetConditions : EARLIER_CONDITIONS[item.presetId];
+        var filtersUntouched = shippedBefore !== undefined && same(item.conditions || [], shippedBefore);
+        if (filtersUntouched && !(same(item.conditions || [], preset.conditions) && same(shippedBefore, preset.conditions))) {
+            copy.conditions = preset.conditions;
+            copy.presetConditions = preset.conditions;
+            changed = true;
+        }
+
+        if (!changed)
             return item;
         refreshed++;
-        var copy = JSON.parse(JSON.stringify(item));
-        copy.command = preset.command;
-        copy.presetCommand = preset.command;
         return copy;
     });
 

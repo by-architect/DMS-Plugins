@@ -55,7 +55,7 @@ it is almost always a file operation.
 
 ## What it ships with
 
-51 actions are written into your list the first time the plugin runs. They are
+56 actions are written into your list the first time the plugin runs. They are
 ordinary entries from that moment on — rename them, retune the filters, delete
 the ones you have no use for. The **Restore built-in actions** button in
 settings puts back any you removed, and leaves the ones you edited alone.
@@ -64,7 +64,8 @@ settings puts back any you removed, and leaves the ones you edited alone.
 
 | Action | Shown for | Runs |
 |---|---|---|
-| Open in browser | any link | `xdg-open` |
+| Open in browser | any link except a git ssh address | `xdg-open` |
+| Open the repository in the browser | `git@host:owner/repo`, `ssh://git@…` | rewrites it to its https page, then `xdg-open` |
 | Download with aria2c | `http(s)://` | `aria2c` into your downloads folder |
 | Open the page source in nvim | `http(s)://` | `curl` to a temp file, then nvim |
 | yt-dlp: download video | youtube.com, youtu.be | `yt-dlp` |
@@ -72,10 +73,22 @@ settings puts back any you removed, and leaves the ones you edited alone.
 | sm: install into the music library | youtube.com, youtu.be, deezer.com | `sm music install` |
 | sm: install and play | youtube.com, youtu.be, deezer.com | `sm music install`, `mpc update --wait`, queue the newest track and play |
 | aria2c: download this magnet | `magnet:` | `aria2c --seed-time=0` |
-| Clone into downloads | github.com | `git clone` |
-| pm: create a project | github.com | `pm create` |
-| gh: fork, then create a project | github.com | `gh repo fork`, then `pm create` on your fork |
-| Open the releases page | github.com | `xdg-open <url>/releases` |
+| Clone into downloads | GitHub | `git clone` |
+| pm: create a project | GitHub | `pm create` |
+| gh: fork, then create a project | GitHub | `gh repo fork`, then `pm create` on your fork |
+| Open the releases page | GitHub | `xdg-open <url>/releases` |
+| Clone into downloads | GitLab | `git clone` |
+| pm: create a project | GitLab | `pm create` |
+| glab: fork, then create a project | GitLab | `glab repo fork`, then `pm create` on your fork |
+| Open the releases page | GitLab | `xdg-open <url>/-/releases` |
+
+GitHub and GitLab links are recognised over https and over ssh alike —
+`https://github.com/owner/repo`, `git@github.com:owner/repo.git` and
+`ssh://git@github.com/owner/repo.git` all get the same actions. Clone and
+`pm create` use the address as you copied it, so an ssh address clones over
+ssh; the fork and releases actions work from its https page. GitLab means
+gitlab.com or any instance with `gitlab` in its hostname, such as
+`gitlab.example.org`.
 
 ### Colours
 
