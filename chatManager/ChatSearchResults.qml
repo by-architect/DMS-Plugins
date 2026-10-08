@@ -13,6 +13,8 @@ Item {
     id: root
 
     required property var hits
+    // Formatting is taken off the matching text (see ChatCore.previewText).
+    property var chatCore: null
     property string query: ""
 
     signal hitChosen(string provider, string chatId, real ts)
@@ -98,7 +100,8 @@ Item {
                         width: parent.width
                         text: {
                             const who = hitRow.modelData.fromMe ? I18n.tr("You") : (hitRow.modelData.senderName || "");
-                            return who !== "" ? who + ": " + (hitRow.modelData.text || "") : (hitRow.modelData.text || "");
+                            const body = root.chatCore ? root.chatCore.previewText(hitRow.modelData.text, hitRow.modelData.provider ?? "") : (hitRow.modelData.text || "");
+                            return who !== "" ? who + ": " + body : body;
                         }
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceText

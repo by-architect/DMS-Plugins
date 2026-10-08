@@ -399,7 +399,7 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 StyledText {
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - Theme.fontSizeMedium - 32 - Theme.spacingS * 2
-                    text: root.replyTarget ? (root.replyTarget.text || I18n.tr("Attachment")) : ""
+                    text: root.replyTarget ? (root.replyTarget.text ? root.chatCore.previewText(root.replyTarget.text, root.replyTarget.provider ?? root.chatCore.activeProvider) : I18n.tr("Attachment")) : ""
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     elide: Text.ElideRight
@@ -504,12 +504,15 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
             width: parent.width
             spacing: Theme.spacingS
 
-            DankTextField {
+            // Multi-line, for Markdown's code blocks and lists: Enter sends,
+            // Shift+Enter starts a new line (see ComposerField.qml).
+            ComposerField {
                 id: input
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.bottom: parent.bottom
                 width: parent.width - 36 - Theme.spacingS
                 enabled: root.canSend
                 keyForwardTargets: [pasteKeys]
+                onSubmitted: root.send()
 
                 onFocusStateChanged: hasFocus => root.fieldFocused = hasFocus
 
@@ -519,29 +522,6 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                     if (root.hasStaged)
                         return I18n.tr("Add a caption");
                     return root.canAttach ? I18n.tr("Message, or paste an image") : I18n.tr("Message");
-                }
-
-                // Enter sends. A modifier means somewhere else: Ctrl+Enter is
-                // the conversation's, where it opens the selected message's
-                // attachment or link, and Shift+Enter is nobody's -- this is a
-                // one-line field, and sending on the chord people press for a
-                // new line is a message sent by accident.
-                Keys.onReturnPressed: event => {
-                    if (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) {
-                        event.accepted = false;
-                        return;
-                    }
-                    root.send();
-                    event.accepted = true;
-                }
-
-                Keys.onEnterPressed: event => {
-                    if (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) {
-                        event.accepted = false;
-                        return;
-                    }
-                    root.send();
-                    event.accepted = true;
                 }
 
                 // Typing or pasting a path and pressing space attaches it,
@@ -567,8 +547,10 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 }
             }
 
+            // At the bottom, beside the line being typed, as the field grows.
             DankActionButton {
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Math.max(0, (Theme.fieldHeight - 36) / 2)
                 buttonSize: 36
                 iconName: root.pasting ? "hourglass_empty" : "send"
                 iconColor: (input.text.trim() !== "" || root.hasStaged) ? Theme.primary : Theme.surfaceVariantText

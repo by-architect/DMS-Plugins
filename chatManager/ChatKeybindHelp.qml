@@ -96,8 +96,16 @@ StyledRect {
                     "text": I18n.tr("Send, always -- the text field keeps focus")
                 },
                 {
+                    "keys": "Shift + Enter",
+                    "text": I18n.tr("New line, for code blocks and lists")
+                },
+                {
                     "keys": "Ctrl + V",
                     "text": I18n.tr("Attach an image or file from the clipboard")
+                },
+                {
+                    "keys": "**bold**  *italic*  `code`",
+                    "text": I18n.tr("Formatting: also ~~strike~~, ``` blocks, > quotes, - lists, # headings, [links](url). WhatsApp uses its own: *bold* _italic_ ~strike~")
                 }
             ]
         },

@@ -87,15 +87,24 @@ Item {
         }
     }
 
-    // DankTextField's shape: the field that holds focus is inside, and the
-    // handlers the composer declares are on the item around it.
+    // ComposerField's shape: a multi-line TextEdit with the composer's keys
+    // handled on the field itself, before it acts on them -- a TextEdit would
+    // otherwise take Return for a new line. The handler is ComposerField's
+    // _onReturn, word for word.
     Item {
         id: composer
 
         anchors.fill: parent
 
-        Keys.onReturnPressed: event => {
-            if (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) {
+        function onReturn(event) {
+            if (event.modifiers & Qt.ShiftModifier) {
+                if (field.selectedText !== "")
+                    field.remove(field.selectionStart, field.selectionEnd);
+                field.insert(field.cursorPosition, "\n");
+                event.accepted = true;
+                return;
+            }
+            if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
                 event.accepted = false;
                 return;
             }
@@ -103,11 +112,14 @@ Item {
             event.accepted = true;
         }
 
-        TextInput {
+        TextEdit {
             id: field
 
             anchors.fill: parent
+            textFormat: TextEdit.PlainText
             Keys.forwardTo: [pasteKeys]
+            Keys.onReturnPressed: event => composer.onReturn(event)
+            Keys.onEnterPressed: event => composer.onReturn(event)
         }
     }
 
@@ -150,6 +162,14 @@ Item {
                     "setup": () => {
                         field.text = "hello world";
                         field.selectAll();
+                    }
+                },
+                {
+                    "name": "two lines, cursor at the end of the first",
+                    "setup": () => {
+                        field.text = "hello\nworld";
+                        field.cursorPosition = 5;
+                        field.deselect();
                     }
                 },
                 {
@@ -231,19 +251,33 @@ Item {
             compare(pasteKeys.pastes, before + 1, "Ctrl+V should reach the composer's forward target");
         }
 
-        // Enter sends; a modifier means somewhere else.
+        // Enter sends; Shift+Enter is a new line; Ctrl+Enter is the
+        // conversation's, and must neither send nor break the line.
         function test_enter_sends_and_the_chords_do_not() {
             field.text = "hello";
+            field.cursorPosition = field.text.length;
             window.sends = 0;
 
             keyClick(Qt.Key_Return, Qt.ControlModifier);
             compare(window.sends, 0, "Ctrl+Enter opens the selected message, it does not send");
+            compare(field.text, "hello", "Ctrl+Enter must not start a new line either");
 
             keyClick(Qt.Key_Return, Qt.ShiftModifier);
             compare(window.sends, 0, "Shift+Enter is the chord people press for a new line, not to send");
+            compare(field.text, "hello\n", "Shift+Enter starts a new line, as a plain \\n");
+
+            keyClick(Qt.Key_W);
+            compare(field.text, "hello\nw", "typing carries on on the new line");
 
             keyClick(Qt.Key_Return);
             compare(window.sends, 1, "Enter sends");
+            compare(field.text, "hello\nw", "and sending is the composer's to do, not a newline's");
+        }
+
+        // What Markdown needs: a code block pasted or typed keeps its lines.
+        function test_the_field_keeps_newlines() {
+            field.text = "```\nline one\nline two\n```";
+            compare(field.text.split("\n").length, 4);
         }
     }
 }

@@ -162,8 +162,16 @@ func (b *bridge) convert(evt *event.Event, content *event.MessageEventContent, m
 		}
 	}
 
+	// The text is Markdown (the "markdown" capability), so a formatted message
+	// is its HTML converted to Markdown: the body is the sender's plain-text
+	// fallback, which may have lost the formatting altogether -- a rich text
+	// editor or a bridged service writes no Markdown into it. When the HTML
+	// converts to nothing, or cannot be converted safely, the body stays.
 	if content.FormattedBody != "" && content.Format == event.FormatHTML {
 		msg.BodyHTML = stripReplyFallbackHTML(content.FormattedBody)
+		if text := markdownFromHTML(msg.BodyHTML); text != "" {
+			msg.Text = text
+		}
 	}
 
 	switch content.MsgType {
@@ -171,8 +179,9 @@ func (b *bridge) convert(evt *event.Event, content *event.MessageEventContent, m
 		msg.Kind = "text"
 	case event.MsgEmote:
 		msg.Kind = "text"
-		// An emote is "* Ada waves", not "waves".
-		msg.Text = "* " + msg.SenderName + " " + msg.Text
+		// An emote is "* Ada waves", not "waves". The star is escaped: a line
+		// starting "* " is a list item in Markdown.
+		msg.Text = `\* ` + escapeMarkdown(msg.SenderName) + " " + msg.Text
 	case event.MsgImage:
 		msg.Kind = "image"
 	case event.MsgVideo:
@@ -514,11 +523,11 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 	ok(c.ID, map[string]any{"messageId": string(sent)})
 }
 
+// sendText sends what was typed in the composer: Markdown, which goes as the
+// body with its HTML rendering beside it when it formats anything (setText).
 func (b *bridge) sendText(ctx context.Context, client matrixSender, roomID id.RoomID, text, replyTo string) (id.EventID, error) {
-	content := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    text,
-	}
+	content := &event.MessageEventContent{MsgType: event.MsgText}
+	setText(content, text)
 	if replyTo != "" {
 		content.RelatesTo = (&event.RelatesTo{}).SetReplyTo(id.EventID(replyTo))
 	}
@@ -533,7 +542,8 @@ func (b *bridge) sendText(ctx context.Context, client matrixSender, roomID id.Ro
 // sendFile uploads an attachment and sends it as its own event.
 //
 // A caption goes in the same event, the way Matrix 1.10 carries one: the body
-// is the caption and filename names the file. In an encrypted room the file
+// is the caption and filename names the file. A caption is Markdown like any
+// message, and carries its HTML the same way. In an encrypted room the file
 // itself is encrypted before it is uploaded, with its key inside the event --
 // which is encrypted in turn -- the way every Matrix client sends one.
 // Uploaded as it was, the homeserver kept a readable copy of every attachment
@@ -557,7 +567,7 @@ func (b *bridge) sendFile(ctx context.Context, client matrixSender, roomID id.Ro
 		},
 	}
 	if strings.TrimSpace(caption) != "" {
-		content.Body = caption
+		setText(content, caption)
 	}
 	if replyTo != "" {
 		content.RelatesTo = (&event.RelatesTo{}).SetReplyTo(id.EventID(replyTo))

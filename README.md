@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twenty-two plugins in six shapes: **launcher** plugins that answer a trigger word
+Twenty-three plugins in six shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, **bar widgets** that live in the bar and open a popout under themselves,
 the **chat manager** that is the chat system itself, **chat providers** that
@@ -13,6 +13,7 @@ piece of shell chrome.
 |---|---|---|---|
 | [commandRunner](commandRunner/) | launcher | `run <name>` | — |
 | [clipboardRunner](clipboardRunner/) | launcher | `clip <name>` | `yt-dlp`, `aria2`, `ffmpeg`, `imagemagick`, … |
+| [downloadsRunner](downloadsRunner/) | launcher | `dl <words>` | `find` |
 | [tmuxRunner](tmuxRunner/) | launcher | `tmux <name>` | `tmux`, a terminal |
 | [sshManager](sshManager/) | launcher + daemon | `ssh <name>` | an ssh client, a terminal |
 | [musicRunner](musicRunner/) | launcher | `mpd <query>` | `mpc` |
@@ -74,6 +75,17 @@ ln -sfn "$PWD/nixSearch"     ~/.config/DankMaterialShell/plugins/nixSearch
 
 Then enable each under **Settings → Plugins** — chat providers too; each one has
 its own settings page there. Removing a symlink uninstalls the plugin.
+
+That page opens filtered to **Enabled** plugins, and a newly installed plugin
+starts disabled — so it is not in the list, and searching there does not find
+it, until the filter is switched to **All** or **Disabled**. Enabling from a
+terminal skips the page entirely:
+
+```sh
+dms ipc call plugins enable processWidget
+```
+
+A bar widget then appears in the widget picker under **Settings → DankBar**.
 
 If a new plugin does not show up on its own, trigger a rescan:
 
@@ -334,6 +346,20 @@ argument rather than as part of the script, so a copied `; rm -rf ~` is a
 strange argument and not a second command.
 
 → [clipboardRunner/README.md](clipboardRunner/README.md)
+
+
+## downloadsRunner — `dl <words>`
+
+Find something in your downloads folder and put its full path on the
+clipboard. `dl` alone lists the newest downloads; `dl invoice march` needs every
+word somewhere in the path, so folders inside Downloads count too. Enter copies
+the path; right-click copies it as a file instead (paste it into a file manager
+or attach it in a chat), copies the name, opens it, or shows it in its folder
+with the file selected. Rows show the size and age, pictures get a thumbnail,
+and a download still in progress says so. The folder, how deep to look and
+hidden files are settings.
+
+→ [downloadsRunner/README.md](downloadsRunner/README.md)
 
 ---
 
@@ -701,6 +727,7 @@ remember.
 | | |
 |---|---|
 | `Enter` | Send |
+| `Shift+Enter` | New line — for code blocks and lists |
 | `Ctrl+K` / `Ctrl+J` | Move the selection through messages |
 | `Ctrl+Enter` | Open the selected message's attachment or link |
 | `Ctrl+Shift+C` | Copy the selected message, or its attachment as a file |
@@ -709,6 +736,12 @@ remember.
 | `Ctrl+V` | Attach an image or file from the clipboard |
 | `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
 | `Esc` | Clear the selection, then close |
+
+Messages show their formatting — **bold**, *italic*, `code`, code blocks,
+quotes, lists, headings, tables and links — and what you type is sent
+formatted: Matrix as formatted HTML, Signal as its own text styles, WhatsApp in
+its own `*bold*` `_italic_` markers. The details are in
+[chatManager/README.md](chatManager/README.md#formatting).
 
 In the search box, the arrows move through the conversations listed and `Enter`
 opens the one they are on — the best match, as you type. The forward picker and

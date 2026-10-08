@@ -33,10 +33,14 @@ func main() {
 	// Notably absent: search, because signal-cli has no server-side search and
 	// the host's local search covers it; and threads and richText, which Signal
 	// has no concept of.
+	//
+	// markdown says message text is Markdown both ways: Signal's style ranges
+	// arrive as markers, and the composer's markers leave as style ranges (see
+	// markdown.go).
 	emitEvent("ready", map[string]any{
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
-			"send", "markRead", "media", "reply", "revoke", "groups",
+			"send", "markRead", "media", "reply", "revoke", "groups", "markdown",
 		},
 	})
 

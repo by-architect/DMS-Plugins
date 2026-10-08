@@ -120,7 +120,7 @@ Unencrypted rooms are readable immediately either way.
 | Replies | yes |
 | Message edits | yes — the edit replaces the original in place |
 | Images, video, audio, files | yes, including encrypted attachments |
-| Formatted messages | yes — HTML bodies are passed through |
+| Formatted messages | yes — Markdown both ways, see "Formatting" below |
 | Read receipts | yes, both ways — what you read elsewhere counts as read here |
 | Rooms, with per-room display names | yes |
 | Delete for everyone (redaction) | yes |
@@ -131,6 +131,33 @@ Unencrypted rooms are readable immediately either way.
 | Backfill of older messages | not yet — the room shows what has arrived since signing in |
 | Search | local only — the DMS store indexes what it has received |
 | Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
+
+## Formatting
+
+The bridge declares the `markdown` capability: message text is Markdown in
+both directions, and the chat window renders it.
+
+**What you send.** What you type is Markdown: `**bold**`, `*italic*`,
+`~~strike~~`, `` `code` ``, code blocks, lists, quotes, headings, links and pipe
+tables. It goes to Matrix the way Element sends it: the Markdown as typed is the
+plain body, and its HTML goes beside it as the formatted body, so other clients
+show it formatted. Text that formats nothing goes as plain text only. HTML you
+type is not markup: it is escaped, and shows as typed. Captions on attachments
+work the same way, and so do replies.
+
+**What you receive.** A formatted message is converted from its HTML into
+Markdown, since the HTML is where the formatting is. Some clients send no
+Markdown in the plain body at all. Mentions read as `@Name`, room
+aliases as `#room:server`, and links to a message as their matrix.to address.
+Characters that only look like Markdown, like a `*` someone escaped, are kept
+as text. A plain message is shown exactly as its body.
+
+Some HTML has no Markdown equivalent. Underline shows as plain text, and a
+spoiler shows as `||text||` without being hidden. A table arrives as the
+message's plain body, because the converter cannot write tables. For a table
+sent from DMS, that body is the pipe table as you typed it. A numbered list
+starting at an absurd number (ten digits or more) also arrives as the plain
+body. Converting it would crash the bridge, so the HTML is not converted.
 
 ## What counts as unread
 

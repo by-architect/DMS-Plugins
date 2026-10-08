@@ -5,6 +5,7 @@ import QtQuick
 import Quickshell
 import qs.Common
 import "links.js" as Links
+import "markdown.js" as Markdown
 
 // Client for the chat manager process, bin/chat-managerd.
 //
@@ -266,6 +267,23 @@ Item {
     // caller inside the window is asking.
     function activeSupports(capability) {
         return root.supports(root.activeProvider, capability);
+    }
+
+    // How a provider's message text is formatted, as markdown.js names it: a
+    // bridge declares "whatsappMarkup" or "markdown" among its capabilities,
+    // and one that declares neither is plain text, shown as it always was.
+    function markupOf(providerId) {
+        if (root.supports(providerId, "whatsappMarkup"))
+            return "whatsapp";
+        if (root.supports(providerId, "markdown"))
+            return "markdown";
+        return "";
+    }
+
+    // A message's text without its formatting, on one line -- for the places
+    // that have a single line to say what a message is.
+    function previewText(text, providerId) {
+        return Markdown.plain(text || "", root.markupOf(providerId)).replace(/\s+/g, " ").trim();
     }
 
     // ------------------------------------------------------------ commands

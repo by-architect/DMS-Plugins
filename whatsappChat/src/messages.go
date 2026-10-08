@@ -529,6 +529,10 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 	sendCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
+	// The composer writes Markdown for every provider; what only Markdown
+	// means becomes WhatsApp's own markup here (see markup.go). Captions too.
+	params.Text = toWhatsAppMarkup(params.Text)
+
 	if len(params.Attachments) > 0 {
 		b.sendAttachments(sendCtx, c, client, to, params.Attachments, params.Text, quotedContext{
 			id:     params.ReplyTo,

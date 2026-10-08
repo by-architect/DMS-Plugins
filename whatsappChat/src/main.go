@@ -29,6 +29,9 @@ func main() {
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
 			"send", "markRead", "media", "reply", "revoke", "groups", "presence",
+			// Message text is WhatsApp markup (*bold* _italic_ ~strike~), which
+			// the window renders as the phone does; see markup.go.
+			"whatsappMarkup",
 		},
 	})
 

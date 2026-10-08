@@ -74,7 +74,9 @@ func (b *bridge) convert(env envelope, dm *dataMessage, fromMe bool) *messageObj
 		SenderID:   author,
 		SenderName: strings.TrimSpace(env.SourceName),
 		Kind:       "text",
-		Text:       dm.Message,
+		// The window reads Markdown; Signal sends its formatting beside the
+		// text. Without any, the text is passed on exactly as it came.
+		Text: signalToMarkdown(dm.Message, dm.TextStyles),
 	}
 
 	if fromMe {
@@ -217,8 +219,10 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 		Text        string   `json:"text"`
 		ReplyTo     string   `json:"replyTo"`
 		Attachments []string `json:"attachments"`
-		QuoteText   string   `json:"quoteText"`
-		QuoteSender string   `json:"quoteSender"`
+		// ReplyToText is the text of the message replied to, from the host's
+		// store. This used to be read as "quoteText", which no host has ever
+		// sent, so every quote went out empty.
+		ReplyToText string `json:"replyToText"`
 	}
 	if err := json.Unmarshal(c.Params, &params); err != nil {
 		fail(c.ID, "bad_params", "could not read send parameters: %v", err)
@@ -239,8 +243,14 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 	} else {
 		req["recipient"] = []string{value}
 	}
+	// The composer writes Markdown, and Signal takes plain text with the
+	// formatting beside it. A caption on an attachment comes through here too.
 	if params.Text != "" {
-		req["message"] = params.Text
+		message, styles := markdownToSignal(params.Text)
+		req["message"] = message
+		if len(styles) > 0 {
+			req["textStyle"] = wireStyles(styles)
+		}
 	}
 	if len(params.Attachments) > 0 {
 		req["attachments"] = params.Attachments
@@ -253,9 +263,14 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 			req["quoteTimestamp"] = ts
 			req["quoteAuthor"] = author
 			// Signal renders the quoted text from what the sender supplies, so
-			// omitting it shows the reply attached to an empty bubble.
-			if params.QuoteText != "" {
-				req["quoteMessage"] = params.QuoteText
+			// omitting it shows the reply attached to an empty bubble. The
+			// store holds it as Markdown, like any other message here.
+			if params.ReplyToText != "" {
+				quoted, styles := markdownToSignal(params.ReplyToText)
+				req["quoteMessage"] = quoted
+				if len(styles) > 0 {
+					req["quoteTextStyle"] = wireStyles(styles)
+				}
 			}
 		}
 	}

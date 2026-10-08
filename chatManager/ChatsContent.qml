@@ -304,6 +304,7 @@ FocusScope {
 
                             width: chatList.width
                             chat: modelData
+                            chatCore: root.chatCore
                             selected: root.chatCore.activeProvider === modelData.provider && root.chatCore.activeChatId === modelData.id
                             highlighted: index === root.highlightIndex
 
@@ -368,6 +369,7 @@ FocusScope {
                 anchors.fill: parent
                 visible: root.authProvider === null && root.showingResults
                 hits: root.messageHits
+                chatCore: root.chatCore
                 query: searchField.text.trim()
 
                 onHitChosen: (provider, chatId, ts) => {

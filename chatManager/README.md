@@ -79,6 +79,42 @@ person to another. A message that fails to send is put back in the field, or
 into its conversation's draft if you have moved on. Drafts live in memory: they
 survive closing the window, not restarting the shell.
 
+## Formatting
+
+Messages are rendered with their formatting: **bold**, *italic*,
+~~strikethrough~~, `inline code`, fenced code blocks, headings, quotes,
+bulleted and numbered lists (nested too), tables and links. Pictures in a
+message are never loaded, and only http and https links can be opened.
+
+Which markers mean what is the provider's to say, in its capabilities:
+
+| Capability | The text is | Providers |
+|---|---|---|
+| `markdown` | Markdown: `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, ```` ``` ```` blocks, `#` headings, `>` quotes, `-` and `1.` lists, tables, `[label](https://…)` | Matrix, Signal |
+| `whatsappMarkup` | WhatsApp's own: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, ```` ```mono``` ````, quotes and lists | WhatsApp |
+| neither | plain text, links clickable — what every message was before | anything else |
+
+WhatsApp keeps its own dialect so that a `*word*` looks here the way it looks
+on the phone, for every message already in the history as well as new ones;
+`**double**` is read as bold there too, so Markdown typed into a WhatsApp chat
+still comes out right.
+
+**Typing it.** The message field grows with what you write: **Enter** sends,
+**Shift+Enter** starts a new line (the field used to be a single line, so a
+code block could not be typed and a pasted one arrived as one long line). The
+bridge turns the text into whatever its service uses: Matrix sends formatted
+HTML beside the Markdown, Signal sends its own style ranges, WhatsApp gets
+`**bold**` as `*bold*`, headings as bold lines and links as `label (url)`.
+
+Previews — the conversation list, a quoted reply, search results, desktop
+notifications — show the text without its markers. Copying a message copies
+it as written, markers and all.
+
+`markdown.js` is the renderer, with its rules and its reasons in its own
+comments, and `tests/tst_markdown.qml` pins it down — including the cases that
+must stay plain: `snake_case_names`, `2*3*4` in WhatsApp, `#hashtags`, and
+everything inside code.
+
 ## Providers
 
 A chat provider — Matrix, WhatsApp, Signal — is **its own plugin**, installed

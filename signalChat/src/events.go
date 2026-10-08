@@ -21,8 +21,12 @@ type envelope struct {
 }
 
 type dataMessage struct {
-	Timestamp    int64        `json:"timestamp"`
-	Message      string       `json:"message"`
+	Timestamp int64  `json:"timestamp"`
+	Message   string `json:"message"`
+	// TextStyles is the message's formatting, beside its plain text: see
+	// markdown.go. The same field arrives on an edit, and on a message of
+	// ours echoed from another device.
+	TextStyles   []textStyle  `json:"textStyles"`
 	Attachments  []attachment `json:"attachments"`
 	GroupInfo    *groupInfo   `json:"groupInfo"`
 	Quote        *quote       `json:"quote"`

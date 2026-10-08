@@ -379,7 +379,8 @@ func providerNameOr(providerName string) string {
 func (p *NotifyPolicy) notificationFor(ctx context.Context, m Message, providerName string, prefs NotifyPrefs) notify.Notification {
 	body := "New message"
 	if prefs.Preview {
-		if preview := m.Preview(); preview != "" {
+		// Without its formatting markers, which a notification cannot draw.
+		if preview := StripMarkup(m.Preview()); preview != "" {
 			body = preview
 			// In a group, who spoke matters as much as what they said.
 			if m.SenderName != "" && p.isGroup(ctx, m) {

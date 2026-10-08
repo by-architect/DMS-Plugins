@@ -14,6 +14,9 @@ StyledRect {
     LayoutMirroring.childrenInherit: true
 
     required property var chat
+    // For the last message's preview: formatting is the provider's (see
+    // ChatCore.markupOf), and a preview shows the text without it.
+    property var chatCore: null
     property bool selected: false
 
     // The row the keyboard is on, from the search box's arrows. Drawn like a
@@ -116,7 +119,7 @@ StyledRect {
 
             StyledText {
                 width: parent.width
-                text: root.chat?.lastText || ""
+                text: root.chatCore ? root.chatCore.previewText(root.chat?.lastText, root.chat?.provider ?? "") : (root.chat?.lastText || "")
                 font.pixelSize: Theme.fontSizeSmall
                 color: root.hasUnread ? Theme.surfaceText : Theme.surfaceVariantText
                 elide: Text.ElideRight

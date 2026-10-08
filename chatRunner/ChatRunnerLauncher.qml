@@ -281,7 +281,10 @@ Item {
 
         if (message) {
             const who = message.senderName || "";
-            const text = message.text || "";
+            // Without its formatting markers, as every preview in the chat
+            // window shows it. An older chat manager has no previewText.
+            const raw = message.text || "";
+            const text = typeof root.chat.previewText === "function" ? root.chat.previewText(raw, message.provider || chat.provider) : raw;
             if (text !== "")
                 parts.push(who !== "" && chat.isGroup ? who + ": " + text : text);
         }

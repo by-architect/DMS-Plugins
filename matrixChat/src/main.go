@@ -39,11 +39,15 @@ func main() {
 	// Notably absent: search, because the host's local search covers what has
 	// been received and Matrix's server-side search is a separate API this
 	// bridge does not implement yet.
+	//
+	// "markdown" says how a message's text is written: Markdown, both ways.
+	// Formatted messages arrive converted from their HTML, and what is sent
+	// goes out formatted on Matrix. See markdown.go.
 	emitEvent("ready", map[string]any{
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
 			"send", "markRead", "media", "reply", "revoke", "groups", "richText",
-			"invites",
+			"markdown", "invites",
 		},
 	})
 

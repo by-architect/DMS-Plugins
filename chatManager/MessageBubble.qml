@@ -3,7 +3,7 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
-import "links.js" as Links
+import "markdown.js" as Markdown
 
 // One message.
 //
@@ -51,10 +51,31 @@ Item {
     readonly property string replyToId: message?.replyTo ?? ""
     readonly property var quoted: replyToId !== "" ? root.chatCore.messageById(replyToId) : null
 
-    // The body with URLs turned into anchors, escaped first: message text is
-    // other people's input, and StyledText would otherwise treat markup in it
-    // as markup. See links.js for what that has to survive.
-    readonly property string richText: Links.render(root.text, Theme.primary)
+    // How this message's text is formatted -- WhatsApp's *bold*, Markdown, or
+    // plain -- which is the provider's to say (see ChatCore.markupOf).
+    readonly property string markup: root.chatCore.markupOf(message?.provider ?? "")
+
+    readonly property color bubbleColor: {
+        if (root.status === "failed")
+            return Theme.withAlpha(Theme.error, 0.15);
+        return root.fromMe ? Theme.primarySelected : Theme.surfaceContainerHigh;
+    }
+
+    // The body as rich text: formatting rendered, links clickable, and every
+    // character of it escaped first -- message text is other people's input.
+    // markdown.js decides what may become markup; links.js what may be opened.
+    // Code is drawn on a shade of the bubble's own colour, so it reads in a
+    // sent bubble and a received one, in light themes and dark.
+    readonly property string richText: Markdown.render(root.text, root.markup, {
+        "dim": String(Theme.surfaceVariantText),
+        "link": String(Theme.primary),
+        "quoteBar": String(Theme.primary),
+        "codeBg": String(Qt.tint(root.bubbleColor, Qt.rgba(0, 0, 0, 0.22))),
+        "inlineCodeBg": String(Qt.tint(root.bubbleColor, Theme.withAlpha(Theme.surfaceText, 0.12))),
+        "border": String(Theme.withAlpha(Theme.surfaceVariantText, 0.5)),
+        "mono": Theme.monoFontFamily,
+        "fontSize": Theme.fontSizeMedium
+    })
     readonly property bool hasLink: linkUrl !== ""
 
     // Hover is kept alive briefly after the pointer leaves. The action row sits
@@ -177,11 +198,7 @@ Item {
         height: bubbleContent.implicitHeight + Theme.spacingS * 2
         radius: Theme.cornerRadius
 
-        color: {
-            if (root.status === "failed")
-                return Theme.withAlpha(Theme.error, 0.15);
-            return root.fromMe ? Theme.primarySelected : Theme.surfaceContainerHigh;
-        }
+        color: root.bubbleColor
 
         // Keyboard focus needs to be visible without moving anything, so it is
         // drawn as a border rather than a size or colour change.
@@ -270,7 +287,7 @@ Item {
                                 return "";
                             if (quoted.kind === "deleted")
                                 return I18n.tr("This message was deleted");
-                            return (quoted.text || quoted.fileName || "").replace(/\s+/g, " ");
+                            return quoted.text ? root.chatCore.previewText(quoted.text, quoted.provider) : (quoted.fileName || "");
                         }
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
@@ -409,9 +426,10 @@ Item {
                 font.italic: root.isDeleted
                 color: root.isDeleted ? Theme.surfaceVariantText : Theme.surfaceText
                 wrapMode: Text.Wrap
-                // Links in the body are clickable without turning the whole
-                // message into rich text.
-                textFormat: Text.StyledText
+                // Formatting needs rich text: code blocks, tables, lists and
+                // monospace are beyond StyledText. A provider with no
+                // formatting keeps StyledText, which is all its links need.
+                textFormat: root.markup !== "" && !root.isDeleted ? Text.RichText : Text.StyledText
                 onLinkActivated: url => root.chatCore.openLink(url)
 
                 HoverHandler {

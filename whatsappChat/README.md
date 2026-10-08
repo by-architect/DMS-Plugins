@@ -51,6 +51,20 @@ Channels (newsletters), statuses and broadcast lists are not dropped: each is ta
 filters** in this plugin's settings hides any of them from the conversation list and the chat
 runner. Hidden is only hidden — search still finds them, and nothing is deleted.
 
+## Formatting
+
+WhatsApp formats with its own markers -- `*bold*`, `_italic_`, `~strike~`,
+`` `code` ``, ```` ```monospace``` ````, `> ` quotes and `- ` or `1. ` lists --
+and the bridge declares `whatsappMarkup`, so the chat window shows a message
+the way the phone does.
+
+The message field is shared with Matrix and Signal, which speak Markdown, so
+what only Markdown means is rewritten before sending (`src/markup.go`):
+`**bold**` becomes `*bold*`, `~~strike~~` becomes `~strike~`, a `# heading`
+becomes a bold line, `[label](https://…)` becomes `label (https://…)`, and a
+code fence loses its language name. Everything both agree on is sent as typed,
+and code is never touched.
+
 ## Where your data lives
 
 | What | Where | Who owns it |

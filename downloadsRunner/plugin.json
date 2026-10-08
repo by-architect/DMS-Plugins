@@ -1,0 +1,19 @@
+{
+    "id": "downloadsRunner",
+    "name": "Downloads",
+    "description": "Search your downloads folder from the launcher, newest first. Type 'dl <words>' and press Enter to copy the file's full path; right-click to copy it as a file, open it, or show it in its folder.",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher"],
+    "component": "./DownloadsRunnerLauncher.qml",
+    "settings": "./DownloadsRunnerSettings.qml",
+    "trigger": "dl ",
+    "icon": "download",
+    "dependencies": ["find"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
