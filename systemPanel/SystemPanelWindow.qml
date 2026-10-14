@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Common
 import qs.Widgets
+import "matrix.js" as Matrix
 import "util.js" as Util
 
 // The fullscreen surface itself.
@@ -16,6 +17,10 @@ PanelWindow {
 
     property int journalDays: 30
     property bool autoRefresh: true
+    // 0 this machine, 1 every machine through `matrix log`.
+    property int page: 0
+    // On the matrix page: "" for every machine, else one host's name.
+    property string hostFilter: ""
 
     // Exposed over IPC so keyboard reachability can be checked without guessing:
     // if this is false, Esc will not reach the panel.
@@ -61,8 +66,31 @@ PanelWindow {
         id: fileData
     }
 
+    MatrixData {
+        id: matrixData
+    }
+
+    function refreshPage() {
+        if (win.page === 1) {
+            matrixData.refreshAll();
+            return;
+        }
+        sysData.refreshAll();
+        fileData.refresh();
+        fileData.refreshHistory();
+    }
+
+    // The matrix page reaches every machine over ssh, so it is only read once
+    // it is looked at, not every time the panel opens.
+    onPageChanged: {
+        if (page === 1 && !matrixData.everRan && !matrixData.busy)
+            matrixData.refreshAll();
+    }
+
     Component.onCompleted: {
         sysData.refreshAll();
+        if (page === 1)
+            matrixData.refreshAll();
         rootFocus.forceActiveFocus();
     }
 
@@ -71,6 +99,14 @@ PanelWindow {
         repeat: true
         running: win.autoRefresh
         onTriggered: sysData.refreshAll()
+    }
+
+    // Slower than the local tiles: every run is an ssh to every machine.
+    Timer {
+        interval: 120000
+        repeat: true
+        running: win.autoRefresh && win.page === 1
+        onTriggered: matrixData.refreshAll()
     }
 
     Rectangle {
@@ -86,14 +122,19 @@ PanelWindow {
             Keys.onEscapePressed: win.closeRequested()
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
-                    sysData.refreshAll();
-                    fileData.refresh();
-                    fileData.refreshHistory();
+                    win.refreshPage();
                     event.accepted = true;
                 } else if (event.key === Qt.Key_F5) {
-                    sysData.refreshAll();
-                    fileData.refresh();
-                    fileData.refreshHistory();
+                    win.refreshPage();
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                    win.page = win.page === 0 ? 1 : 0;
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_1) {
+                    win.page = 0;
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_2) {
+                    win.page = 1;
                     event.accepted = true;
                 } else if (event.key === Qt.Key_Q) {
                     win.closeRequested();
@@ -146,13 +187,34 @@ PanelWindow {
                         }
                     }
 
+                    // The two pages; Tab, 1 and 2 switch between them too.
+                    DankFilterChips {
+                        anchors.centerIn: parent
+                        width: singleRowWidth
+                        showCheck: false
+                        showCounts: false
+                        model: [
+                            {
+                                label: "This machine",
+                                value: "local"
+                            },
+                            {
+                                label: "All machines · matrix",
+                                value: "matrix"
+                            }
+                        ]
+                        currentIndex: win.page
+                        onSelectionChanged: index => win.page = index
+                    }
+
                     Row {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Theme.spacingM
 
                         StyledText {
-                            text: sysData.busy ? "refreshing…" : "Esc close  ·  Ctrl+R refresh"
+                            readonly property bool busy: win.page === 1 ? matrixData.busy : sysData.busy
+                            text: busy ? "refreshing…" : "Tab page  ·  Esc close  ·  Ctrl+R refresh"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                             opacity: 0.8
@@ -162,9 +224,9 @@ PanelWindow {
                         DankActionButton {
                             iconName: "refresh"
                             iconSize: 20
-                            enabled: !sysData.busy
+                            enabled: win.page === 1 ? !matrixData.busy : !sysData.busy
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: sysData.refreshAll()
+                            onClicked: win.refreshPage()
                         }
 
                         DankActionButton {
@@ -176,67 +238,146 @@ PanelWindow {
                     }
                 }
 
-                // -------------------------------------------------- 3x3 grid
-                GridLayout {
+                StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    columns: 3
-                    rows: 3
-                    columnSpacing: Theme.spacingM
-                    rowSpacing: Theme.spacingM
+                    currentIndex: win.page
 
-                    LoginHistoryTile {
-                        data: sysData
+                    // ------------------------------------- this machine: 3x3 grid
+                    GridLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        columns: 3
+                        rows: 3
+                        columnSpacing: Theme.spacingM
+                        rowSpacing: Theme.spacingM
+
+                        LoginHistoryTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        SystemErrorsTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        TailscaleTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        BootHealthTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        FileActionsTile {
+                            data: fileData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        SudoTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        OverviewTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        UnitsTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+
+                        PortsTile {
+                            data: sysData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
                     }
 
-                    SystemErrorsTile {
-                        data: sysData
+                    // ------------------------- all machines: one tile per kind
+                    ColumnLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                    }
+                        spacing: Theme.spacingM
 
-                    TailscaleTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.max(hostChips.height, matrixState.implicitHeight)
 
-                    BootHealthTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                            // Which machine the tiles show; every one by default.
+                            DankFilterChips {
+                                id: hostChips
 
-                    FileActionsTile {
-                        data: fileData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                                readonly property var hostList: matrixData.hosts
 
-                    SudoTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - matrixState.implicitWidth - Theme.spacingL
+                                showCheck: false
+                                showCounts: false
+                                model: [
+                                    {
+                                        label: "All machines",
+                                        value: ""
+                                    }
+                                ].concat(hostList.map(h => ({
+                                            label: matrixData.unreachable.indexOf(h) >= 0 ? h + " (unreachable)" : h,
+                                            value: h
+                                        })))
+                                currentIndex: win.hostFilter ? Math.max(0, hostList.indexOf(win.hostFilter) + 1) : 0
+                                onSelectionChanged: index => win.hostFilter = index > 0 ? hostList[index - 1] : ""
+                            }
 
-                    OverviewTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                            StyledText {
+                                id: matrixState
 
-                    UnitsTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                    }
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: matrixData.busy ? "reading matrix log on every machine…" : "matrix log --json · every 2 minutes while open"
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceVariantText
+                                opacity: 0.8
+                            }
+                        }
 
-                    PortsTile {
-                        data: sysData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        GridLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            columns: 4
+                            rows: 2
+                            uniformCellWidths: true
+                            uniformCellHeights: true
+                            columnSpacing: Theme.spacingM
+                            rowSpacing: Theme.spacingM
+
+                            Repeater {
+                                model: Matrix.KINDS
+
+                                MatrixLogTile {
+                                    required property var modelData
+
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    info: modelData
+                                    result: matrixData.results[modelData.kind] ?? null
+                                    hostFilter: win.hostFilter
+                                    limit: matrixData.limit
+                                }
+                            }
+                        }
                     }
                 }
             }

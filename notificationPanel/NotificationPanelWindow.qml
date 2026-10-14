@@ -259,11 +259,16 @@ PanelWindow {
                     Layout.fillHeight: true
                     spacing: Theme.spacingM
 
+                    // Three across, two down: with the flow beside them that
+                    // is four equal columns, each card narrow enough to read
+                    // in one glance and tall enough for a long notification.
                     GridLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        columns: 2
-                        rows: 3
+                        columns: 3
+                        rows: 2
+                        uniformCellWidths: true
+                        uniformCellHeights: true
                         columnSpacing: Theme.spacingM
                         rowSpacing: Theme.spacingM
 
@@ -287,7 +292,7 @@ PanelWindow {
                     }
 
                     FlowColumn {
-                        Layout.preferredWidth: (win.width - Theme.spacingL * 2 - Theme.spacingM) * 0.34
+                        Layout.preferredWidth: (win.width - Theme.spacingL * 2 - Theme.spacingM) * 0.25
                         Layout.fillHeight: true
                         items: win.flowItems
                         currentRowIndex: win.globalRowIndex

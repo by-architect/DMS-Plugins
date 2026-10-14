@@ -159,8 +159,11 @@ StyledRect {
             spacing: 6
             visible: !!row.stats
 
+            // Android lets no app read /proc/stat, so a phone never has a CPU
+            // figure; the row would only ever say "unknown".
             UsageBar {
                 width: parent.width
+                visible: !(row.stats && row.stats.android && row.stats.cpuPercent < 0)
                 label: "CPU"
                 fraction: row.stats && row.stats.cpuPercent >= 0 ? row.stats.cpuPercent / 100 : -1
                 valueText: row.stats && row.stats.cpuPercent >= 0 ? Hosts.percentText(row.stats.cpuPercent) : "unknown"
@@ -193,7 +196,7 @@ StyledRect {
                     readonly property var fs: row.filesystems[index]
 
                     width: parent.width
-                    label: fs ? fs.mount : ""
+                    label: fs ? (fs.label || fs.mount) : ""
                     fraction: fs ? fs.percent / 100 : -1
                     valueText: fs ? Hosts.pairText(fs.used, fs.total) : ""
                 }

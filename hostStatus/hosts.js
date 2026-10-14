@@ -11,6 +11,12 @@ var PSEUDO_FS = ["proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "ramfs", "rootf
 // machine that mounts it -- and the likeliest thing to make df hang.
 var NETWORK_FS = ["nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "ceph", "glusterfs", "fuse.glusterfs", "fuse.sshfs", "sshfs", "fuse.rclone", "davfs", "fuse.davfs2", "afs"];
 
+// The boot partition: written by every NixOS rebuild and read at boot,
+// never filled by hand. Hidden unless it is nearly full -- the one time it
+// matters, since a full /boot is what makes a rebuild fail.
+var BOOT_MOUNTS = ["/boot", "/boot/efi", "/boot/firmware", "/efi"];
+var BOOT_SHOW_PERCENT = 90;
+
 function num(v) {
     var n = parseFloat(v);
     return isFinite(n) ? n : NaN;
@@ -90,9 +96,30 @@ function keepFilesystem(d, type) {
     return PSEUDO_FS.indexOf(d.device) < 0 && d.device.indexOf("map ") !== 0 && !isNetworkDevice(d.device);
 }
 
+// One df row as a storage bar. label is what the row is called when the
+// mount point alone would not say it (a phone's "Internal", "SD card").
+function fsEntry(d, types, label) {
+    var denom = d.usedKb + d.availKb;
+    return {
+        mount: d.mount,
+        label: label || "",
+        device: d.device,
+        type: types[d.mount] || "",
+        total: d.totalKb * 1024,
+        used: d.usedKb * 1024,
+        avail: d.availKb * 1024,
+        // df's own definition of "Capacity": used out of what a user can use.
+        percent: denom > 0 ? 100 * d.usedKb / denom : 0
+    };
+}
+
+function isBootMount(mount) {
+    return BOOT_MOUNTS.indexOf(mount) >= 0;
+}
+
 // Real filesystems only, one row per filesystem: a device mounted twice
 // (a bind mount, btrfs subvolumes) keeps its shortest mount point. "/" first,
-// then by path.
+// then by path. The boot partition only when nearly full (see BOOT_MOUNTS).
 function pickFilesystems(rows, types) {
     var kept = rows.filter(function (d) {
         return keepFilesystem(d, types[d.mount] || "");
@@ -108,17 +135,10 @@ function pickFilesystems(rows, types) {
         if (seen[key])
             continue;
         seen[key] = true;
-        var denom = d.usedKb + d.availKb;
-        out.push({
-            mount: d.mount,
-            device: d.device,
-            type: types[d.mount] || "",
-            total: d.totalKb * 1024,
-            used: d.usedKb * 1024,
-            avail: d.availKb * 1024,
-            // df's own definition of "Capacity": used out of what a user can use.
-            percent: denom > 0 ? 100 * d.usedKb / denom : 0
-        });
+        var e = fsEntry(d, types, "");
+        if (isBootMount(e.mount) && e.percent < BOOT_SHOW_PERCENT)
+            continue;
+        out.push(e);
     }
     out.sort(function (a, b) {
         if (a.mount === "/")
@@ -127,6 +147,72 @@ function pickFilesystems(rows, types) {
             return 1;
         return a.mount < b.mount ? -1 : (a.mount > b.mount ? 1 : 0);
     });
+    return out;
+}
+
+// What kind of removable volume /storage/<ID> is, from the block device
+// behind its other mount, /mnt/media_rw/<ID>: vold names it
+// "/dev/block/vold/public:<major>,<minor>", and major 179 is an MMC (SD) card
+// while 8 is a USB disk. Anything else, or no such mount, counts as an SD
+// card -- the common case on a phone.
+function androidVolumeKind(mount, devices) {
+    var id = mount.substring(mount.lastIndexOf("/") + 1);
+    var dev = devices["/mnt/media_rw/" + id] || "";
+    var m = /public:(\d+),/.exec(dev);
+    return m && m[1] === "8" ? "usb" : "sd";
+}
+
+// A phone running Termux mounts dozens of filesystems -- the read-only system
+// image at "/", one per APEX module, vendor, product -- that are always full
+// and that nobody fills. What is the user's: internal storage
+// (/storage/emulated, the /data partition as apps see it; /data itself when
+// that is all there is) and each removable volume, /storage/<ID>, an SD card
+// or a USB drive. The same card under /mnt/media_rw/<ID> is the same space
+// again, so it is not counted twice.
+function pickAndroidStorage(rows, types, devices) {
+    var internal = null;
+    var data = null;
+    var removable = [];
+    for (var i = 0; i < rows.length; i++) {
+        var d = rows[i];
+        if (!(d.totalKb > 0))
+            continue;
+        if (d.mount === "/storage/emulated" || d.mount === "/storage/emulated/0") {
+            if (!internal)
+                internal = d;
+        } else if (d.mount === "/data") {
+            data = d;
+        } else if (/^\/storage\/[^/]+$/.test(d.mount) && d.mount !== "/storage/self") {
+            removable.push(d);
+        }
+    }
+    internal = internal || data;
+
+    var out = [];
+    if (internal)
+        out.push(fsEntry(internal, types, "Internal"));
+    removable.sort(function (a, b) {
+        return a.mount < b.mount ? -1 : (a.mount > b.mount ? 1 : 0);
+    });
+    var counts = {
+        sd: 0,
+        usb: 0
+    };
+    var kinds = removable.map(function (d) {
+        var k = androidVolumeKind(d.mount, devices);
+        counts[k]++;
+        return k;
+    });
+    var nth = {
+        sd: 0,
+        usb: 0
+    };
+    for (var j = 0; j < removable.length; j++) {
+        var k = kinds[j];
+        nth[k]++;
+        var name = k === "usb" ? "USB drive" : "SD card";
+        out.push(fsEntry(removable[j], types, counts[k] > 1 ? name + " " + nth[k] : name));
+    }
     return out;
 }
 
@@ -141,11 +227,13 @@ function parseProbe(text) {
         swap: null,
         uptimeSec: -1,
         load: null,
+        android: false,
         filesystems: []
     };
     var cpus = [];
     var mem = {};
     var types = {};
+    var devices = {};
     var df = [];
     var lines = String(text || "").split("\n");
 
@@ -163,6 +251,8 @@ function parseProbe(text) {
             out.complete = true;
         } else if (key === "os") {
             out.os = rest.trim();
+        } else if (key === "android") {
+            out.android = true;
         } else if (key === "cpu") {
             var c = parseCpuLine(rest);
             if (c)
@@ -184,8 +274,11 @@ function parseProbe(text) {
         } else if (key === "mnt") {
             // A mount point that is mounted over keeps the last (visible) type.
             var f = rest.split(" ");
-            if (f.length >= 3)
-                types[unescapeMount(f[1])] = f[2];
+            if (f.length >= 3) {
+                var at = unescapeMount(f[1]);
+                types[at] = f[2];
+                devices[at] = f[0];
+            }
         } else if (key === "df") {
             var d = parseDfLine(rest);
             if (d)
@@ -212,7 +305,13 @@ function parseProbe(text) {
         };
     }
 
-    out.filesystems = pickFilesystems(df, types);
+    // A probe from before hs:android existed still gives a phone away by its
+    // shared storage.
+    if (!out.android)
+        out.android = df.some(function (d) {
+            return d.mount === "/storage/emulated";
+        });
+    out.filesystems = out.android ? pickAndroidStorage(df, types, devices) : pickFilesystems(df, types);
     return out;
 }
 

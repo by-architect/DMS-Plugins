@@ -2,7 +2,7 @@ import QtQuick
 import qs.Common
 import qs.Widgets
 
-// One cell of the 3x3 grid: header strip, scrollable body, and the shared
+// One cell of either page's grid: header strip, scrollable body, and the shared
 // busy / error / empty states so every tile behaves the same way.
 StyledRect {
     id: root

@@ -9,7 +9,7 @@ PluginSettings {
     ToggleSetting {
         settingKey: "autoRefresh"
         label: "Auto refresh"
-        description: "Re-run every collector every 30 seconds while the panel is open"
+        description: "Re-run every collector every 30 seconds while the panel is open, and read matrix log again every 2 minutes while the all-machines page is on screen"
         defaultValue: true
     }
 

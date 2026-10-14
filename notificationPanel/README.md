@@ -2,34 +2,40 @@
 
 A fullscreen notification browser for Phoenix / DankMaterialShell: a live flow
 of every notification on the right, six user-defined filtered categories on
-the left, and a search bar that narrows all of them at once.
+the left — three across, two down — and a search bar that narrows all of them
+at once.
 
 ## Layout
 
 ![The Notification Panel: the six category tiles on the left, still empty before any filter is assigned, the full flow on the right, and the search bar along the bottom](docs/panel.png)
 
-The schematic, with all six category slots filled:
+The schematic, with all six category slots filled — four equal columns, the
+flow taking the last one:
 
 ```
-┌───────────────────┬───────────────────┬──────────────┐
-│  category 1        │  category 2        │              │
-├───────────────────┼───────────────────┤    Flow      │
-│  category 3        │  category 4        │  (every      │
-├───────────────────┼───────────────────┤ notification, │
-│  category 5        │  category 6        │  newest      │
-│                    │                    │  first)       │
-└───────────────────┴───────────────────┴──────────────┘
-              [        search…        ]
+┌──────────────┬──────────────┬──────────────┬──────────────┐
+│  category 1  │  category 2  │  category 3  │     Flow     │
+│              │              │              │   (every     │
+├──────────────┼──────────────┼──────────────┤ notification,│
+│  category 4  │  category 5  │  category 6  │    newest    │
+│              │              │              │    first)    │
+└──────────────┴──────────────┴──────────────┴──────────────┘
+                  [        search…        ]
 ```
+
+(The screenshot above is from the earlier two-across layout.)
 
 The right column always shows every notification, newest first, narrowed only
 by the search bar. Each of the six left tiles is empty until you assign it a
 filter; a filled tile shows its own scrollable flow of just the notifications
 that match, further narrowed by the same search bar.
 
-Every card shows its full title and body, wrapped rather than clipped to a
-line or two — nothing is truncated, so there's never a "…" hiding the rest
-of a notification. A card whose notification carries a real photo (as
+Every card shows its full app name, age, title and body, wrapped rather than
+clipped to a line or two — nothing is truncated, so there's never a "…"
+hiding the rest of a notification. DMS's text elides by default, so each of
+those texts turns that off and wraps instead, breaking inside a word only when
+one word (a URL, a path) is wider than the card; the app name and age share
+one wrapping line instead of two texts competing for the width. A card whose notification carries a real photo (as
 opposed to just an app-icon-sized avatar) also gets a larger image preview
 beneath the text, shown in full (never cropped) up to 220px tall.
 

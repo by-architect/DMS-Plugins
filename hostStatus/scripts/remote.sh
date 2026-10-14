@@ -11,14 +11,24 @@ export LC_ALL=C
 echo "hs:begin 1"
 echo "hs:os $(uname -s 2>/dev/null)"
 
+# Android (Termux): told apart so only the storage a person fills is shown,
+# not the dozens of system images it mounts.
+if [ -f /system/build.prop ] || command -v getprop >/dev/null 2>&1; then
+    echo "hs:android 1"
+fi
+
 # Two samples a second apart: CPU usage is a rate, one sample says nothing.
-if [ -r /proc/stat ]; then
-    a=$(grep '^cpu ' /proc/stat)
+# Android lets no app read /proc/stat, so there the wait is skipped and the
+# core count comes from nproc instead.
+a=$(grep '^cpu ' /proc/stat 2>/dev/null)
+if [ -n "$a" ]; then
     sleep 1
-    b=$(grep '^cpu ' /proc/stat)
+    b=$(grep '^cpu ' /proc/stat 2>/dev/null)
     echo "hs:cpu $a"
     echo "hs:cpu $b"
     echo "hs:ncpu $(grep -c '^cpu[0-9]' /proc/stat)"
+else
+    n=$(nproc 2>/dev/null) && echo "hs:ncpu $n"
 fi
 
 if [ -r /proc/meminfo ]; then

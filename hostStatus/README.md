@@ -19,8 +19,15 @@ timer. Nothing to install on the hosts themselves.
         │       Memory  ████████████░░░░░░░░░░       9.3 / 15 GB   │
         │       Swap    ░░░░░░░░░░░░░░░░░░░░░░              none   │
         │       /       ███████████░░░░░░░░░░░       488 / 920 GB  │
-        │       /boot   █░░░░░░░░░░░░░░░░░░░░░        74 / 1022 MB │
         │       checked 12 s ago · up 3d 4h · load 0.52 0.58 0.59  │
+        │                                                          │
+        │  (⛁)  logos                             online   [>_]    │
+        │       u0_a355@100.70.50.3:2422                           │
+        │       Memory  █████████████████░░░░░       4.7 / 5.4 GB  │
+        │       Swap    ███████░░░░░░░░░░░░░░░       1.8 / 3.8 GB  │
+        │       Internal ████████░░░░░░░░░░░░░        44 / 110 GB  │
+        │       SD card ████████████████░░░░░░         48 / 62 GB  │
+        │       checked 12 s ago · 8 CPUs                          │
         │                                                          │
         │  (☁)  backup                       unreachable   [>_]    │
         │       neo@10.0.0.9:2222                                  │
@@ -51,7 +58,7 @@ watched by default, including ones added later.
 | CPU | busy share over one second, from two `/proc/stat` samples |
 | Memory | used / total, where used is `MemTotal − MemAvailable` — what programs hold, not the page cache |
 | Swap | used / total, or `none` |
-| Storage | one bar per real filesystem, `/` first: tmpfs, overlay, squashfs, efivarfs and the other kernel mounts are left out, so are network mounts (they belong to the machine serving them), and a filesystem mounted twice (a bind mount, btrfs subvolumes) is shown once. Six at most; `dms ipc call hostStatus status` lists all |
+| Storage | one bar per real filesystem, `/` first: tmpfs, overlay, squashfs, efivarfs and the other kernel mounts are left out, so are network mounts (they belong to the machine serving them), and a filesystem mounted twice (a bind mount, btrfs subvolumes) is shown once. The boot partition (`/boot`, `/boot/efi`, `/efi`, `/boot/firmware`) is left out too — unless it is 90% full or more, when a NixOS rebuild is about to fail for lack of room there. Six at most; `dms ipc call hostStatus status` lists all. A phone is different; see below |
 | Footer | when it was checked, uptime, load average, CPU count — or when it was last seen online |
 
 Bars turn amber past 75% and red past 90%.
@@ -90,6 +97,22 @@ bans for.
 `ssh_config` as it is, and with the default `StrictHostKeyChecking ask` a new
 host shows `host key not trusted` — open a session once with `[>_]`, accept
 the key, and refresh.
+
+## Phones (Termux)
+
+Android mounts dozens of filesystems — the read-only system image at `/`, one
+per APEX module, vendor, product, `/cache` — that are always full and that
+nobody fills. So on a phone (told apart by `/system/build.prop` or `getprop`,
+or by its `/storage/emulated` mount) only the storage that is yours is shown:
+
+| Row | What it is |
+|---|---|
+| Internal | `/storage/emulated` — the `/data` partition as apps see it, the number Android's own Storage settings show (`/data` itself when that is all there is) |
+| SD card | each `/storage/<ID>` volume. The same card is mounted again under `/mnt/media_rw/<ID>`, which is only used to tell an SD card (block device major 179) from a USB drive (major 8), shown as **USB drive**; with two of a kind they are numbered |
+
+Android lets no app read `/proc/stat`, so a phone has no CPU figure: the row is
+left out instead of saying `unknown`, the one-second wait for a second sample is
+skipped, and the CPU count comes from `nproc`.
 
 ## What the far end needs
 

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // The widget's arithmetic and parsing, outside quickshell:
 //
-//   node tests/procstat.test.js              live /proc and a live `ps`
-//   node tests/procstat.test.js saved-ps.txt the same, with a saved ps table
+//   node tests/procstat.test.js     synthetic cases, then live /proc and ps
 //
 // procstat.js is a QML ".pragma library" file; with the pragma line removed it
 // is plain JavaScript, run here in a sandbox of its own.
@@ -12,7 +11,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
 
 const src = fs.readFileSync(path.join(__dirname, "..", "procstat.js"), "utf8").replace(/^\.pragma library\s*$/m, "");
 const S = {};
@@ -138,22 +137,22 @@ test("sizes", () => {
     assert.strictEqual(S.formatKb(209715200), "200 GiB");
 });
 
-test("ps lines: spaces in args kept whole, kernel threads, ps itself skipped", () => {
-    const text = [
-        "2574676 neo       168  2.4 /nix/store/x-dsearch-1.6.0/bin/dsearch serve",
-        "     11 neo      10.0  0.0 ps -eo pid=,user=,pcpu=,pmem=,args= --sort=-pcpu ww",
-        "    182 root      3.8  0.0 [kswapd0]",
-        "   2104 neo       4,4  0.1 tmux: server   with   spaces",
-        "  4242 neo 0.0 0.0 /nix/store/y/bin/..blueman-applet-wrapped-wrapped",
-        "",
-        "not a process line"
-    ].join("\n");
-    const rows = S.parseProcesses(text, { limit: 10, skipName: "ps" });
-    assert.deepStrictEqual(Array.from(rows, r => r.display), ["dsearch", "[kswapd0]", "tmux", "blueman-applet"]);
-    assert.strictEqual(rows[0].pcpu, 168);
-    assert.strictEqual(rows[2].pcpu, 4.4);
-    assert.strictEqual(rows[2].args, "tmux: server   with   spaces");
-    assert.strictEqual(S.parseProcesses(text, { limit: 2, skipName: "ps" }).length, 2);
+test("display names: the program, unwrapped, kernel threads as they are", () => {
+    assert.deepStrictEqual([
+        "/nix/store/x-dsearch-1.6.0/bin/dsearch serve",
+        "[kswapd0]",
+        "tmux: server   with   spaces",
+        "/nix/store/y/bin/..blueman-applet-wrapped-wrapped",
+        ""
+    ].map(S.displayName), ["dsearch", "[kswapd0]", "tmux", "blueman-applet", "(unknown)"]);
+});
+
+test("ps details: spaces in args kept whole, comma decimals read", () => {
+    const d = S.parseDetails("2574676 neo  2.4 /nix/store/x/bin/dsearch serve\n   2104 neo 0,1 tmux: server   with   spaces\nnot a line\n");
+    assert.deepStrictEqual(Object.keys(d), ["2104", "2574676"]);
+    assert.strictEqual(d["2104"].args, "tmux: server   with   spaces");
+    assert.strictEqual(d["2104"].pmem, 0.1);
+    assert.strictEqual(d["2574676"].user, "neo");
 });
 
 test("kill verdicts", () => {
@@ -172,7 +171,138 @@ test("kill verdicts", () => {
     assert.strictEqual(S.shorten("abcdef", 4), "abc…");
 });
 
+test("short args: the program's path cut to the program", () => {
+    assert.strictEqual(S.shortArgs("/etc/profiles/per-user/neo/bin/ghostty -e tmux attach-session -t X"), "ghostty -e tmux attach-session -t X");
+    assert.strictEqual(S.shortArgs("/nix/store/abc-hyprland-0.55/bin/Hyprland"), "Hyprland");
+    assert.strictEqual(S.shortArgs("claude --continue"), "claude --continue");
+    assert.strictEqual(S.shortArgs("[kworker/3:1]"), "[kworker/3:1]");
+    assert.strictEqual(S.shortArgs(""), "");
+});
+
+test("process sample: uptime, self, and a comm with spaces and parentheses", () => {
+    const s = S.parseProcSample("s 999\nu 1000.50\n1 120 5 systemd\n42 300 900 tmux: server (x)\nnoise\n");
+    assert.strictEqual(s.uptime, 1000.5);
+    assert.strictEqual(s.self, "999");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(s.procs["42"])), { ticks: 300, start: 900, comm: "tmux: server (x)" });
+    assert.strictEqual(Object.keys(s.procs).length, 2);
+});
+
+test("process rate: share of one core over the interval, top first", () => {
+    const a = S.parseProcSample("u 100.00\n10 1000 50 busy\n11 500 60 idle\n12 0 70 gone\n");
+    // two seconds later: busy used 300 ticks (1.5 cores), idle none, 12 exited,
+    // 13 started after the first sample and used 50, 14 was already running
+    // but missed by the first sample, 999 is the sampler.
+    const b = S.parseProcSample("s 999\nu 102.00\n10 1300 50 busy\n11 500 60 idle\n13 50 10050 new\n14 400 80 missed\n999 3 10190 awk\n");
+    const m = S.measureProcs(a, b);
+    assert.deepStrictEqual(Array.from(m, r => [r.pid, r.comm, Math.round(r.pcpu * 10) / 10]), [["10", "busy", 150], ["13", "new", 25], ["11", "idle", 0]]);
+});
+
+test("process rate: a reused PID counts as a new process", () => {
+    const a = S.parseProcSample("u 100.00\n20 5000 50 old\n");
+    const b = S.parseProcSample("u 101.00\n20 40 10020 reborn\n");
+    const m = S.measureProcs(a, b);
+    assert.strictEqual(m.length, 1);
+    assert.strictEqual(m[0].comm, "reborn");
+    assert.strictEqual(m[0].pcpu, 40);
+});
+
+test("process rate: no interval, no rows", () => {
+    const a = S.parseProcSample("u 100.00\n20 5000 50 old\n");
+    assert.strictEqual(S.measureProcs(null, a).length, 0);
+    assert.strictEqual(S.measureProcs(a, a).length, 0);
+    assert.strictEqual(S.measureProcs(a, S.parseProcSample("20 5000 50 old\n")).length, 0);
+});
+
+test("process rate: ties go to the most CPU used overall", () => {
+    const a = S.parseProcSample("u 1.00\n1 10 0 a\n2 90 0 b\n3 50 0 c\n");
+    const b = S.parseProcSample("u 2.00\n1 10 0 a\n2 90 0 b\n3 50 0 c\n");
+    assert.deepStrictEqual(Array.from(S.measureProcs(a, b), r => r.comm), ["b", "c", "a"]);
+});
+
+test("ps details joined to measured rows, exited ones dropped", () => {
+    const measured = [{ pid: "10", comm: "busy", pcpu: 150, ticks: 1 }, { pid: "11", comm: "gone", pcpu: 20, ticks: 1 }, { pid: "12", comm: "x", pcpu: 1, ticks: 1 }];
+    const details = S.parseDetails("   10 neo   2.5 /nix/store/q-firefox/bin/.firefox-wrapped --new-window\n   12 root  0.0 /usr/bin/x   -y\n");
+    const rows = S.joinDetails(measured, details, 5);
+    assert.deepStrictEqual(Array.from(rows, r => [r.pid, r.user, r.pcpu, r.pmem, r.display]), [["10", "neo", 150, 2.5, "firefox"], ["12", "root", 1, 0, "x"]]);
+    assert.strictEqual(rows[1].args, "/usr/bin/x   -y");
+    assert.strictEqual(S.joinDetails(measured, details, 1).length, 1);
+});
+
+test("comm names: wrapper dots and a cut-off -wrapped go", () => {
+    assert.deepStrictEqual([".ghostty-wrappe", "..blueman-appl", ".firefox-wrapped", "Hyprland", "tmux: server", ".hidden", "kworker/3:1-ev"].map(S.commName),
+        ["ghostty", "blueman-appl", "firefox", "Hyprland", "tmux: server", "hidden", "kworker/3:1-ev"]);
+});
+
+test("latch: n samples in a row to turn on, n to turn off", () => {
+    let l = S.latch(null, false, 2);
+    assert.strictEqual(l.on, false);
+    l = S.latch(l, true, 2);
+    assert.strictEqual(l.on, false, "one hot sample is not enough");
+    l = S.latch(l, false, 2);
+    l = S.latch(l, true, 2);
+    assert.strictEqual(l.on, false, "the run restarts after a quiet sample");
+    l = S.latch(l, true, 2);
+    assert.strictEqual(l.on, true);
+    l = S.latch(l, false, 2);
+    assert.strictEqual(l.on, true, "one quiet sample does not clear it");
+    l = S.latch(l, false, 2);
+    assert.strictEqual(l.on, false);
+    assert.strictEqual(S.latch(null, true, 1).on, true);
+});
+
+test("pill priority: process, then core, then the total", () => {
+    const top = { pid: "7", comm: "cc1", pcpu: 100 };
+    const core = { id: 5, usage: 97 };
+    let p = S.pillChoice({ processOn: true, coreOn: true, top: top, busiest: core, total: 40, totalLevel: 0 });
+    assert.deepStrictEqual([p.kind, p.value, p.level, p.label], ["process", 100, 1, "cc1"]);
+    p = S.pillChoice({ processOn: false, coreOn: true, top: top, busiest: core, total: 40, totalLevel: 0 });
+    assert.deepStrictEqual([p.kind, p.value, p.level, p.label], ["core", 97, 1, "cpu5"]);
+    p = S.pillChoice({ processOn: false, coreOn: false, top: top, busiest: core, total: 70, totalLevel: 1 });
+    assert.deepStrictEqual([p.kind, p.value, p.level], ["total", 70, 1]);
+    p = S.pillChoice({ processOn: false, coreOn: false, top: null, busiest: null, total: 5, totalLevel: 0 });
+    assert.deepStrictEqual([p.kind, p.value, p.level], ["total", 5, 0]);
+    // A process alert on a saturated machine is red, not amber.
+    p = S.pillChoice({ processOn: true, coreOn: true, top: top, busiest: core, total: 95, totalLevel: 2 });
+    assert.deepStrictEqual([p.kind, p.level], ["process", 2]);
+    // An alert whose subject is gone falls through to the next one.
+    p = S.pillChoice({ processOn: true, coreOn: false, top: null, busiest: core, total: 30, totalLevel: 0 });
+    assert.strictEqual(p.kind, "total");
+    assert.deepStrictEqual(["process", "core", "total", "?"].map(S.pillIcon), ["terminal", "view_week", "memory", "memory"]);
+});
+
 // -------------------------------------------------------------- real data
+
+// The sampler exactly as the service runs it: the template string is taken
+// out of ProcessWidgetService.qml and evaluated the way QML would.
+function samplerScript() {
+    const qml = fs.readFileSync(path.join(__dirname, "..", "ProcessWidgetService.qml"), "utf8");
+    const m = /procSampleScript: (`[\s\S]*?`)\n/.exec(qml);
+    assert.ok(m, "procSampleScript found");
+    return vm.runInNewContext(m[1]);
+}
+
+test("live sampler: every process parsed, rates sane, the sampler left out", () => {
+    const script = samplerScript();
+    // awk exits 2 when a process left between the glob and its read; what it
+    // did print is still the answer, which is how the service treats it too.
+    const run = () => S.parseProcSample(spawnSync("sh", ["-c", script], { encoding: "utf8", maxBuffer: 64 << 20 }).stdout);
+    const a = run();
+    // Something to measure: half a second of busy loop in this process.
+    const until = Date.now() + 500;
+    while (Date.now() < until) { /* spin */ }
+    const b = run();
+    const nProc = fs.readdirSync("/proc").filter(n => /^\d+$/.test(n)).length;
+    const n = Object.keys(b.procs).length;
+    assert.ok(b.uptime > a.uptime, "uptime advances");
+    assert.ok(Math.abs(n - nProc) <= Math.max(5, nProc * 0.05), n + " parsed vs " + nProc + " in /proc");
+    assert.ok(b.self && !b.procs[b.self] || b.procs[b.self].comm === "awk", "self is the awk");
+    const m = S.measureProcs(a, b);
+    assert.ok(m.every(r => r.pid !== b.self && r.pcpu >= 0), "no sampler, no negatives");
+    const me = m.find(r => r.pid === String(process.pid));
+    assert.ok(me && me.pcpu > 20, "this busy node process is seen: " + (me ? me.pcpu.toFixed(1) : "missing"));
+    console.log("     " + n + " processes; busiest now: " + m.slice(0, 3).map(r => r.comm + " " + r.pcpu.toFixed(0) + "%").join(", "));
+});
+
 
 test("live /proc/stat: two readings 500 ms apart", () => {
     const t0 = fs.readFileSync("/proc/stat", "utf8");
@@ -198,24 +328,17 @@ test("live /proc/meminfo and /proc/loadavg", () => {
     console.log("     memory " + S.formatKb(m.usedKb) + " of " + S.formatKb(m.totalKb) + ", swap " + S.formatKb(m.swapUsedKb) + " of " + S.formatKb(m.swapTotalKb) + ", load " + S.loadText(l));
 });
 
-test("ps table: every line parsed, order kept, ps skipped", () => {
-    const saved = process.argv[2];
-    const text = saved ? fs.readFileSync(saved, "utf8") : execFileSync("ps", ["-eo", "pid=,user=,pcpu=,pmem=,args=", "--sort=-pcpu", "ww"], { encoding: "utf8" });
-    const lines = text.split("\n").filter(l => l.trim().length > 0);
-    const all = S.parseProcesses(text, { limit: 0 });
-    assert.strictEqual(all.length, lines.length, "a row for every line");
-    for (let i = 0; i < all.length; i++) {
-        const r = all[i];
-        assert.ok(/^\d+$/.test(r.pid) && r.user.length > 0 && isFinite(r.pcpu) && isFinite(r.pmem), "row " + i);
-        // args is the line's own tail, byte for byte
-        assert.ok(lines[i].trimEnd().endsWith(r.args), "args of line " + i);
-        if (i > 0)
-            assert.ok(all[i - 1].pcpu >= r.pcpu, "still sorted at " + i);
+test("ps details for the sampled PIDs, as the service asks for them", () => {
+    const pids = fs.readdirSync("/proc").filter(n => /^\d+$/.test(n)).slice(0, 12);
+    const r = spawnSync("ps", ["-o", "pid=,user=,pmem=,args=", "ww", "-p", pids.join(",")], { encoding: "utf8" });
+    const lines = r.stdout.split("\n").filter(l => l.trim().length > 0);
+    const d = S.parseDetails(r.stdout);
+    assert.strictEqual(Object.keys(d).length, lines.length, "a row for every line");
+    for (const pid of Object.keys(d)) {
+        assert.ok(pids.indexOf(pid) >= 0, "only what was asked for: " + pid);
+        assert.ok(d[pid].user.length > 0 && isFinite(d[pid].pmem), "row " + pid);
     }
-    const top = S.parseProcesses(text, { limit: 8, skipName: "ps" });
-    assert.ok(top.length === Math.min(8, all.filter(r => r.display !== "ps").length));
-    assert.ok(top.every(r => r.display !== "ps"));
-    console.log("     " + all.length + " processes" + (saved ? " (saved)" : "") + "; top: " + top.slice(0, 5).map(r => r.display + " " + r.pcpu + "%").join(", "));
+    console.log("     " + lines.length + " of " + pids.length + " PIDs described; e.g. " + Object.keys(d).slice(0, 3).map(p => p + " " + S.displayName(d[p].args)).join(", "));
 });
 
 console.log("\n" + passed + " passed" + (process.exitCode ? ", some FAILED" : ""));

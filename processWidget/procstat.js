@@ -1,8 +1,9 @@
 .pragma library
 
 // Everything the widget computes, as pure functions over the text of
-// /proc/stat, /proc/meminfo, /proc/loadavg and `ps`, so the arithmetic runs
-// and is tested outside quickshell: `node tests/procstat.test.js`.
+// /proc/stat, /proc/meminfo, /proc/loadavg, the process sampler and `ps`, so
+// the arithmetic runs and is tested outside quickshell:
+// `node tests/procstat.test.js`.
 
 function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
@@ -217,12 +218,6 @@ function loadText(load) {
 
 // --------------------------------------------------------------------- ps
 
-// `ps -eo pid=,user=,pcpu=,pmem=,args= --sort=-pcpu ww`, one process a line.
-// pid, user, %cpu and %mem are always single tokens; args is whatever is left,
-// taken whole rather than split, since a command line is free to contain any
-// amount of whitespace.
-var PS_LINE = /^(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+([\s\S]*)$/;
-
 function basename(p) {
     var slash = p.lastIndexOf("/");
     return slash >= 0 ? p.substring(slash + 1) : p;
@@ -254,33 +249,229 @@ function parseNumber(s) {
     return isFinite(n) ? n : 0;
 }
 
-// -> [{ pid, user, pcpu, pmem, args, display }], already in ps's order
-// (heaviest first), at most opts.limit long. The ps doing the listing always
-// measures its own short burst and would sit near the top of every refresh,
-// so anything named opts.skipName is left out.
-function parseProcesses(text, opts) {
-    var limit = opts && opts.limit > 0 ? opts.limit : Infinity;
-    var skip = opts && opts.skipName ? opts.skipName : "";
-    var out = [];
+// What a row says under the name: the command line with its program's path
+// cut down to the program, so "/etc/profiles/per-user/neo/bin/ghostty -e tmux"
+// reads "ghostty -e tmux". Kernel threads have no command line to shorten.
+function shortArgs(args) {
+    var s = String(args || "").trim();
+    if (!s || s.charAt(0) === "[")
+        return s;
+    var sp = s.search(/\s/);
+    var prog = sp < 0 ? s : s.substring(0, sp);
+    return basename(prog) + (sp < 0 ? "" : s.substring(sp));
+}
+
+// ------------------------------------------------- per-process CPU, now
+//
+// ps's %CPU is a lifetime average, which says nothing about what is busy
+// right now. The sampler (ProcessWidgetService.procSampleScript) prints, in
+// one awk run over every /proc/PID/stat:
+//
+//   s <the sampler's own PID>
+//   u <seconds since boot, from /proc/uptime>
+//   <pid> <utime+stime, in clock ticks> <start time, in ticks since boot> <comm>
+//
+// and two of those, a couple of seconds apart, give each process's share of
+// a core over exactly that interval -- what top shows.
+
+// The kernel reports /proc times in USER_HZ, which is 100 on every
+// architecture this runs on.
+var CLK_TCK = 100;
+
+function parseProcSample(text) {
+    var out = {
+        uptime: -1,
+        self: "",
+        procs: {}
+    };
     var lines = (text || "").split("\n");
-    for (var i = 0; i < lines.length && out.length < limit; i++) {
-        var m = PS_LINE.exec(lines[i].trim());
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var c = line.charAt(0);
+        if (c === "u" && line.charAt(1) === " ") {
+            var up = Number(line.substring(2));
+            if (isFinite(up))
+                out.uptime = up;
+            continue;
+        }
+        if (c === "s" && line.charAt(1) === " ") {
+            out.self = line.substring(2).trim();
+            continue;
+        }
+        // comm is whatever is left: a process may name itself with spaces.
+        var m = /^(\d+) (\d+) (\d+) (.*)$/.exec(line);
         if (!m)
             continue;
-        var args = m[5];
-        var display = displayName(args);
-        if (skip && display === skip)
+        out.procs[m[1]] = {
+            ticks: Number(m[2]),
+            start: Number(m[3]),
+            comm: m[4]
+        };
+    }
+    return out;
+}
+
+// Two parseProcSample() results -> [{ pid, comm, pcpu, ticks }], busiest
+// first. pcpu is in percent of one core, so a process busy on two cores
+// reads 200, the way top shows it. A process that started since the earlier
+// sample counts all its time; one whose PID now has a different start time
+// is a new process that reused the number. One seen now but not then, which
+// was already running then, has no interval to measure and is left out, as
+// is the sampler itself.
+function measureProcs(prev, cur, hz) {
+    var out = [];
+    hz = hz > 0 ? hz : CLK_TCK;
+    if (!prev || !cur || !(prev.uptime >= 0) || !(cur.uptime > prev.uptime))
+        return out;
+    var dt = cur.uptime - prev.uptime;
+    var since = prev.uptime * hz;
+    for (var pid in cur.procs) {
+        if (pid === cur.self || pid === prev.self)
+            continue;
+        var c = cur.procs[pid];
+        var p = prev.procs[pid];
+        var used;
+        if (p && p.start === c.start)
+            used = c.ticks - p.ticks;
+        else if (c.start >= since)
+            used = c.ticks;
+        else
             continue;
         out.push({
-            pid: m[1],
-            user: m[2],
-            pcpu: parseNumber(m[3]),
-            pmem: parseNumber(m[4]),
-            args: args,
-            display: display
+            pid: pid,
+            comm: c.comm,
+            ticks: c.ticks,
+            pcpu: Math.max(0, used) / (dt * hz) * 100
+        });
+    }
+    // Ties -- most of the list sits at 0% -- go to whoever has used the most
+    // CPU overall, so a quiet machine's list does not reshuffle every sample.
+    out.sort(function (a, b) {
+        return (b.pcpu - a.pcpu) || (b.ticks - a.ticks);
+    });
+    return out;
+}
+
+// `ps -o pid=,user=,pmem=,args= ww -p …` -> { pid: { user, pmem, args } }.
+// pid, user and %mem are always single tokens; args is whatever is left,
+// taken whole rather than split, since a command line is free to contain any
+// amount of whitespace.
+var PS_DETAIL_LINE = /^(\d+)\s+(\S+)\s+(\S+)\s+([\s\S]*)$/;
+
+function parseDetails(text) {
+    var out = {};
+    var lines = (text || "").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var m = PS_DETAIL_LINE.exec(lines[i].trim());
+        if (m)
+            out[m[1]] = {
+                user: m[2],
+                pmem: parseNumber(m[3]),
+                args: m[4]
+            };
+    }
+    return out;
+}
+
+// measureProcs() rows joined with their ps details into the popout's rows:
+// [{ pid, user, pcpu, pmem, args, display }]. A process ps no longer found
+// has exited since the sample and is dropped -- a row without its command
+// line could not be checked before a kill.
+function joinDetails(measured, details, limit) {
+    var out = [];
+    for (var i = 0; i < measured.length && out.length < limit; i++) {
+        var m = measured[i];
+        var d = details[m.pid];
+        if (!d)
+            continue;
+        out.push({
+            pid: m.pid,
+            user: d.user,
+            pcpu: m.pcpu,
+            pmem: d.pmem,
+            args: d.args,
+            display: displayName(d.args) || m.comm
         });
     }
     return out;
+}
+
+// A kernel process name (comm) as a person would say it. comm is cut at 15
+// characters, so a NixOS wrapper's ".ghostty-wrapped" arrives as
+// ".ghostty-wrappe": the leading dots and whatever is left of "-wrapped"
+// go, the way displayName() unwraps a full command line.
+function commName(comm) {
+    var s = String(comm || "");
+    var m = /^\.+(.+?)(?:-w(?:r(?:a(?:p(?:p(?:e(?:d)?)?)?)?)?)?)?(?:-wrapped)*$/.exec(s);
+    return m ? m[1] : s;
+}
+
+// ---------------------------------------------------------- the pill
+//
+// A condition turns on only after `n` samples in a row say so, and off only
+// after `n` in a row say not, so one busy sample -- a page loading, a core
+// spiking for a moment -- does not flip the pill back and forth.
+function latch(state, hot, n) {
+    var on = !!(state && state.on);
+    hot = !!hot;
+    if (hot === on)
+        return {
+            on: on,
+            run: 0
+        };
+    var run = (state && state.run > 0 ? state.run : 0) + 1;
+    if (run >= Math.max(1, n))
+        return {
+            on: hot,
+            run: 0
+        };
+    return {
+        on: on,
+        run: run
+    };
+}
+
+// What the pill shows, in priority order: one process using too much, else
+// one core, else the whole machine. -> { kind, value, level, label }
+//
+//   kind   "process", "core" or "total"
+//   level  0 quiet, 1 amber, 2 red. A process or core alert is at least
+//          amber, and red when the whole machine is past its critical level
+//          too; the total keeps its own warning and critical levels.
+//
+// s: { processOn, coreOn, top, busiest, total, totalLevel }
+function pillChoice(s) {
+    var totalLevel = s.totalLevel > 0 ? s.totalLevel : 0;
+    if (s.processOn && s.top)
+        return {
+            kind: "process",
+            value: s.top.pcpu,
+            level: Math.max(1, totalLevel),
+            label: commName(s.top.comm) || ("PID " + s.top.pid)
+        };
+    if (s.coreOn && s.busiest)
+        return {
+            kind: "core",
+            value: s.busiest.usage,
+            level: Math.max(1, totalLevel),
+            label: "cpu" + s.busiest.id
+        };
+    return {
+        kind: "total",
+        value: s.total,
+        level: totalLevel,
+        label: "total"
+    };
+}
+
+var PILL_ICONS = {
+    process: "terminal",
+    core: "view_week",
+    total: "memory"
+};
+
+function pillIcon(kind) {
+    return PILL_ICONS[kind] || PILL_ICONS.total;
 }
 
 function shorten(text, max) {

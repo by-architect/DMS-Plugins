@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Common
 import qs.Widgets
+import "procstat.js" as Stat
 
 // One process: what it is, what it uses, and the button that ends it. A click
 // anywhere else on the row copies the PID.
@@ -41,6 +42,9 @@ Rectangle {
         anchors.leftMargin: Theme.spacingS
         spacing: Theme.spacingS
 
+        // One line each, never wrapped: StyledText wraps by default, and a
+        // long command line wrapping inside a fixed-height row is what made
+        // the rows run into each other.
         Column {
             width: content.width - row.cpuWidth - row.memWidth - row.killWidth - content.spacing * 3
             anchors.verticalCenter: parent.verticalCenter
@@ -52,19 +56,34 @@ Rectangle {
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
                 color: Theme.surfaceText
+                wrapMode: Text.NoWrap
+                maximumLineCount: 1
                 elide: Text.ElideRight
             }
 
+            // PID and the command, its program's path cut to the program;
+            // the owner only when it is not you.
             StyledText {
                 width: parent.width
-                text: row.entry ? (row.killing ? "checking PID " + row.entry.pid + "…" : row.entry.user + " · " + row.entry.pid + " · " + row.entry.args) : ""
+                text: {
+                    const e = row.entry;
+                    if (!e)
+                        return "";
+                    if (row.killing)
+                        return "checking PID " + e.pid + "…";
+                    const who = e.user && e.user !== ProcessWidgetService.currentUser ? e.user + " · " : "";
+                    return who + e.pid + " · " + Stat.shortArgs(e.args);
+                }
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
+                wrapMode: Text.NoWrap
+                maximumLineCount: 1
                 elide: Text.ElideRight
             }
         }
 
-        // ps's %CPU is per core, so a busy multi-threaded process passes 100.
+        // Its share of one core over the last sample, so a busy
+        // multi-threaded process passes 100.
         StyledText {
             width: row.cpuWidth
             anchors.verticalCenter: parent.verticalCenter
@@ -74,7 +93,8 @@ Rectangle {
             font.features: ({
                     "tnum": 1
                 })
-            color: row.entry ? ProcessWidgetService.colorFor(row.entry.pcpu, Theme.surfaceText) : Theme.surfaceText
+            wrapMode: Text.NoWrap
+            color: row.entry ? ProcessWidgetService.processColor(row.entry.pcpu, Theme.surfaceText) : Theme.surfaceText
         }
 
         StyledText {
@@ -86,6 +106,7 @@ Rectangle {
             font.features: ({
                     "tnum": 1
                 })
+            wrapMode: Text.NoWrap
             color: Theme.surfaceVariantText
         }
 

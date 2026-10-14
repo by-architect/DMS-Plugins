@@ -9,7 +9,7 @@ PluginSettings {
     SliderSetting {
         settingKey: "sampleIntervalMs"
         label: "Sample every"
-        description: "How often /proc/stat is read for the bar's percentage. Each reading is a few small file reads, no process. The popout's process list refreshes at the same rate, at most once a second, and only while the popout is open"
+        description: "How often /proc/stat is read for the bar's percentage. Each reading is a few small file reads, no process. The processes are measured at the same rate, but at least two seconds apart (at most once a second while the popout is open)"
         defaultValue: 2000
         minimum: 500
         maximum: 10000
@@ -48,6 +48,28 @@ PluginSettings {
         maximum: 100
         unit: "%"
         leftIcon: "error"
+    }
+
+    SliderSetting {
+        settingKey: "processAlertPercent"
+        label: "Process alert at"
+        description: "When one process uses more than this, the pill shows that process's number with a terminal icon instead. 100% is one whole core; it has to hold for two samples in a row. This comes first, before a busy core and the total"
+        defaultValue: 90
+        minimum: 10
+        maximum: 800
+        unit: "%"
+        leftIcon: "terminal"
+    }
+
+    SliderSetting {
+        settingKey: "coreAlertPercent"
+        label: "Core alert at"
+        description: "When one core is busier than this for two samples in a row, and no process is past its alert, the pill shows that core's number with a column icon instead"
+        defaultValue: 90
+        minimum: 10
+        maximum: 100
+        unit: "%"
+        leftIcon: "view_week"
     }
 
     ToggleSetting {

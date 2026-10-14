@@ -1,0 +1,14 @@
+{
+    "id": "speedTest",
+    "name": "Speed Test",
+    "description": "Bar pill with your internet speed: runs a speed test on a timer (speedtest-cli, Ookla's speedtest or librespeed-cli, whichever is installed) and keeps the history; the popout shows download, upload, ping, the server and past results, with a Run now button",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring", "network"],
+    "icon": "speed",
+    "component": "./SpeedTestWidget.qml",
+    "settings": "./SpeedTestSettings.qml",
+    "dependencies": ["speedtest-cli"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}

@@ -102,6 +102,56 @@ PopoutComponent {
         width: parent.width
         spacing: Theme.spacingS
 
+        // ----------------------------------------------------------- alert
+        // What the pill is warning about, in words, with the pill's own icon.
+        StyledRect {
+            id: alertBox
+
+            readonly property var pill: ProcessWidgetService.pill
+            readonly property color tone: ProcessWidgetService.levelColor(pill.level, Theme.primary)
+
+            width: body.width
+            height: alertRow.implicitHeight + Theme.spacingS * 2
+            radius: Theme.cornerRadius
+            color: Theme.withAlpha(tone, 0.14)
+            visible: pill.level > 0
+
+            Row {
+                id: alertRow
+
+                x: Theme.spacingM
+                y: Theme.spacingS
+                width: parent.width - Theme.spacingM * 2
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    id: alertIcon
+
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: Stat.pillIcon(alertBox.pill.kind)
+                    size: Theme.iconSize - 4
+                    color: alertBox.tone
+                    filled: true
+                }
+
+                StyledText {
+                    width: parent.width - alertIcon.width - parent.spacing
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: {
+                        const p = alertBox.pill;
+                        if (p.kind === "process")
+                            return p.label + " is using " + Stat.percentText(p.value) + " of a core";
+                        if (p.kind === "core")
+                            return p.label + " is " + Stat.percentText(p.value) + " busy";
+                        return "The whole CPU is " + Stat.percentText(p.value) + " busy";
+                    }
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Medium
+                    color: Theme.surfaceText
+                }
+            }
+        }
+
         // ------------------------------------------------ total and memory
         StyledRect {
             width: body.width
@@ -395,7 +445,7 @@ PopoutComponent {
                     leftPadding: Theme.spacingS
                     topPadding: Theme.spacingXS
                     visible: ProcessWidgetService.processes.length > 0
-                    text: "Click a row to copy its PID · ✕ asks it to exit (SIGTERM), right-click ✕ to force it (SIGKILL) · CPU is ps's average since each process started"
+                    text: "CPU: share of one core right now · click a row to copy its PID · ✕ ends it, right-click ✕ forces it"
                     font.pixelSize: Theme.fontSizeSmall - 1
                     color: Theme.outline
                     wrapMode: Text.WordWrap

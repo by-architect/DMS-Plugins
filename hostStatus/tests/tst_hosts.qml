@@ -30,11 +30,47 @@ TestCase {
     function test_only_real_filesystems_are_storage() {
         const mounts = Hosts.parseProbe(linuxProbe).filesystems.map(f => f.mount);
         // "/" first; tmpfs, overlay and nfs gone; the bind mount of / folded
-        // into it; a mount point with a space matched through \040.
-        compare(mounts.join(","), "/,/boot,/mnt/My Disk");
-        const disk = Hosts.parseProbe(linuxProbe).filesystems[2];
+        // into it; /boot hidden; a mount point with a space matched through
+        // \040.
+        compare(mounts.join(","), "/,/mnt/My Disk");
+        const disk = Hosts.parseProbe(linuxProbe).filesystems[1];
         compare(disk.type, "ext4");
+        compare(disk.label, "");
         fuzzyCompare(disk.percent, 95, 0.01);
+    }
+
+    function test_boot_only_when_nearly_full() {
+        const probe = pct => Hosts.parseProbe(["hs:begin 1", "hs:mnt /dev/sda2 / ext4 rw 0 0", "hs:mnt /dev/sda1 /boot vfat rw 0 0", "hs:mnt /dev/sda3 /boot/efi vfat rw 0 0", "hs:df /dev/sda2 1000 500 500 50% /", "hs:df /dev/sda1 1000 " + pct + " " + (1000 - pct) + " " + Math.round(pct / 10) + "% /boot", "hs:df /dev/sda3 1000 10 990 1% /boot/efi", "hs:end"].join("\n")).filesystems.map(f => f.mount).join(",");
+        compare(probe(95), "/");
+        compare(probe(899), "/");
+        compare(probe(900), "/,/boot");
+        compare(probe(960), "/,/boot");
+    }
+
+    // Trimmed from Termux on a phone: the system image at "/", APEX modules,
+    // vendor partitions, shared storage, an SD card seen twice and a USB stick.
+    readonly property string androidProbe: ["hs:begin 1", "hs:os Linux", "hs:android 1", "hs:ncpu 8", "hs:mem MemTotal:        5662240 kB", "hs:mem MemAvailable:     652000 kB", "hs:mnt /dev/block/dm-6 / erofs ro,seclabel 0 0", "hs:mnt /dev/block/loop1 /apex/com.android.adbd@361099999 ext4 ro,dirsync 0 0", "hs:mnt /dev/block/dm-9 /vendor erofs ro 0 0", "hs:mnt /dev/block/dm-50 /data f2fs rw,lazytime 0 0", "hs:mnt /dev/fuse /storage/emulated fuse rw,lazytime 0 0", "hs:mnt /dev/block/vold/public:179,1 /mnt/media_rw/EF27-E719 exfat rw,dirsync 0 0", "hs:mnt /dev/fuse /storage/EF27-E719 fuse rw 0 0", "hs:mnt /dev/block/vold/public:8,1 /mnt/media_rw/1A2B-3C4D vfat rw 0 0", "hs:mnt /dev/fuse /storage/1A2B-3C4D fuse rw 0 0", "hs:mnt /dev/block/dm-3 /cache ext4 rw 0 0", "hs:df /dev/block/dm-6        1104000  1038000     66000      94% /", "hs:df /dev/block/loop1        11000    11000         0     100% /apex/com.android.adbd@361099999", "hs:df /dev/block/dm-9        900000   900000         0     100% /vendor", "hs:df /dev/fuse           110000000 44000000  66000000      40% /storage/emulated", "hs:df /dev/block/vold/public:179,1 62000000 48000000 14000000 78% /mnt/media_rw/EF27-E719", "hs:df /dev/fuse            62000000 48000000  14000000      78% /storage/EF27-E719", "hs:df /dev/fuse            30000000  3000000  27000000      10% /storage/1A2B-3C4D", "hs:df /dev/block/dm-3        100000        0    100000       0% /cache", "hs:end", ""].join("\n")
+
+    function test_a_phone_shows_internal_storage_and_its_cards() {
+        const p = Hosts.parseProbe(androidProbe);
+        verify(p.android);
+        compare(p.cpuPercent, -1);
+        compare(p.ncpu, 8);
+        compare(p.filesystems.map(f => f.label + "=" + f.mount).join(","), "Internal=/storage/emulated,USB drive=/storage/1A2B-3C4D,SD card=/storage/EF27-E719");
+        fuzzyCompare(p.filesystems[0].percent, 40, 0.01);
+        fuzzyCompare(p.filesystems[2].percent, 100 * 48 / 62, 0.01);
+    }
+
+    function test_a_phone_without_hs_android_is_still_told_apart() {
+        const p = Hosts.parseProbe(androidProbe.replace("hs:android 1\n", ""));
+        verify(p.android);
+        compare(p.filesystems.length, 3);
+    }
+
+    function test_a_phone_with_only_data_and_two_cards() {
+        const p = Hosts.parseProbe(["hs:begin 1", "hs:android 1", "hs:df /dev/block/dm-6 1000 900 100 90% /", "hs:df /dev/block/dm-50 100000 40000 60000 40% /data", "hs:df /dev/fuse 5000 1000 4000 20% /storage/AAAA-0001", "hs:df /dev/fuse 6000 1000 5000 17% /storage/BBBB-0002", "hs:df /dev/fuse 6000 1000 5000 17% /storage/self", "hs:end"].join("\n"));
+        compare(p.filesystems.map(f => f.label).join(","), "Internal,SD card 1,SD card 2");
+        compare(p.filesystems[0].mount, "/data");
     }
 
     function test_a_root_on_overlay_is_still_shown() {

@@ -1,7 +1,7 @@
 {
     "id": "systemPanel",
     "name": "System Panel",
-    "description": "Fullscreen 3x3 system panel: login history, system errors, tailscale devices, boot health, file actions, sudo activity, a system overview, failed units and listening ports",
+    "description": "Fullscreen system panel. This machine: login history, system errors, tailscale devices, boot health, file actions, sudo activity, a system overview, failed units and listening ports. All machines: every matrix log kind (errors, logins, boots, builds, sync, files, network devices, the logger) from every host",
     "version": "1.0.0",
     "author": "neo",
     "type": "composite",

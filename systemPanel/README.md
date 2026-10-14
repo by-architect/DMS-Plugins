@@ -1,7 +1,9 @@
 # System Panel
 
-A fullscreen 3×3 system panel for Phoenix / DankMaterialShell, focused on
-answering "who has touched this machine, and is it healthy?".
+A fullscreen system panel for Phoenix / DankMaterialShell, focused on
+answering "who has touched this machine, and is it healthy?" — on two pages:
+**This machine**, a 3×3 grid read straight from this host, and **All machines**,
+every `matrix log` kind from every host matrix knows.
 
 ![The System Panel: login history, system errors, tailscale, boot health, file actions, privilege escalation, system overview, failed units and listening ports](docs/panel.png)
 
@@ -35,6 +37,39 @@ was printed straight after the first directory's last file, that file failed
 to parse, and a copy in flight was missing from the tile. `actions.js` and
 `scripts/live.sh` are byte-identical to the `fileActions` ones again.
 
+## All machines
+
+The second page (**Tab**, or **2**, or the chip in the header) is
+`matrix log <kind> --json` for eight kinds, one tile each, four across and two
+down:
+
+| | | | |
+|---|---|---|---|
+| **System Errors** — journald `err`..`emerg` | **Logins** — sshd and logind, said the short way ("neo · ssh publickey from 100.70.50.1") | **Boots** — clean or unclean, and how long each ran | **NixOS Builds** — generation and NixOS version |
+| **Sync & Backups** — sync-backup-manager's rsync and borg runs, Syncthing per folder | **File Operations** — cp, mv, rm, curl, wget, scp, git clone from the fct wrappers | **Network Devices** — every device the local-network scans saw | **Log Service** — the log-persisting service itself |
+
+matrix fans out over ssh to every host it knows and merges their records
+newest first; every row names the machine it came from. The same thing
+happening again — the same error, the same device seen by every scan, the same
+boot written by every later logger run, the same file removed every quarter
+hour — is one row with a `×N` count. Chips above the tiles narrow every tile to
+one machine.
+
+A host that does not answer is not silently missing: matrix says so on stderr,
+and the tile's footer and its chip say "unreachable". A kind can take twenty
+seconds when a host is slow, so at most three kinds run at once, each tile
+keeps its last answer while the next one is on its way, and a refresh that
+fails leaves the old rows up with the reason in the footer.
+
+The page is read only once it is looked at — opening the panel does not ssh
+anywhere — and then every 2 minutes while it is on screen (with **Auto
+refresh** on). The panel reopens on whichever page it was closed on.
+
+How each record becomes a row is in `matrix.js`, as pure functions tested
+against real `matrix log` output: `node tests/matrix.test.js` runs a live
+`matrix log` for every kind, or `node tests/matrix.test.js DIR` reads saved
+`<kind>.json` files.
+
 ## Data sources
 
 Everything runs as the logged-in user; no root and no helper daemon.
@@ -52,6 +87,7 @@ Everything runs as the logged-in user; no root and no helper daemon.
 | Failed units | `systemctl list-units --failed --output=json` |
 | Listening ports | `ss -tulnHp` |
 | Overview | `hostname`, `uname`, `/proc/uptime`, `/etc/os-release`, `systemd-analyze`, `systemctl is-active` (the firewall counts as active when any of `firewall`, `nftables`, `iptables` is) |
+| All machines | `matrix log <kind> --json --limit 200`, for `system`, `login`, `boot`, `build`, `sync`, `file`, `network-device` and `logger` |
 
 Failed logins come from the journal rather than `lastb`, because `/var/log/btmp`
 is root-only. Nothing is lost — sshd records invalid users and failed auth there.
@@ -79,18 +115,21 @@ bind the IPC call below to a key.
 
 ```sh
 quickshell -p <shell-path> ipc call systemPanel toggle   # also: open, close, status
+quickshell -p <shell-path> ipc call systemPanel matrix   # open on the all-machines page
 ```
 
 `status` reports whether the panel holds keyboard focus (`keyboard=ready`),
-which is useful when debugging compositor focus behaviour.
+which is useful when debugging compositor focus behaviour, and which page it is
+on.
 
-Inside the panel: **Esc** or **q** closes, **Ctrl+R** / **F5** refreshes.
+Inside the panel: **Esc** or **q** closes, **Ctrl+R** / **F5** refreshes the
+page on screen, **Tab** switches pages, **1** and **2** pick one.
 
 ## Settings
 
 | Key | Default | Meaning |
 |---|---|---|
-| `autoRefresh` | `true` | Re-run every collector every 30s while open |
+| `autoRefresh` | `true` | Re-run every local collector every 30s while open, and the all-machines page every 2 minutes while it is on screen |
 | `journalDays` | `30` | How far back to read the journal for failed logins, system errors and sudo activity |
 
 ## Implementation notes

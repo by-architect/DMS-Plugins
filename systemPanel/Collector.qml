@@ -15,6 +15,10 @@ Item {
     property bool busy: false
     property bool ran: false
     property string error: ""
+    // What the last run said on stderr, kept even when it succeeded: a
+    // command can answer and still have something to say (matrix names the
+    // hosts it could not reach there).
+    property string errorOutput: ""
     property int timeoutMs: 8000
 
     signal updated
@@ -59,6 +63,7 @@ Item {
             if (!root.busy)
                 return;
             const raw = outCollector.text || "";
+            root.errorOutput = errCollector.text || "";
             // Non-zero exit with usable stdout still parses (ss and journalctl
             // both exit non-zero on partial permission errors).
             if (exitCode !== 0 && !raw.trim()) {
@@ -87,6 +92,7 @@ Item {
             if (!root.busy)
                 return;
             proc.running = false;
+            root.errorOutput = "";
             root._finish("unavailable (no response)", null);
         }
     }

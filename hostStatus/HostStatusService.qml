@@ -459,7 +459,7 @@ Singleton {
                     cols.push("mem " + (s.mem ? Hosts.pairText(s.mem.used, s.mem.total) : "?"));
                     cols.push("swap " + (s.swap ? Hosts.pairText(s.swap.used, s.swap.total) : "?"));
                     for (const f of s.filesystems)
-                        cols.push(f.mount + " " + Hosts.percentText(f.percent));
+                        cols.push((f.label ? f.label + " " + f.mount : f.mount) + " " + Hosts.percentText(f.percent));
                 }
                 if (r && r.detail)
                     cols.push(r.detail);

@@ -15,6 +15,9 @@ PluginComponent {
 
     readonly property int journalDays: pluginData.journalDays !== undefined ? pluginData.journalDays : 30
     readonly property bool autoRefresh: pluginData.autoRefresh !== undefined ? pluginData.autoRefresh : true
+    // The page the panel was last on, so it reopens there: 0 this machine,
+    // 1 every machine (matrix).
+    property int lastPage: 0
 
     PluginGlobalVar {
         id: openVar
@@ -33,6 +36,8 @@ PluginComponent {
         SystemPanelWindow {
             journalDays: root.journalDays
             autoRefresh: root.autoRefresh
+            page: root.lastPage
+            onPageChanged: root.lastPage = page
             onCloseRequested: openVar.set(false)
         }
     }
@@ -50,6 +55,15 @@ PluginComponent {
             return "CLOSED";
         }
 
+        // Straight to the every-machine page.
+        function matrix(): string {
+            root.lastPage = 1;
+            if (panelLoader.item)
+                panelLoader.item.page = 1;
+            openVar.set(true);
+            return "OPEN matrix";
+        }
+
         function toggle(): string {
             const next = openVar.value !== true;
             openVar.set(next);
@@ -60,7 +74,7 @@ PluginComponent {
             if (openVar.value !== true)
                 return "closed";
             const item = panelLoader.item;
-            return "open\tkeyboard=" + (item && item.keyboardReady ? "ready" : "not-focused");
+            return "open\tkeyboard=" + (item && item.keyboardReady ? "ready" : "not-focused") + "\tpage=" + (root.lastPage === 1 ? "matrix" : "local");
         }
     }
 

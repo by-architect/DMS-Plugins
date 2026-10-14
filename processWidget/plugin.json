@@ -1,7 +1,7 @@
 {
     "id": "processWidget",
     "name": "Process Widget",
-    "description": "Bar pill with the total CPU usage, read from /proc/stat; the popout adds per-core bars, memory, load average and the busiest processes, each with a kill button",
+    "description": "Bar pill with the CPU number that matters now: a process using too much, else a busy core, else the total, each with its own icon; the popout adds per-core bars, memory, load average and the busiest processes right now, each with a kill button",
     "version": "1.0.0",
     "author": "neo",
     "type": "widget",
@@ -9,7 +9,7 @@
     "icon": "memory",
     "component": "./ProcessWidget.qml",
     "settings": "./ProcessWidgetSettings.qml",
-    "dependencies": ["ps"],
-    "requires": ["ps"],
+    "dependencies": ["ps", "awk"],
+    "requires": ["ps", "awk"],
     "permissions": ["settings_read", "settings_write", "process"]
 }

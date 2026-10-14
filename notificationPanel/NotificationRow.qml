@@ -4,9 +4,11 @@ import qs.Services
 import qs.Widgets
 import "time.js" as Time
 
-// One notification card. Full title and body render untruncated — no
-// max-line clamp, no elide — so everything is visible without expanding
-// anything. Avatar-resolution mirrors the shipped Notification Center's
+// One notification card. Everything renders untruncated — app name, age,
+// title and body — no max-line clamp and no elide anywhere, so nothing ends
+// in "…" and nothing needs expanding. StyledText elides by default, so every
+// text here turns that off by hand and wraps instead, breaking inside a word
+// only when one word (a URL, a path) is wider than the card. Avatar-resolution mirrors the shipped Notification Center's
 // HistoryNotificationCard so icons/avatars resolve identically; a
 // notification carrying a real image (as opposed to an icon-provider avatar)
 // also gets a larger preview beneath the text.
@@ -31,6 +33,12 @@ Rectangle {
         if (appIcon.startsWith("file://") || appIcon.startsWith("http://") || appIcon.startsWith("https://") || appIcon.includes("/"))
             return appIcon;
         return "";
+    }
+
+    // The app name goes into a styled line next to the age, so its own
+    // markup characters must stay text.
+    function escapeHtml(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
     width: parent ? parent.width : 0
@@ -72,25 +80,17 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
             }
 
-            Row {
+            // App name and age as one wrapping line: two texts side by side
+            // had to share the width, and the name was cut to make room.
+            StyledText {
                 width: parent.width - 30 - deleteBtn.width - Theme.spacingS * 2
-                spacing: Theme.spacingXS
                 anchors.verticalCenter: parent.verticalCenter
-
-                StyledText {
-                    text: item.appName || "app"
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.primary
-                    elide: Text.ElideRight
-                    width: Math.min(implicitWidth, parent.width * 0.6)
-                }
-
-                StyledText {
-                    text: "·  " + Time.relTime(item.timestamp, root.nowMs)
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.surfaceVariantText
-                    elide: Text.ElideRight
-                }
+                textFormat: Text.StyledText
+                text: "<font color=\"" + Theme.primary + "\">" + root.escapeHtml(item.appName || "app") + "</font>  ·  " + Time.relTime(item.timestamp, root.nowMs)
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
             }
 
             DankActionButton {
@@ -118,7 +118,8 @@ Rectangle {
             font.pixelSize: Theme.fontSizeSmall
             font.weight: Font.Medium
             color: Theme.surfaceText
-            wrapMode: Text.WordWrap
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            elide: Text.ElideNone
             visible: text.length > 0
         }
 
@@ -128,7 +129,8 @@ Rectangle {
             textFormat: Text.StyledText
             font.pixelSize: Theme.fontSizeSmall - 1
             color: Theme.surfaceVariantText
-            wrapMode: Text.WordWrap
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            elide: Text.ElideNone
             visible: text.length > 0
         }
 

@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twenty-three plugins in six shapes: **launcher** plugins that answer a trigger word
+Twenty-four plugins in six shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, **bar widgets** that live in the bar and open a popout under themselves,
 the **chat manager** that is the chat system itself, **chat providers** that
@@ -21,7 +21,7 @@ piece of shell chrome.
 | [processRunner](processRunner/) | launcher | `kill <name>` | `ps`, a standalone `kill` |
 | [chatRunner](chatRunner/) | launcher | `c <name/number>` | chatManager and a chat provider |
 | [screenCatcher](screenCatcher/) | panel + bar widget | keybind / IPC | `grim`, `slurp`, `wf-recorder` |
-| [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | — |
+| [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | `matrix`, for the all-machines page |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [controlPanel](controlPanel/) | panel + bar widget | keybind / IPC | — |
 | [wallpaperSearch](wallpaperSearch/) | panel + bar widget | keybind / IPC | `curl` |
@@ -30,6 +30,7 @@ piece of shell chrome.
 | [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
 | [processWidget](processWidget/) | bar widget | the pill, and its popout | `ps` |
 | [hostStatus](hostStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; `sshpass` for password hosts |
+| [speedTest](speedTest/) | bar widget | the pill, and its popout | `speedtest-cli`, Ookla's `speedtest` or `librespeed-cli` |
 | [chatManager](chatManager/) | chat window + daemon | keybind / IPC, notifications, chatRunner | Go, to build |
 | [whatsappChat](whatsappChat/) | chat provider | the chat window | chatManager; Go, to build |
 | [signalChat](signalChat/) | chat provider | the chat window | chatManager; Go, to build; `signal-cli` |
@@ -417,7 +418,10 @@ Requires `grim`, `slurp` and `wf-recorder`. `ffmpeg` is required for GIF only;
 
 ## systemPanel
 
-A 3×3 panel answering "who has touched this machine, and is it healthy?"
+A fullscreen panel answering "who has touched this machine, and is it
+healthy?" — and, on its second page, the same question for every machine.
+
+**This machine** is a 3×3 grid:
 
 | | | |
 |---|---|---|
@@ -425,23 +429,35 @@ A 3×3 panel answering "who has touched this machine, and is it healthy?"
 | Boot health | File actions | Privilege escalation (sudo) |
 | System overview | Failed units | Listening ports |
 
+**All machines** reads `matrix log <kind> --json`, which fans out over ssh to
+every host matrix knows, into one tile per kind: system errors, logins, boots,
+NixOS builds, sync and backups, file operations, network devices and the log
+service. Each row names the machine it came from, the same thing happening
+again is one row with a count, and chips at the top narrow every tile to one
+machine. It is only read once the page is looked at, then every 2 minutes
+while it is open; a machine that does not answer is named, not left out
+silently.
+
 Everything runs as the logged-in user — no root, no helper daemon. Failed
 logins come from the journal rather than `lastb`, because `/var/log/btmp` is
 root-only; nothing is lost, since sshd records invalid users and failed auth
 there. A boot counts as **unclean** when its boot id never logged a
 `systemd-shutdown` message, and error context is fetched only for those.
 
-Inside the panel: **Esc**/**q** closes, **Ctrl+R**/**F5** refreshes. Collectors
+Inside the panel: **Esc**/**q** closes, **Ctrl+R**/**F5** refreshes the page
+on screen, **Tab** (or **1** and **2**) switches pages. The local collectors
 re-run every 30s while it's open, and the journal lookback is a setting
-(30 days by default).
+(30 days by default). `dms ipc call systemPanel matrix` opens it on the
+all-machines page.
 
 → [systemPanel/README.md](systemPanel/README.md)
 
 ## notificationPanel
 
 A fullscreen notification browser: a live flow of every notification on the
-right, six filtered categories on the left, and a search bar that narrows all of
-them at once.
+right, six filtered categories on the left — three across, two down — and a
+search bar that narrows all of them at once. Every card shows its whole app
+name, title and body, wrapped, never cut off with "…".
 
 Categories get a rule builder rather than a text box — each is a list of
 conditions (field, mode, value) that must all match, with a live match count as
@@ -594,11 +610,15 @@ rather than an exit code, which is the difference between "it did not work" and
 
 ## processWidget
 
-The CPU's total usage as one number in the bar, read from `/proc/stat` every
-two seconds without starting a process, turning amber and red past thresholds
-you set. The popout adds the last two minutes as a graph, memory and swap, one
-bar per core, the load average, and the busiest processes from `ps`, listed
-only while it is open. ✕ sends SIGTERM and right-click ✕ SIGKILL, each only
+The CPU as one number in the bar, and its icon says which number: a single
+process using too much (terminal icon) comes first, then a single core that is
+too busy (column icon), then the whole machine (chip icon), which is also what
+it shows when all is quiet. Total and per-core usage come from `/proc/stat`
+without starting a process; what each process uses right now comes from one
+`awk` over every `/proc/PID/stat` every two seconds. The popout says in words
+what the pill is warning about, and adds the last two minutes as a graph,
+memory and swap, one bar per core, the load average, and the busiest processes
+right now, one line each. ✕ sends SIGTERM and right-click ✕ SIGKILL, each only
 after re-checking that the PID still runs the listed command; quickshell itself
 is always refused.
 
@@ -613,8 +633,24 @@ it was last checked, and a button that opens an ssh session through sshManager.
 One ssh per host every 60 s, only while the pill is on a bar; a small POSIX `sh`
 probe reads `/proc` and `df`, so the hosts need nothing installed. Password
 hosts need `sshpass` and a stored password, passed via `SSHPASS`, never argv.
+`/boot` is left out unless it is nearly full, and a phone running Termux shows
+its internal storage and SD card instead of the dozens of system images Android
+mounts.
 
 → [hostStatus/README.md](hostStatus/README.md)
+
+## speedTest
+
+Your internet speed in the bar — `↓94 ↑12` in Mbit/s — from a speed test run on
+a timer (every hour by default; 0 for only when asked). It runs whichever of
+`speedtest-cli`, Ookla's `speedtest` or `librespeed-cli` is installed. The
+popout has download, upload and ping, the server, provider and network it was
+measured on, a graph of the last 48 tests and a **Run now** button;
+right-clicking the pill runs one too. Results survive a restart, a failed test
+is retried after 10 minutes, nothing runs while there is no network, and the
+pill turns amber below a speed you set.
+
+→ [speedTest/README.md](speedTest/README.md)
 
 ---
 
@@ -814,7 +850,9 @@ there is no sandbox. Four are worth naming specifically:
   already run commands as you.
 - **systemPanel** reads the journal, wtmp, systemd and `ss` — all as your own
   user, no root and no helper daemon — and displays who has logged into the
-  machine. Treat the panel as you'd treat that output.
+  machine. Its all-machines page runs `matrix log`, which ssh-es into every
+  host matrix knows with your keys and shows the same about each of them.
+  Treat the panel as you'd treat that output.
 - **sshManager** can hold a plaintext password per host, deliberately kept out
   of the ordinary settings file but still just a 0600 file on disk. Any other
   enabled plugin can ask for it — there's no extra gate beyond being enabled
