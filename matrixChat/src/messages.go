@@ -54,6 +54,11 @@ func (b *bridge) onMessage(ctx context.Context, evt *event.Event) {
 		return
 	}
 
+	// Whether this would notify on the user's phone, by the account's own
+	// push rules: a room set to mentions only in Element stays quiet here too,
+	// and a mention gets through even where group notifications are off.
+	msg.Silent, msg.Highlight = b.notificationHints(evt)
+
 	emitEvent("message", map[string]any{"message": msg})
 
 	if msg.MediaRef != "" && msg.MediaPath == "" {
@@ -83,7 +88,13 @@ func (b *bridge) messageFor(evt *event.Event, content *event.MessageEventContent
 			content = content.NewContent
 		}
 	}
-	return b.convert(evt, content, targetID), edit
+	msg := b.convert(evt, content, targetID)
+	if msg != nil && edit {
+		// When it was edited, which is how the host tells this version from
+		// the original -- and from an older edit -- whichever arrives last.
+		msg.EditedTS = evt.Timestamp
+	}
+	return msg, edit
 }
 
 // isInitialSync reports whether an event came from a sync with no position to
@@ -113,13 +124,15 @@ func (b *bridge) flushHistory() {
 }
 
 // flushHeldLocked sends what is held, for a caller already holding flushMu.
+// The messages go first, then the reactions to them.
 func (b *bridge) flushHeldLocked() {
 	b.mu.Lock()
-	msgs := b.history
-	b.history = nil
+	msgs, reactions := b.history, b.heldReactions
+	b.history, b.heldReactions = nil, nil
 	b.mu.Unlock()
 
 	emitMessages(msgs)
+	emitReactions(reactions)
 }
 
 // emitMessages sends messages as the batch event, which the host stores
@@ -136,14 +149,15 @@ func (b *bridge) convert(evt *event.Event, content *event.MessageEventContent, m
 	self := b.selfID()
 
 	msg := &messageObj{
-		ID:         string(msgID),
-		ChatID:     string(evt.RoomID),
-		TS:         evt.Timestamp,
-		FromMe:     evt.Sender == self,
-		SenderID:   string(evt.Sender),
-		SenderName: b.senderName(evt.RoomID, evt.Sender),
-		Kind:       "text",
-		Text:       content.Body,
+		ID:               string(msgID),
+		ChatID:           string(evt.RoomID),
+		TS:               evt.Timestamp,
+		FromMe:           evt.Sender == self,
+		SenderID:         string(evt.Sender),
+		SenderName:       b.senderName(evt.RoomID, evt.Sender),
+		SenderAvatarPath: b.senderAvatar(evt.RoomID, evt.Sender),
+		Kind:             "text",
+		Text:             content.Body,
 	}
 
 	if msg.FromMe {
@@ -482,8 +496,8 @@ func (b *bridge) handleSend(ctx context.Context, c call) {
 	// encrypts only when it holds a crypto helper; without one it sends in
 	// plain text and says nothing -- into a room whose members expect nothing
 	// to leave a device readable. Refusing is the only honest answer.
-	encrypted, canEncrypt := b.roomEncryption(ctx, client, roomID)
-	if encrypted && !canEncrypt {
+	encrypted, err := b.encryptionFor(ctx, client, roomID)
+	if err != nil {
 		fail(c.ID, "no_encryption", "This room is end-to-end encrypted and encryption is not working on this device, so nothing was sent.")
 		return
 	}
@@ -619,6 +633,37 @@ func (b *bridge) roomEncryption(ctx context.Context, client *mautrix.Client, roo
 		encrypted, _ = client.StateStore.IsEncrypted(ctx, roomID)
 	}
 	return encrypted, canEncrypt
+}
+
+// errCannotEncrypt is a send into an encrypted room while encryption is not
+// working on this device.
+var errCannotEncrypt = errors.New("this room is encrypted and encryption is not working on this device")
+
+// encryptionFor is the check every send makes first: whether what it sends
+// into a room has to be encrypted, and errCannotEncrypt when it has to be and
+// cannot.
+//
+// It also makes sure mautrix agrees. mautrix encrypts by its own state store,
+// not by this bridge's room cache, and the two can disagree for a moment -- a
+// room created a second ago is in the cache before the sync has told the
+// store, and mautrix would then send its first message in plain text. Telling
+// the store is what closes that.
+func (b *bridge) encryptionFor(ctx context.Context, client *mautrix.Client, roomID id.RoomID) (bool, error) {
+	encrypted, canEncrypt := b.roomEncryption(ctx, client, roomID)
+	if !encrypted {
+		return false, nil
+	}
+	if !canEncrypt {
+		return true, errCannotEncrypt
+	}
+	if client.StateStore != nil {
+		if known, err := client.StateStore.IsEncrypted(ctx, roomID); err == nil && !known {
+			if err := client.StateStore.SetEncryptionEvent(ctx, roomID, &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1}); err != nil {
+				return true, fmt.Errorf("%w: %v", errCannotEncrypt, err)
+			}
+		}
+	}
+	return true, nil
 }
 
 func msgTypeFor(mime string) event.MessageType {

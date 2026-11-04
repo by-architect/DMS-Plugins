@@ -154,6 +154,47 @@ type Message struct {
 	FileName  string `json:"fileName,omitempty"`
 	FileSize  int64  `json:"fileSize,omitempty"`
 	Duration  int    `json:"duration,omitempty"`
+
+	// EditedTS is when the text was last changed, zero for a message never
+	// edited. Stored, because it is what keeps an older copy of a message --
+	// the original, redelivered or paged in from history -- from putting back
+	// text that has since been corrected.
+	EditedTS int64 `json:"editedTs,omitempty"`
+
+	// Reactions are what people answered the message with, one entry per key.
+	// Read from their own table and attached to a page of messages; never
+	// written through a message.
+	Reactions []ReactionSummary `json:"reactions,omitempty"`
+
+	// Silent and Highlight are the provider's notification hints for a message
+	// arriving now: the service's own settings say it should not interrupt
+	// anyone, or that it names the user. Only the notification decision reads
+	// them, so they are neither stored nor sent to the shell.
+	Silent    bool `json:"-"`
+	Highlight bool `json:"-"`
+}
+
+// Reaction is one person's reaction to one message.
+type Reaction struct {
+	Provider   string `json:"provider"`
+	ChatID     string `json:"chatId"`
+	ID         string `json:"id"`
+	MessageID  string `json:"messageId"`
+	Key        string `json:"key"`
+	SenderID   string `json:"senderId,omitempty"`
+	SenderName string `json:"senderName,omitempty"`
+	FromMe     bool   `json:"fromMe"`
+	TS         int64  `json:"ts"`
+}
+
+// ReactionSummary is every reaction a message has with one key: how many, who,
+// and whether one of them is ours -- which is what decides whether pressing it
+// adds a reaction or takes ours back.
+type ReactionSummary struct {
+	Key     string   `json:"key"`
+	Count   int      `json:"count"`
+	Mine    bool     `json:"mine"`
+	Senders []string `json:"senders,omitempty"`
 }
 
 // SearchHit is a message match with enough chat context to render a result row

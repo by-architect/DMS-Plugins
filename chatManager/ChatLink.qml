@@ -26,6 +26,10 @@ Item {
     // shown, or for the window when the notification was about several.
     signal openRequested(string provider, string chatId)
 
+    // Who is typing in a conversation, by name -- the whole list each time,
+    // empty when nobody is. Relayed as the provider reports it, never stored.
+    signal typingUpdate(string provider, string chatId, var users)
+
     // Remembered so a failure inside a handler can name the call it came from.
     property string _lastMethod: ""
     property bool _wantSubscription: false
@@ -94,6 +98,8 @@ Item {
                 root.chatStateUpdate(event.data);
             else if (event.service === "chat.open")
                 root.openRequested(event.data?.provider ?? "", event.data?.chatId ?? "");
+            else if (event.service === "chat.typing")
+                root.typingUpdate(event.data?.provider ?? "", event.data?.chatId ?? "", event.data?.users ?? []);
             return;
         }
 

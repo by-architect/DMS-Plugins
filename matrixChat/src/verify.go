@@ -81,6 +81,8 @@ func (b *bridge) handleVerify(ctx context.Context, c call) {
 	}
 
 	emitEvent("auth", map[string]any{"method": "verified"})
+	// The settings page says whether the device is verified; it is now.
+	go b.emitAccount()
 }
 
 // verifyWithSecret unlocks secret storage and puts this device in good standing.

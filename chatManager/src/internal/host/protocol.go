@@ -40,6 +40,30 @@ const (
 	// which is what the invites capability says.
 	MethodAcceptInvite  = "acceptInvite"
 	MethodDeclineInvite = "declineInvite"
+
+	// MethodReact adds a reaction to a message (chatId, messageId, key) and
+	// answers with the reaction's own id; MethodUnreact takes one of ours back
+	// (chatId, messageId, reactionId, key). The reactions capability.
+	MethodReact   = "react"
+	MethodUnreact = "unreact"
+
+	// MethodEdit replaces the text of one of our own messages (chatId,
+	// messageId, text). The edit capability.
+	MethodEdit = "edit"
+
+	// MethodTyping says whether we are typing into a conversation (chatId,
+	// typing). Best effort, never waited on. The typing capability.
+	MethodTyping = "typing"
+
+	// MethodStartChat opens a conversation from whatever the user typed to
+	// reach it -- a user, a room address -- and answers with its chatId, and a
+	// name when the provider has one. The startChat capability.
+	MethodStartChat = "startChat"
+
+	// MethodSetMuted carries a mute the user set here to the service, so every
+	// other client of theirs is silenced too (chatId, muted). The mute
+	// capability.
+	MethodSetMuted = "setMuted"
 )
 
 // Events a bridge pushes to the host.
@@ -61,6 +85,22 @@ const (
 	// messages somebody actually wrote, which are never dropped on a
 	// provider's say-so.
 	EventChatGone = "chatGone"
+
+	// EventReaction is one reaction to a message, and EventReactions a batch of
+	// them. A reaction taken back arrives as EventDeleted naming the reaction's
+	// own id, the way a deleted message does.
+	EventReaction  = "reaction"
+	EventReactions = "reactions"
+
+	// EventTyping is who is typing into a conversation right now, by name: the
+	// whole list each time, empty when nobody is. Relayed to the shell as it
+	// comes and never stored.
+	EventTyping = "typing"
+
+	// EventAccount is what the provider wants its own settings page to show
+	// about the account: who is signed in, whether the device is trusted. The
+	// host relays it untouched and makes nothing of it.
+	EventAccount = "account"
 )
 
 // Capabilities a bridge may declare. The UI hides affordances a provider has
@@ -82,6 +122,21 @@ const (
 	// to but not joined. Such a conversation carries the "invite" tag until it
 	// is answered.
 	CapInvites = "invites"
+
+	// CapHistory is a provider that can fetch older messages when asked. The
+	// host then waits for the history call to finish -- the bridge sends the
+	// messages as a backfill batch before it answers -- and a conversation
+	// opened short of its beginning offers to page further back.
+	CapHistory = "history"
+
+	// CapReactions, CapEdit, CapTyping, CapStartChat and CapMute say the
+	// matching method above is implemented; reactions, edits and typing are
+	// also what the provider reports.
+	CapReactions = "reactions"
+	CapEdit      = "edit"
+	CapTyping    = "typing"
+	CapStartChat = "startChat"
+	CapMute      = "mute"
 )
 
 // bridgeCall is what the host writes to a bridge's stdin.
@@ -139,10 +194,24 @@ type bridgeFrame struct {
 
 	// Payloads. Singular and batch forms are both accepted; the batch forms
 	// exist so a history sync costs one transaction instead of thousands.
-	Chat     *wireChat     `json:"chat"`
-	Chats    []wireChat    `json:"chats"`
-	Message  *wireMessage  `json:"message"`
-	Messages []wireMessage `json:"messages"`
+	Chat      *wireChat      `json:"chat"`
+	Chats     []wireChat     `json:"chats"`
+	Message   *wireMessage   `json:"message"`
+	Messages  []wireMessage  `json:"messages"`
+	Reaction  *wireReaction  `json:"reaction"`
+	Reactions []wireReaction `json:"reactions"`
+
+	// Backfill marks a messages batch as older history fetched on request:
+	// stored where it belongs, and never counted as unread -- it is older than
+	// anything the conversation held, so nobody is waiting on it.
+	Backfill bool `json:"backfill"`
+
+	// Users is who is typing, for a typing event.
+	Users []string `json:"users"`
+
+	// Account is the provider's account summary, for an account event. Kept
+	// raw: it is the provider's own settings page that reads it.
+	Account json.RawMessage `json:"account"`
 
 	// Status / deletion.
 	ChatID    string `json:"chatId"`
@@ -228,11 +297,54 @@ type wireMessage struct {
 	FileName   string `json:"fileName"`
 	FileSize   int64  `json:"fileSize"`
 	Duration   int    `json:"duration"`
+
+	// EditedTS is when the text was last edited, zero when it never was. It is
+	// what lets the store tell a newer version of a message from an older one
+	// arriving late -- see the edit rules in store.go.
+	EditedTS int64 `json:"editedTs"`
+
+	// Silent is the service's own notification settings saying this message
+	// should not interrupt anyone: a room set to mentions only, or muted on
+	// another device. Highlight is the opposite: it names us, and gets
+	// through even where group notifications are off.
+	Silent    bool `json:"silent"`
+	Highlight bool `json:"highlight"`
+}
+
+// wireReaction is one reaction as a bridge sends it: its own id, the message it
+// is on, and the key -- an emoji, usually, but any short text a service allows.
+type wireReaction struct {
+	ID         string `json:"id"`
+	ChatID     string `json:"chatId"`
+	MessageID  string `json:"messageId"`
+	Key        string `json:"key"`
+	SenderID   string `json:"senderId"`
+	SenderName string `json:"senderName"`
+	FromMe     bool   `json:"fromMe"`
+	TS         int64  `json:"ts"`
 }
 
 // sendResult is what a bridge returns from a successful send.
 type sendResult struct {
 	MessageID string `json:"messageId"`
+}
+
+// historyReply is what a bridge with the history capability answers a history
+// call with, once the messages it found have been sent. HasMore false is the
+// beginning of the conversation reached; absent is a bridge that cannot tell.
+type historyReply struct {
+	HasMore *bool `json:"hasMore"`
+}
+
+// reactReply is what a bridge returns from a react call.
+type reactReply struct {
+	ReactionID string `json:"reactionId"`
+}
+
+// startChatReply is what a bridge returns from a startChat call.
+type startChatReply struct {
+	ChatID string `json:"chatId"`
+	Name   string `json:"name"`
 }
 
 // fetchMediaResult is what a bridge returns from a successful fetchMedia.

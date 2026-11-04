@@ -1,5 +1,5 @@
 import QtQuick
-import qs.DankCommon.Common
+import qs.DCommon.Common
 import qs.Widgets
 
 // The composer's text field: one line until there is more to say.
@@ -17,6 +17,8 @@ import qs.Widgets
 //   Shift+Return  a new line, inserted as "\n" (TextEdit's own inserts U+2028,
 //                 which no chat service treats as a line break)
 //   Ctrl+Return   not ours: the conversation opens the selected message with it
+//   Up            upOnEmpty() when there is nothing typed -- the composer edits
+//                 the last message sent; with text, the cursor moves as ever
 StyledRect {
     id: root
 
@@ -30,6 +32,7 @@ StyledRect {
 
     signal focusStateChanged(bool hasFocus)
     signal submitted
+    signal upOnEmpty
 
     function forceActiveFocus() {
         edit.forceActiveFocus();
@@ -129,6 +132,14 @@ StyledRect {
             Keys.forwardTo: root.keyForwardTargets
             Keys.onReturnPressed: event => root._onReturn(event)
             Keys.onEnterPressed: event => root._onReturn(event)
+            Keys.onUpPressed: event => {
+                if (edit.text === "" && !(event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+                    root.upOnEmpty();
+                    event.accepted = true;
+                    return;
+                }
+                event.accepted = false;
+            }
 
             onActiveFocusChanged: root.focusStateChanged(activeFocus)
             onCursorRectangleChanged: scroll.ensureCursorVisible()

@@ -739,7 +739,15 @@ Talks to your homeserver's HTTP API directly. Enable **Matrix Chat** under
 Settings → Plugins and the chat window asks for your homeserver, user id and
 password — or run `./login.sh` in a terminal instead. Only the access token is
 kept, never the password. Encrypted rooms work once the device is verified with
-your recovery key, from the plugin's own settings page.
+your recovery key, from the plugin's own settings page — which also shows who
+is signed in, whether the device is verified, and a Sign out button.
+
+Scrolling up a conversation fetches older messages from the homeserver, and
+what a busy room said while the shell was off is filled in when it comes back.
+Reactions, edits and typing work both ways, rooms show their pictures, and
+`@someone:server` or `#room:server` typed into the search box starts a chat or
+joins a room. Notifications follow the account's own Matrix settings: a room
+muted or set to mentions only in Element stays quiet here too.
 
 → [matrixChat/README.md](matrixChat/README.md)
 
@@ -750,6 +758,7 @@ dms ipc call chats toggle                  # the full window, with the chat list
 dms ipc call chats popout "Ada"            # one conversation, by name
 dms ipc call chats popout "+905551234567"  # or by number
 dms ipc call chats unread                  # the next conversation with something waiting
+dms ipc call chats start matrixChat "@ada:example.org"   # start one, where the provider can
 ```
 
 Worth binding under Settings → Keyboard Shortcuts. Clicking a chat
@@ -768,10 +777,17 @@ remember.
 | `Ctrl+Enter` | Open the selected message's attachment or link |
 | `Ctrl+Shift+C` | Copy the selected message, or its attachment as a file |
 | `Ctrl+R` / `Ctrl+F` | Reply, again to take the reply back / forward |
+| `Ctrl+T` | React — the selected message, or the newest one somebody else sent |
+| `Ctrl+E` / `↑` in an empty box | Edit your selected message, or your last one |
 | `Ctrl+Delete` / `Ctrl+Shift+Delete` | Delete for you / for everyone, after confirming |
 | `Ctrl+V` | Attach an image or file from the clipboard |
 | `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
-| `Esc` | Clear the selection, then close |
+| `Esc` | Leave an edit, clear the selection, then close |
+
+Reactions, editing and typing appear where the provider supports them: a
+reaction shows under its message — press one to add the same, or to take yours
+back — an edited message says so, and the line under the conversation's name
+says who is typing.
 
 Messages show their formatting — **bold**, *italic*, `code`, code blocks,
 quotes, lists, headings, tables and links — and what you type is sent
@@ -781,7 +797,10 @@ its own `*bold*` `_italic_` markers. The details are in
 
 In the search box, the arrows move through the conversations listed and `Enter`
 opens the one they are on — the best match, as you type. The forward picker and
-the popout's "which conversation?" list work the same way.
+the popout's "which conversation?" list work the same way. Typed there, an
+address you have no conversation with yet — `@name:server` for a person,
+`#room:server` for a room — is offered to the providers that can open one, and
+`Enter` does.
 
 Attachments are pasted rather than browsed for: copy a file in a file manager,
 or an image from a screenshot tool, and paste. A pasted or typed path followed
@@ -802,7 +821,10 @@ turns each category on or off for the conversation list and the runner. Hiding
 is only hiding: searching still finds them, and nothing is deleted.
 
 Notifications are set in the Chat Manager's settings: on or off, previews,
-groups and archived conversations.
+groups and archived conversations. A provider that keeps notification settings
+of its own can follow them too — Matrix does, so a room muted on your phone is
+muted here, and a message that mentions you gets through even with group
+notifications off.
 
 ## Where your data lives
 

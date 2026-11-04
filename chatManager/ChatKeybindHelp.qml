@@ -66,6 +66,14 @@ StyledRect {
                     "text": I18n.tr("Forward to another conversation")
                 },
                 {
+                    "keys": "Ctrl + T",
+                    "text": I18n.tr("React -- or, with nothing selected, react to the newest message from someone else")
+                },
+                {
+                    "keys": "Ctrl + E",
+                    "text": I18n.tr("Edit it, when it is yours -- or, with nothing selected, your last message")
+                },
+                {
                     "keys": "Ctrl + Delete",
                     "text": I18n.tr("Delete from this device, after confirming")
                 },
@@ -104,6 +112,10 @@ StyledRect {
                     "text": I18n.tr("Attach an image or file from the clipboard")
                 },
                 {
+                    "keys": "↑",
+                    "text": I18n.tr("With nothing typed: edit your last message. Enter saves the edit, Esc leaves it")
+                },
+                {
                     "keys": "**bold**  *italic*  `code`",
                     "text": I18n.tr("Formatting: also ~~strike~~, ``` blocks, > quotes, - lists, # headings, [links](url). WhatsApp uses its own: *bold* _italic_ ~strike~")
                 }
@@ -127,6 +139,10 @@ StyledRect {
                 {
                     "keys": "↑ / ↓  ·  Enter",
                     "text": I18n.tr("Choose where a forward goes, or which conversation a name meant")
+                },
+                {
+                    "keys": "@name:server",
+                    "text": I18n.tr("Typed in the search box, then Enter: message someone you have no conversation with yet. #room:server joins a room. Where the provider can")
                 }
             ]
         }

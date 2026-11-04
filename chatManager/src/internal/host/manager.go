@@ -36,6 +36,9 @@ type ingestEvent struct {
 	frame    bridgeFrame
 	// internal marks events the host synthesised rather than a bridge sending.
 	internal bool
+	// barrier, when set, is closed once everything queued before it has been
+	// processed, and the event carries nothing else. See drainIngest.
+	barrier chan struct{}
 }
 
 // State is the snapshot pushed to subscribers.
@@ -103,6 +106,17 @@ type Manager struct {
 	// than through any one of them.
 	openMu sync.Mutex
 	onOpen func(provider, chatID string)
+
+	// onTyping is told who is typing where, as bridges report it. Set by the
+	// same owner as onOpen: it goes to the shell as it comes, and is stale
+	// long before it would be worth storing.
+	onTyping func(provider, chatID string, users []string)
+
+	// historyEnd remembers conversations whose provider has said there is
+	// nothing older to fetch, as "<provider>\x00<chatId>", so opening one again
+	// does not offer to page past its beginning.
+	historyMu  sync.Mutex
+	historyEnd map[string]bool
 }
 
 // NewManager opens the store and discovers installed chat plugins. Bridges are
@@ -177,6 +191,71 @@ func (m *Manager) SetOpenHandler(fn func(provider, chatID string)) {
 	m.openMu.Lock()
 	defer m.openMu.Unlock()
 	m.onOpen = fn
+}
+
+// SetTypingHandler names who is told when somebody starts or stops typing.
+func (m *Manager) SetTypingHandler(fn func(provider, chatID string, users []string)) {
+	m.openMu.Lock()
+	defer m.openMu.Unlock()
+	m.onTyping = fn
+}
+
+func (m *Manager) relayTyping(provider, chatID string, users []string) {
+	if chatID == "" {
+		return
+	}
+	m.openMu.Lock()
+	fn := m.onTyping
+	m.openMu.Unlock()
+
+	if users == nil {
+		users = []string{}
+	}
+	if fn != nil {
+		fn(provider, chatID, users)
+	}
+}
+
+// drainIngest waits until everything queued for the store so far has been
+// written.
+//
+// A bridge answers a call after sending whatever the call produced, on the same
+// stream, so by the time the answer is here those frames are queued -- but only
+// queued. Reading the store straight away raced the ingest loop and found
+// nothing; a barrier behind them is reached only once they are stored.
+func (m *Manager) drainIngest(ctx context.Context) {
+	done := make(chan struct{})
+	select {
+	case m.events <- ingestEvent{barrier: done}:
+	case <-ctx.Done():
+		return
+	case <-m.stopChan:
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-m.stopChan:
+	}
+}
+
+func historyKey(provider, chatID string) string { return provider + "\x00" + chatID }
+
+// HistoryEnded reports whether a provider has said this conversation has
+// nothing older to fetch.
+func (m *Manager) HistoryEnded(provider, chatID string) bool {
+	m.historyMu.Lock()
+	defer m.historyMu.Unlock()
+	return m.historyEnd[historyKey(provider, chatID)]
+}
+
+func (m *Manager) markHistoryEnded(provider, chatID string) {
+	m.historyMu.Lock()
+	defer m.historyMu.Unlock()
+	if m.historyEnd == nil {
+		m.historyEnd = map[string]bool{}
+	}
+	m.historyEnd[historyKey(provider, chatID)] = true
 }
 
 func (m *Manager) requestOpen(provider, chatID string) {

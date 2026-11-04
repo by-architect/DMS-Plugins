@@ -37,7 +37,7 @@ func TestRoomCacheRoundTrip(t *testing.T) {
 	info.Encrypted = true
 	info.Members[testAda] = "Ada"
 
-	store.save(map[id.RoomID]*roomInfo{testRoom: info})
+	store.save(map[id.RoomID]*roomInfo{testRoom: info}, testSelf)
 
 	loaded := store.load()
 	got, ok := loaded[testRoom]
@@ -69,7 +69,7 @@ func TestLargeRoomMembersAreNotStored(t *testing.T) {
 		big.Members[id.UserID(string(rune('a'+i%26))+string(rune('0'+i/26))+":example.org")] = "Someone"
 	}
 
-	store.save(map[id.RoomID]*roomInfo{testRoom: big})
+	store.save(map[id.RoomID]*roomInfo{testRoom: big}, testSelf)
 
 	got := store.load()[testRoom]
 	if len(got.Members) != 0 {

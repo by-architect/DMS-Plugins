@@ -70,6 +70,10 @@ type bridge struct {
 	authTitle  string
 	authFields []wireAuthField
 
+	// account is the provider's own summary of the account, for its settings
+	// page: relayed as it came, never read here.
+	account json.RawMessage
+
 	// stderrTail keeps the last few lines the bridge complained about, so a
 	// crash can be explained without the user having to reproduce it under
 	// `dms chat tail`.
@@ -334,6 +338,17 @@ func (b *bridge) handleEvent(f bridgeFrame) {
 		b.authPayload = payload
 		b.authTitle = f.Title
 		b.authFields = f.Fields
+		b.mu.Unlock()
+
+	case EventAccount:
+		// Kept as the provider sent it: only its own settings page knows what
+		// is in it. An empty or null one is the provider signed out.
+		b.mu.Lock()
+		if len(f.Account) == 0 || string(f.Account) == "null" || string(f.Account) == "{}" {
+			b.account = nil
+		} else {
+			b.account = append(json.RawMessage(nil), f.Account...)
+		}
 		b.mu.Unlock()
 
 	case EventLog:
@@ -639,6 +654,7 @@ func (b *bridge) Status() ProviderStatus {
 		AuthPayload:  b.authPayload,
 		AuthTitle:    b.authTitle,
 		AuthFields:   b.authFields,
+		Account:      b.account,
 	}
 }
 

@@ -197,6 +197,17 @@ Item {
     property bool loadingHistory: false
     property bool hasMoreHistory: false
 
+    // How many messages the last older page brought, or -1 before any was
+    // asked for in this conversation. A provider that fetches history can
+    // answer with nothing and still say there is more -- it could not be
+    // reached, say -- and a short conversation pages older ones in on its own,
+    // so it must not then keep asking in a loop. See canPageOnItsOwn.
+    property int _lastOlderCount: -1
+
+    // Whether the view may ask for an older page without the reader scrolling
+    // for it: a conversation too short to scroll, with more before it.
+    readonly property bool canPageOnItsOwn: hasMoreHistory && !loadingHistory && _lastOlderCount !== 0
+
     // Where the open conversation had been read when it was opened.
     //
     // A snapshot, deliberately: opening marks the conversation read, so the
@@ -327,10 +338,15 @@ Item {
         root._openPending = provider + " " + chatId;
         root._openAtUnread = true;
 
+        // Whatever we were typing elsewhere is not being typed any more.
+        if (provider !== root._typingProvider || chatId !== root._typingChatId)
+            root.stopTyping();
+
         root.activeProvider = provider;
         root.activeChatId = chatId;
         root.messages = [];
         root.hasMoreHistory = false;
+        root._lastOlderCount = -1;
 
         // Tell the backend what is on screen, so a message the user is already
         // looking at does not also raise a notification. Marking it read waits
@@ -356,10 +372,14 @@ Item {
         root.unreadMarkTs = 0;
         root._openPending = "";
 
+        if (provider !== root._typingProvider || chatId !== root._typingChatId)
+            root.stopTyping();
+
         root.activeProvider = provider;
         root.activeChatId = chatId;
         root.messages = [];
         root.hasMoreHistory = false;
+        root._lastOlderCount = -1;
 
         setFocus(provider, chatId);
         loadHistory(ts > 0 ? ts + 1 : 0);
@@ -369,6 +389,7 @@ Item {
     }
 
     function closeChat() {
+        root.stopTyping();
         root.activeProvider = "";
         root.activeChatId = "";
         root.messages = [];
@@ -489,6 +510,7 @@ Item {
 
             if (before) {
                 root.hasMoreHistory = pageHasMore;
+                root._lastOlderCount = page.length;
                 if (page.length > 0) {
                     root.messages = page.concat(root.messages);
                     root.olderLoaded(page.length);
@@ -647,6 +669,9 @@ Item {
         if (replyTo)
             params.replyTo = replyTo;
 
+        // A message sent is the end of typing it.
+        root.stopTyping();
+
         root.link.sendRequest("chat.send", params, response => {
             if (response.error) {
                 root.log.warn("send failed:", response.error);
@@ -675,6 +700,8 @@ Item {
             params.text = caption;
         if (replyTo)
             params.replyTo = replyTo;
+
+        root.stopTyping();
 
         root.link.sendRequest("chat.send", params, response => {
             if (response.error) {
@@ -1050,6 +1077,271 @@ Item {
         return merged;
     }
 
+    // ------------------------------------------------------------ reactions
+
+    // react puts a reaction on a message in the open conversation, or takes
+    // ours back when it is already there: the same press both ways, the way a
+    // reaction under a message works everywhere else.
+    function react(messageId, key) {
+        if (!available || !hasActiveChat || !messageId || !key || !root.activeSupports("reactions"))
+            return;
+
+        const provider = root.activeProvider;
+        const chatId = root.activeChatId;
+        const msg = root.messageById(messageId);
+        const existing = msg ? (msg.reactions || []).find(r => r.key === key) : null;
+        const remove = existing ? existing.mine === true : false;
+
+        // On screen at once. The push that follows says what really happened,
+        // and a failure puts it back the way it was.
+        root._updateOpenMessage(provider, chatId, messageId, m => root._withReaction(m, key, !remove));
+
+        root.link.sendRequest(remove ? "chat.unreact" : "chat.react", {
+            "provider": provider,
+            "chatId": chatId,
+            "messageId": messageId,
+            "key": key
+        }, response => {
+            if (!response.error)
+                return;
+            root.log.warn("reaction failed:", response.error);
+            ToastService.showError(remove ? I18n.tr("Reaction not removed") : I18n.tr("Reaction not sent"), response.error);
+            root._updateOpenMessage(provider, chatId, messageId, m => root._withReaction(m, key, remove));
+        });
+    }
+
+    // _withReaction is a message with our reaction under one key added, or
+    // taken away.
+    function _withReaction(msg, key, mine) {
+        const copy = Object.assign({}, msg);
+        const reactions = (msg.reactions || []).map(r => Object.assign({}, r));
+        const at = reactions.findIndex(r => r.key === key);
+
+        if (mine) {
+            if (at < 0)
+                reactions.push({
+                    "key": key,
+                    "count": 1,
+                    "mine": true,
+                    "senders": []
+                });
+            else if (!reactions[at].mine) {
+                reactions[at].count += 1;
+                reactions[at].mine = true;
+            }
+        } else if (at >= 0 && reactions[at].mine) {
+            reactions[at].count -= 1;
+            reactions[at].mine = false;
+            if (reactions[at].count <= 0)
+                reactions.splice(at, 1);
+        }
+
+        copy.reactions = reactions;
+        return copy;
+    }
+
+    // ------------------------------------------------------------ editing
+
+    // canEdit is whether a message is one of ours that its provider lets us
+    // edit: text only, and only once it has actually been sent.
+    function canEdit(msg) {
+        if (!msg || !msg.fromMe || msg.kind !== "text")
+            return false;
+        if (msg.status === "pending" || msg.status === "failed")
+            return false;
+        return root.supports(msg.provider || root.activeProvider, "edit");
+    }
+
+    // lastEditable is our newest message in the open conversation that can be
+    // edited, or null -- what Up in an empty message box goes back to.
+    function lastEditable() {
+        for (let i = root.messages.length - 1; i >= 0; i--) {
+            if (root.canEdit(root.messages[i]))
+                return root.messages[i];
+        }
+        return null;
+    }
+
+    // editMessage replaces the text of one of our messages in the open
+    // conversation. onDone hears whether it went.
+    function editMessage(messageId, text, onDone) {
+        if (!available || !hasActiveChat || !messageId) {
+            if (onDone)
+                onDone(false);
+            return;
+        }
+
+        const provider = root.activeProvider;
+        const chatId = root.activeChatId;
+        root.link.sendRequest("chat.edit", {
+            "provider": provider,
+            "chatId": chatId,
+            "messageId": messageId,
+            "text": text
+        }, response => {
+            if (response.error) {
+                root.log.warn("edit failed:", response.error);
+                ToastService.showError(I18n.tr("Message not edited"), response.error);
+            } else {
+                root._updateOpenMessage(provider, chatId, messageId, m => {
+                    const copy = Object.assign({}, m);
+                    copy.text = text;
+                    copy.editedTs = Date.now();
+                    return copy;
+                });
+            }
+            if (onDone)
+                onDone(!response.error);
+        });
+    }
+
+    // ------------------------------------------------------------ typing
+
+    // Who is typing where, as "<provider> <chatId>" -> { users, at }. Kept
+    // only while it is likely still true: a provider that stops saying so --
+    // a bridge restarting mid-sentence -- would otherwise leave somebody
+    // typing for ever.
+    property var _typing: ({})
+
+    readonly property int typingTimeoutMs: 30000
+
+    function typingFor(provider, chatId) {
+        const entry = root._typing[provider + " " + chatId];
+        if (!entry || Date.now() - entry.at > root.typingTimeoutMs)
+            return [];
+        return entry.users;
+    }
+
+    // Who is typing in the open conversation, by name.
+    readonly property var activeTyping: root.hasActiveChat ? root.typingFor(root.activeProvider, root.activeChatId) : []
+
+    function _onTyping(provider, chatId, users) {
+        const key = provider + " " + chatId;
+        const next = Object.assign({}, root._typing);
+        if (!users || users.length === 0)
+            delete next[key];
+        else
+            next[key] = {
+                "users": users,
+                "at": Date.now()
+            };
+        root._typing = next;
+    }
+
+    Timer {
+        id: typingExpiry
+
+        interval: 5000
+        repeat: true
+        running: Object.keys(root._typing).length > 0
+        onTriggered: {
+            const now = Date.now();
+            const next = {};
+            let changed = false;
+            for (const key in root._typing) {
+                if (now - root._typing[key].at > root.typingTimeoutMs)
+                    changed = true;
+                else
+                    next[key] = root._typing[key];
+            }
+            if (changed)
+                root._typing = next;
+        }
+    }
+
+    // The conversation we last told we were typing in, and when.
+    property string _typingProvider: ""
+    property string _typingChatId: ""
+    property real _typingSentAt: 0
+
+    // noteTyping is the composer saying what is in it now.
+    //
+    // Typing is said at most every few seconds while it goes on, and stopping
+    // is said once: when the field empties, the message goes, the conversation
+    // changes, or the typing pauses for long enough.
+    function noteTyping(text) {
+        if (!available || !hasActiveChat || !root.activeSupports("typing"))
+            return;
+        if ((text || "").trim() === "") {
+            root.stopTyping();
+            return;
+        }
+
+        const same = root._typingProvider === root.activeProvider && root._typingChatId === root.activeChatId;
+        if (!same)
+            root.stopTyping();
+        typingIdle.restart();
+        if (same && Date.now() - root._typingSentAt < 4000)
+            return;
+
+        root._typingProvider = root.activeProvider;
+        root._typingChatId = root.activeChatId;
+        root._typingSentAt = Date.now();
+        root._sendTyping(root._typingProvider, root._typingChatId, true);
+    }
+
+    function stopTyping() {
+        typingIdle.stop();
+        if (root._typingChatId === "")
+            return;
+
+        const provider = root._typingProvider;
+        const chatId = root._typingChatId;
+        root._typingProvider = "";
+        root._typingChatId = "";
+        root._typingSentAt = 0;
+        root._sendTyping(provider, chatId, false);
+    }
+
+    function _sendTyping(provider, chatId, typing) {
+        if (!available)
+            return;
+        root.link.sendRequest("chat.typing", {
+            "provider": provider,
+            "chatId": chatId,
+            "typing": typing
+        }, null);
+    }
+
+    // A pause in typing, with nothing sent or cleared: said after a while, as
+    // other clients do, rather than leaving the other side watching dots.
+    Timer {
+        id: typingIdle
+
+        interval: 6000
+        onTriggered: root.stopTyping()
+    }
+
+    // ------------------------------------------------------------ starting
+
+    // Providers that can open a conversation from an address -- @someone,
+    // #a-room -- and are connected to do it.
+    readonly property var startChatProviders: root.providers.filter(p => p.enabled && p.state === "connected" && (p.capabilities || []).indexOf("startChat") !== -1)
+
+    // startChat opens a conversation from what the user typed to reach it.
+    // onDone hears its id, or why there is none.
+    function startChat(providerId, handle, onDone) {
+        if (!available) {
+            if (onDone)
+                onDone("", I18n.tr("The chat manager is not running"));
+            return;
+        }
+        root.link.sendRequest("chat.startChat", {
+            "provider": providerId,
+            "handle": handle
+        }, response => {
+            if (response.error) {
+                root.log.warn("could not start a conversation:", response.error);
+                ToastService.showError(I18n.tr("Could not start the conversation"), response.error);
+                if (onDone)
+                    onDone("", response.error);
+                return;
+            }
+            if (onDone)
+                onDone(response.result?.chatId ?? "", "");
+        });
+    }
+
     // ------------------------------------------------------------ invites
 
     // isInvite reports a conversation the user has been asked into and has not
@@ -1214,6 +1506,18 @@ Item {
         });
     }
 
+    // refreshProviders re-reads the providers alone -- for a settings page,
+    // which is open while nothing streams state to it, and needs to know who
+    // is signed in without the whole conversation list coming along.
+    function refreshProviders() {
+        if (!available)
+            return;
+        root.link.sendRequest("chat.providers", null, response => {
+            if (!response.error)
+                root.providers = response.result?.providers || [];
+        });
+    }
+
     function rescan() {
         if (!available)
             return;
@@ -1272,11 +1576,16 @@ Item {
                 root.loadHistory(0);
         }
 
+        function onTypingUpdate(provider, chatId, users) {
+            root._onTyping(provider, chatId, users);
+        }
+
         function onIsConnectedChanged() {
             if (!root.link.isConnected) {
                 root.providers = [];
                 root.chats = [];
                 root.syncProgress = ({});
+                root._typing = ({});
                 // A manager that comes back is a new one, with every provider
                 // stopped again. Without this the next connection skipped
                 // restoring them -- it had been done once already -- and chat

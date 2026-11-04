@@ -43,11 +43,19 @@ func main() {
 	// "markdown" says how a message's text is written: Markdown, both ways.
 	// Formatted messages arrive converted from their HTML, and what is sent
 	// goes out formatted on Matrix. See markdown.go.
+	//
+	// "history" is older messages fetched from the homeserver as the
+	// conversation is scrolled back (history.go); "reactions", "edit" and
+	// "typing" are m.reaction, m.replace and m.typing both ways; "startChat"
+	// opens a direct chat with @someone or joins #a:room (startchat.go); and
+	// "mute" keeps a mute set here in step with the account's push rules
+	// (pushrules.go).
 	emitEvent("ready", map[string]any{
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
 			"send", "markRead", "media", "reply", "revoke", "groups", "richText",
-			"markdown", "invites",
+			"markdown", "invites", "history", "reactions", "edit", "typing",
+			"startChat", "mute",
 		},
 	})
 
@@ -92,9 +100,19 @@ func main() {
 	b.shutdown()
 }
 
+// dispatch hands a call to its lane. Shutting down is the exception: it is
+// answered here and now, since it ends the process.
 func (b *bridge) dispatch(c call) {
-	ctx := context.Background()
+	if c.Method == "shutdown" {
+		ok(c.ID, nil)
+		b.shutdown()
+		os.Exit(0)
+	}
+	b.calls.run(laneFor(c), func() { b.handle(context.Background(), c) })
+}
 
+// handle answers one call.
+func (b *bridge) handle(ctx context.Context, c call) {
 	switch c.Method {
 	case "configure":
 		b.handleConfigure(ctx, c)
@@ -105,7 +123,7 @@ func (b *bridge) dispatch(c call) {
 	case "fetchMedia":
 		b.handleFetchMedia(ctx, c)
 	case "history":
-		b.handleHistory(c)
+		b.handleHistory(ctx, c)
 	case "login":
 		b.handleLogin(ctx, c)
 	case "authSubmit":
@@ -120,10 +138,18 @@ func (b *bridge) dispatch(c call) {
 		b.handleAcceptInvite(ctx, c)
 	case "declineInvite":
 		b.handleDeclineInvite(ctx, c)
-	case "shutdown":
-		ok(c.ID, nil)
-		b.shutdown()
-		os.Exit(0)
+	case "react":
+		b.handleReact(ctx, c)
+	case "unreact":
+		b.handleUnreact(ctx, c)
+	case "edit":
+		b.handleEdit(ctx, c)
+	case "typing":
+		b.handleTyping(ctx, c)
+	case "startChat":
+		b.handleStartChat(ctx, c)
+	case "setMuted":
+		b.handleSetMuted(ctx, c)
 
 	default:
 		// Answering rather than ignoring is what keeps this bridge working

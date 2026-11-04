@@ -103,6 +103,15 @@ func run(socketPath string) error {
 		}})
 	})
 
+	// Typing goes the same way, and for the same reason: it belongs to no
+	// request, and it is stale long before a state push would carry it.
+	manager.SetTypingHandler(func(provider, chatID string, users []string) {
+		shells.broadcast(response{Result: serviceEvent{
+			Service: "chat.typing",
+			Data:    map[string]any{"provider": provider, "chatId": chatID, "users": users},
+		}})
+	})
+
 	// Clients are tracked so shutdown can close them. A connected client sits
 	// blocked reading its socket, and waiting for it to send something would
 	// mean the manager never exits while the shell is attached -- leaving an
@@ -293,8 +302,21 @@ func laneFor(req models.Request) string {
 	chatID := models.GetOr(req, "chatId", "")
 
 	switch req.Method {
-	case "chat.send", "chat.revoke", "chat.acceptInvite", "chat.declineInvite":
+	case "chat.send", "chat.revoke", "chat.acceptInvite", "chat.declineInvite",
+		"chat.react", "chat.unreact", "chat.edit":
+		// Everything that changes what a conversation says, in the order it
+		// was asked: an edit must not overtake the message it corrects.
 		return "chat\x00" + provider + "\x00" + chatID
+	case "chat.history":
+		// Older pages can wait on the provider fetching them, so they get a
+		// lane per conversation. The newest page stays in line here: opening a
+		// conversation reads where it had been read, and that has to be
+		// answered before the markRead queued right behind it.
+		if models.GetOr(req, "before", 0) > 0 {
+			return "history\x00" + provider + "\x00" + chatID
+		}
+	case "chat.startChat":
+		return "provider\x00" + provider
 	case "chat.setEnabled", "chat.setProviderSettings", "chat.login", "chat.logout",
 		"chat.authSubmit", "chat.purge":
 		return "provider\x00" + provider

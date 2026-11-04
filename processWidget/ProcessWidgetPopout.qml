@@ -2,6 +2,7 @@ import QtQuick
 import qs.Common
 import qs.Widgets
 import qs.Modules.Plugins
+import qs.DCommon.Widgets as DC
 import "procstat.js" as Stat
 
 // Top to bottom, from the number on the pill to what is behind it: the total
@@ -200,7 +201,7 @@ PopoutComponent {
 
                     // The last historyLimit readings: two minutes at the
                     // default interval, starting empty after the shell starts.
-                    DankSparkline {
+                    DC.DSparkline {
                         width: summary.width - bigNumber.width - parent.spacing
                         height: 52
                         anchors.verticalCenter: parent.verticalCenter

@@ -33,6 +33,13 @@ FocusScope {
     // The message awaiting a destination, or null.
     property var forwardSource: null
 
+    // The message awaiting a reaction, or null.
+    property var reactTarget: null
+
+    // The message of ours being edited, or null. The composer is in that mode
+    // for as long as this is set.
+    property var editTarget: null
+
     property bool showingHelp: false
 
     // Whether the window or popout this is in is the one on screen. Handed
@@ -81,7 +88,12 @@ FocusScope {
 
     // True while anything is layered over the conversation. Escape belongs to
     // the overlay then, and the modal must not act on it.
-    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null
+    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null || reactTarget !== null
+
+    // Whether Escape is this view's to answer rather than the window's to
+    // close on: an overlay, or an edit -- which is a mode the composer is in,
+    // not an overlay, since the text field keeps the keyboard throughout.
+    readonly property bool holdsEscape: hasOverlay || editTarget !== null
 
     // ------------------------------------------------------------- focus
     //
@@ -457,12 +469,72 @@ FocusScope {
             root.replyTarget = null;
             return;
         }
+        // A reply is a new message; whatever was being edited is set down.
+        root.editTarget = null;
         root.replyTarget = msg;
     }
 
     function forwardSelected() {
         if (root.selectedMessage && (root.selectedMessage.text || "") !== "")
             root.forwardSource = root.selectedMessage;
+    }
+
+    // startEdit puts one of our messages in the composer to be corrected.
+    function startEdit(msg) {
+        if (!root.chatCore.canEdit(msg))
+            return;
+        root.replyTarget = null;
+        root.selectedId = "";
+        root.editTarget = msg;
+        root.takeFocus();
+    }
+
+    // editSelected edits the selected message, or with nothing selected the
+    // last one we sent -- the same thing Up does in an empty message box.
+    function editSelected() {
+        root.startEdit(root.selectedMessage ?? root.chatCore.lastEditable());
+    }
+
+    // reactToSelected asks which reaction to put on the selected message, or
+    // with nothing selected on the newest message somebody else sent -- the
+    // one a reaction is nearly always for.
+    function reactToSelected() {
+        if (!root.chatCore.activeSupports("reactions"))
+            return;
+        let target = root.selectedMessage;
+        if (!target) {
+            const messages = root.chatCore.messages;
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const msg = messages[i];
+                if (!msg.fromMe && msg.kind !== "system" && msg.kind !== "deleted" && msg.kind !== "unsupported") {
+                    target = msg;
+                    break;
+                }
+            }
+        }
+        // Not one still on its way: the service does not know it yet.
+        if (target && target.kind !== "deleted" && target.kind !== "system" && target.status !== "pending" && target.status !== "failed")
+            root.reactTarget = target;
+    }
+
+    // jumpTo goes to a message, when it is among those loaded: a reply's quote
+    // clicked, most of all.
+    function jumpTo(messageId) {
+        const at = root.chatCore.indexOfMessage(messageId);
+        if (at >= 0)
+            root.select(at);
+    }
+
+    // pageIfShort asks for older messages when the conversation does not fill
+    // the view: with nothing to scroll, reaching the top is never something
+    // the reader can do. A provider that fetches history on request makes this
+    // the usual case for a conversation started not long before this device
+    // was signed in.
+    function pageIfShort() {
+        if (root.chatCore.messages.length === 0 || !root.chatCore.canPageOnItsOwn)
+            return;
+        if (messageList.contentHeight <= messageList.height)
+            root.chatCore.loadOlder();
     }
 
     Connections {
@@ -473,6 +545,8 @@ FocusScope {
         // back on it -- is still an open, and still has to place the view.
         function onChatOpened(provider, chatId) {
             root.replyTarget = null;
+            root.editTarget = null;
+            root.reactTarget = null;
             root.selectedId = "";
             root.pendingDelete = null;
 
@@ -487,8 +561,17 @@ FocusScope {
         // declined invitation closing the view, mostly.
         function onActiveChatIdChanged() {
             root.replyTarget = null;
+            root.editTarget = null;
+            root.reactTarget = null;
             root.selectedId = "";
             root.pendingDelete = null;
+        }
+
+        // A page in: if it still does not fill the view, the next is asked for
+        // on the reader's behalf. Once the layout has caught up, so the height
+        // compared is the new one.
+        function onHistoryLoaded(provider, chatId) {
+            Qt.callLater(root.pageIfShort);
         }
 
         // An older page arrived above. Loading it was asked for by reaching
@@ -555,6 +638,21 @@ FocusScope {
         onActivated: root.forwardSelected()
     }
 
+    // E for edit: the selected message, or the last one we sent.
+    Shortcut {
+        sequences: ["Ctrl+E"]
+        enabled: !root.hasOverlay && !root.isInvite && root.chatCore.activeSupports("edit")
+        onActivated: root.editSelected()
+    }
+
+    // T for the reaction a message gets: the selected one, or the newest
+    // somebody else sent.
+    Shortcut {
+        sequences: ["Ctrl+T"]
+        enabled: !root.hasOverlay && root.chatCore.activeSupports("reactions")
+        onActivated: root.reactToSelected()
+    }
+
     // Opens the selected message's attachment or link. Ctrl+Enter rather than
     // Shift+Enter, and only with something selected, so plain Enter keeps
     // meaning send and nothing else has to be thought about while typing.
@@ -615,6 +713,13 @@ FocusScope {
 
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Escape) {
+            // Leaving an edit is the first thing Escape does: it is a mode the
+            // composer is in, with somebody's draft set aside for it.
+            if (root.editTarget) {
+                root.editTarget = null;
+                event.accepted = true;
+                return;
+            }
             if (root.pendingDelete) {
                 root.pendingDelete = null;
                 event.accepted = true;
@@ -653,6 +758,20 @@ FocusScope {
 
         onConfirmed: root.confirmDelete()
         onCancelled: root.pendingDelete = null
+    }
+
+    ChatReactionPicker {
+        anchors.fill: parent
+        z: 15
+        visible: root.reactTarget !== null
+        focus: visible
+        message: root.reactTarget
+
+        onCancelled: root.reactTarget = null
+        onPicked: key => {
+            root.chatCore.react(root.reactTarget?.id ?? "", key);
+            root.reactTarget = null;
+        }
     }
 
     // Destination picker for a forward. An overlay rather than a separate
@@ -703,13 +822,30 @@ FocusScope {
                     width: parent.width - 34 - Theme.spacingS
                     spacing: 0
 
-                    StyledText {
+                    Row {
                         width: parent.width
-                        text: root.chatName
-                        font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
-                        color: Theme.surfaceText
-                        elide: Text.ElideRight
+                        spacing: Theme.spacingXS
+
+                        StyledText {
+                            id: nameLabel
+                            width: Math.min(implicitWidth, parent.width - (lockIcon.visible ? lockIcon.width + parent.spacing : 0))
+                            text: root.chatName
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.weight: Font.Medium
+                            color: Theme.surfaceText
+                            elide: Text.ElideRight
+                        }
+
+                        // End-to-end encrypted, when the provider says so of
+                        // this conversation -- it can differ room by room.
+                        DankIcon {
+                            id: lockIcon
+                            anchors.verticalCenter: nameLabel.verticalCenter
+                            visible: (root.chat?.tags ?? []).indexOf("encrypted") !== -1
+                            name: "lock"
+                            size: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                        }
                     }
 
                     // Who this is, in the service's own terms: the number or
@@ -718,6 +854,16 @@ FocusScope {
                     StyledText {
                         width: parent.width
                         text: {
+                            // Somebody typing says more than anything else
+                            // this line could, for as long as they are.
+                            const typing = root.chatCore.activeTyping;
+                            if (typing.length === 1)
+                                return I18n.tr("%1 is typing…").arg(typing[0]);
+                            if (typing.length === 2)
+                                return I18n.tr("%1 and %2 are typing…").arg(typing[0]).arg(typing[1]);
+                            if (typing.length > 2)
+                                return I18n.tr("%1 people are typing…").arg(typing.length);
+
                             const parts = [];
                             const handles = root.chat?.handles ?? [];
                             for (let i = 0; i < handles.length; i++)
@@ -739,7 +885,7 @@ FocusScope {
                             return parts.join("  ·  ");
                         }
                         font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.surfaceVariantText
+                        color: root.chatCore.activeTyping.length > 0 ? Theme.primary : Theme.surfaceVariantText
                         elide: Text.ElideRight
                     }
                 }
@@ -839,9 +985,15 @@ FocusScope {
                         selected: root.selectedId !== "" && root.selectedId === messageRow.modelData.id
                         previousMessage: messageRow.index > 0 ? root.chatCore.messages[messageRow.index - 1] : null
 
-                        onReplyRequested: root.replyTarget = messageRow.modelData
+                        onReplyRequested: {
+                            root.editTarget = null;
+                            root.replyTarget = messageRow.modelData;
+                        }
                         onForwardRequested: root.forwardSource = messageRow.modelData
                         onCopyRequested: root.copyMessage(messageRow.modelData)
+                        onEditRequested: root.startEdit(messageRow.modelData)
+                        onReactRequested: root.reactTarget = messageRow.modelData
+                        onQuoteClicked: messageId => root.jumpTo(messageId)
                         // What the button's tooltip says it does: for everyone
                         // only on your own message. Asking for everyone on
                         // somebody else's put up a confirmation for a delete
@@ -917,6 +1069,10 @@ FocusScope {
             visible: !root.isInvite
             onScreen: root.onScreen
             replyTarget: root.replyTarget
+            editTarget: root.editTarget
+
+            onEditCleared: root.editTarget = null
+            onEditLastRequested: root.startEdit(root.chatCore.lastEditable())
 
             // Anything in here that takes the keyboard gives it straight back.
             onFieldFocusedChanged: {

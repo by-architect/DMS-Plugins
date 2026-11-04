@@ -192,7 +192,7 @@ func TestPendingInviteSurvivesARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	store.save(b.snapshotRooms())
+	store.save(b.snapshotRooms(), b.selfID())
 
 	next := testBridge()
 	next.rooms = store.load()

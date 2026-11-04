@@ -83,6 +83,7 @@ FocusScope {
     // Surfaced for the modal, which must not close on Escape while the
     // conversation has something layered over it.
     readonly property bool hasOverlay: conversation.hasOverlay
+    readonly property bool holdsEscape: conversation.holdsEscape
 
     readonly property bool showingResults: searchField.text.trim().length >= 2 && messageHits.length > 0
 
@@ -118,10 +119,45 @@ FocusScope {
 
     function openHighlighted() {
         const chat = root.visibleChats[root.highlightIndex];
-        if (!chat)
+        if (!chat) {
+            // Nothing here by that name, but it is an address a provider can
+            // open: Enter starts it, the same as clicking the offer.
+            if (root.startProviders.length > 0)
+                root.startConversation(root.startProviders[0].id, root.startHandle);
             return;
+        }
         searchField.text = "";
         root.openConversation(chat.provider, chat.id, 0);
+    }
+
+    // What the search box holds when it looks like an address -- @someone,
+    // #a-room, !a-room-id -- which a provider that can start conversations
+    // is offered to open.
+    readonly property string startHandle: {
+        const query = searchField.text.trim();
+        if (query.length < 2 || query.indexOf(" ") !== -1)
+            return "";
+        const first = query.charAt(0);
+        return first === "@" || first === "#" || first === "!" ? query : "";
+    }
+
+    readonly property var startProviders: root.startHandle !== "" ? root.chatCore.startChatProviders : []
+
+    // Whether a conversation is being started, so the offer says so instead
+    // of being pressed twice.
+    property bool starting: false
+
+    function startConversation(providerId, handle) {
+        if (root.starting || handle === "")
+            return;
+        root.starting = true;
+        root.chatCore.startChat(providerId, handle, (chatId, error) => {
+            root.starting = false;
+            if (chatId === "")
+                return;
+            searchField.text = "";
+            root.openConversation(providerId, chatId, 0);
+        });
     }
 
     // The first enabled provider waiting to be signed in, if any. Sign-in takes
@@ -155,7 +191,14 @@ FocusScope {
             const name = (chat.name || "").toLowerCase();
             const preview = (chat.lastText || "").toLowerCase();
             const subject = (chat.subject || "").toLowerCase();
-            if (name.indexOf(query) !== -1 || preview.indexOf(query) !== -1 || subject.indexOf(query) !== -1) {
+            // And anything the conversation answers to -- a number, an
+            // address -- so typing someone's @address finds the chat you
+            // already have with them rather than offering to start another.
+            const handles = chat.handles || [];
+            let byHandle = false;
+            for (let h = 0; h < handles.length && !byHandle; h++)
+                byHandle = handles[h].toLowerCase().indexOf(query) !== -1;
+            if (byHandle || name.indexOf(query) !== -1 || preview.indexOf(query) !== -1 || subject.indexOf(query) !== -1) {
                 out.push(chat);
                 seen[chat.provider + " " + chat.id] = true;
             }
@@ -281,6 +324,70 @@ FocusScope {
                     }
                 }
 
+                // An address typed into the search box can be opened from
+                // here: a person to message, a room to join.
+                Column {
+                    id: startColumn
+                    width: parent.width
+                    spacing: Theme.spacingXS
+                    visible: root.startProviders.length > 0
+
+                    Repeater {
+                        model: root.startProviders
+
+                        StyledRect {
+                            id: offer
+
+                            required property var modelData
+                            required property int index
+
+                            width: startColumn.width
+                            height: 44
+                            radius: Theme.cornerRadius
+                            color: offerArea.containsMouse ? Theme.surfaceHover : Theme.withAlpha(Theme.primary, 0.08)
+                            // The one Enter starts, when no conversation matches.
+                            border.color: offer.index === 0 && root.visibleChats.length === 0 ? Theme.primary : "transparent"
+                            border.width: 1
+
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.spacingS
+                                anchors.rightMargin: Theme.spacingS
+                                spacing: Theme.spacingS
+
+                                DankIcon {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    name: root.starting ? "hourglass_empty" : (root.startHandle.charAt(0) === "@" ? "person_add" : "group_add")
+                                    size: Theme.iconSize
+                                    color: Theme.primary
+                                }
+
+                                StyledText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width - Theme.iconSize - Theme.spacingS
+                                    text: {
+                                        if (root.starting)
+                                            return I18n.tr("Opening %1…").arg(root.startHandle);
+                                        return root.startHandle.charAt(0) === "@" ? I18n.tr("Message %1 on %2").arg(root.startHandle).arg(offer.modelData.name) : I18n.tr("Join %1 on %2").arg(root.startHandle).arg(offer.modelData.name);
+                                    }
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceText
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+
+                            MouseArea {
+                                id: offerArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                enabled: !root.starting
+                                onClicked: root.startConversation(offer.modelData.id, root.startHandle)
+                            }
+                        }
+                    }
+                }
+
                 // The list and what is shown in its place share one area, sized
                 // to what is left under the search box and the filter line.
                 // The empty states used to sit in the column after a list
@@ -288,7 +395,7 @@ FocusScope {
                 // below the bottom of the window where nobody saw them.
                 Item {
                     width: parent.width
-                    height: parent.height - searchRow.height - Theme.spacingS - (filterRow.visible ? filterRow.height + Theme.spacingS : 0)
+                    height: parent.height - searchRow.height - Theme.spacingS - (filterRow.visible ? filterRow.height + Theme.spacingS : 0) - (startColumn.visible ? startColumn.height + Theme.spacingS : 0)
 
                     DankListView {
                         id: chatList
@@ -332,6 +439,8 @@ FocusScope {
                                 return I18n.tr("No chat providers installed.\nAdd one from Settings → Plugins.");
                             if (!root.chatCore.hasEnabledProvider)
                                 return I18n.tr("No chat providers enabled.\nTurn one on in Settings → Plugins.");
+                            if (root.startProviders.length > 0)
+                                return I18n.tr("No conversation with %1 yet.\nPress Enter to start one.").arg(root.startHandle);
                             if (searchField.text !== "")
                                 return I18n.tr("No conversations match.");
                             return I18n.tr("No conversations yet.");

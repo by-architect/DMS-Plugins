@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -25,7 +26,10 @@ import (
 // once, and writes down that it has. The version below is what makes "once"
 // mean once per kind rather than once ever: bump it and every installation
 // re-checks one more time.
-const catchUpVersion = 1
+//
+//	1  invitations, and where each room had been read
+//	2  room and profile pictures, which no earlier version kept
+const catchUpVersion = 2
 
 // catchUpFilter asks for standing state and almost no content.
 //
@@ -78,6 +82,11 @@ func (b *bridge) catchUp(ctx context.Context, client *mautrix.Client) {
 		if joined == nil {
 			continue
 		}
+		// The room's state as it stands -- its picture above all, which no
+		// version before this one kept, and the members the filter brings.
+		// It is current state, so it goes through the ordinary handlers.
+		b.applyStrippedState(roomID, joined.State.Events)
+
 		// Only our own receipt. Everyone else's says who has read our messages,
 		// which the sync loop reports as it happens and which would be
 		// thousands of status frames about messages this device never had.
@@ -95,6 +104,81 @@ func (b *bridge) catchUp(ctx context.Context, client *mautrix.Client) {
 
 	b.publishChunked(append(invites, read...))
 	if len(invites) > 0 || len(read) > 0 {
+		b.persistRooms()
+	}
+
+	// A direct chat looks like the person in it, whose picture the filter's
+	// lazily loaded members leave out whenever the last word was ours.
+	go b.catchUpFaces(ctx, client)
+}
+
+// catchUpFaces finds the picture of the other person in each direct chat that
+// has none yet, once, in the background.
+func (b *bridge) catchUpFaces(ctx context.Context, client *mautrix.Client) {
+	type face struct {
+		roomID id.RoomID
+		user   id.UserID
+	}
+
+	b.mu.RLock()
+	self := b.selfIDLocked()
+	var wanted []face
+	for roomID, info := range b.rooms {
+		if !info.IsDirect || info.Left || info.Invited || !info.AvatarURL.IsEmpty() {
+			continue
+		}
+		var other id.UserID
+		others := 0
+		for member := range info.Members {
+			if member != self {
+				other = member
+				others++
+			}
+		}
+		if others == 1 && info.MemberAvatars[other].IsEmpty() {
+			wanted = append(wanted, face{roomID: roomID, user: other})
+		}
+	}
+	b.mu.RUnlock()
+
+	if len(wanted) == 0 {
+		return
+	}
+
+	// Bounded, like every burst here: a homeserver rate-limits a client that
+	// asks for two hundred things at once.
+	const parallel = 4
+	sem := make(chan struct{}, parallel)
+	var mu sync.Mutex
+	var found []id.RoomID
+	var wg sync.WaitGroup
+
+	for _, f := range wanted {
+		wg.Add(1)
+		go func(f face) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var member event.MemberEventContent
+			if err := client.StateEvent(ctx, f.roomID, event.StateMember, string(f.user), &member); err != nil {
+				return
+			}
+			avatar := member.AvatarURL.ParseOrIgnore()
+			if avatar.IsEmpty() {
+				return
+			}
+			b.updateRoom(f.roomID, func(info *roomInfo) { info.MemberAvatars[f.user] = avatar })
+			mu.Lock()
+			found = append(found, f.roomID)
+			mu.Unlock()
+		}(f)
+	}
+	wg.Wait()
+
+	if len(found) > 0 && ctx.Err() == nil {
+		logf("debug", "found pictures for %d direct chat(s)", len(found))
+		b.publishChunked(found)
 		b.persistRooms()
 	}
 }

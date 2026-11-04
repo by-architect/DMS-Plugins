@@ -22,10 +22,11 @@ Item {
 
     property string lastFired: ""
     property int sends: 0
+    property int editLasts: 0
 
     // Everything the conversation binds while a message can be written. All of
     // these must arrive, in every state, without touching what is being typed.
-    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
+    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+E", "Ctrl+T", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
 
     // The two answers to an invitation. An invitation has no composer -- the
     // field is hidden, and the keyboard with it -- so these never compete with
@@ -46,6 +47,8 @@ Item {
             "Ctrl+J": [Qt.Key_J, Qt.ControlModifier],
             "Ctrl+R": [Qt.Key_R, Qt.ControlModifier],
             "Ctrl+F": [Qt.Key_F, Qt.ControlModifier],
+            "Ctrl+E": [Qt.Key_E, Qt.ControlModifier],
+            "Ctrl+T": [Qt.Key_T, Qt.ControlModifier],
             "Ctrl+Y": [Qt.Key_Y, Qt.ControlModifier],
             "Ctrl+N": [Qt.Key_N, Qt.ControlModifier],
             "Ctrl+Shift+C": [Qt.Key_C, Qt.ControlModifier | Qt.ShiftModifier],
@@ -112,6 +115,17 @@ Item {
             event.accepted = true;
         }
 
+        // ComposerField's Up, word for word: with nothing typed it asks to
+        // edit the last message; with text it is the cursor's.
+        function onUp(event) {
+            if (field.text === "" && !(event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+                window.editLasts++;
+                event.accepted = true;
+                return;
+            }
+            event.accepted = false;
+        }
+
         TextEdit {
             id: field
 
@@ -120,6 +134,7 @@ Item {
             Keys.forwardTo: [pasteKeys]
             Keys.onReturnPressed: event => composer.onReturn(event)
             Keys.onEnterPressed: event => composer.onReturn(event)
+            Keys.onUpPressed: event => composer.onUp(event)
         }
     }
 
@@ -272,6 +287,22 @@ Item {
             keyClick(Qt.Key_Return);
             compare(window.sends, 1, "Enter sends");
             compare(field.text, "hello\nw", "and sending is the composer's to do, not a newline's");
+        }
+
+        // Up in an empty box goes back to edit the last message sent; in a
+        // message being written it moves the cursor up a line, as ever.
+        function test_up_edits_the_last_message_only_when_nothing_is_typed() {
+            field.text = "";
+            window.editLasts = 0;
+            keyClick(Qt.Key_Up);
+            compare(window.editLasts, 1, "Up in an empty box should ask to edit the last message");
+
+            field.text = "first line\nsecond";
+            field.cursorPosition = field.text.length;
+            keyClick(Qt.Key_Up);
+            compare(window.editLasts, 1, "Up with text typed must not start an edit");
+            verify(field.cursorPosition <= "first line".length, "Up with text typed should move the cursor to the line above");
+            compare(field.text, "first line\nsecond", "and change nothing that was typed");
         }
 
         // What Markdown needs: a code block pasted or typed keeps its lines.

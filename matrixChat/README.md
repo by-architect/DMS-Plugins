@@ -1,8 +1,10 @@
 # Matrix for DMS
 
 Connects DMS to a Matrix homeserver — Synapse, Conduit, Dendrite, or matrix.org
-itself. Rooms, direct messages, attachments, replies and read receipts show up in
-the DMS chat window, **including end-to-end encrypted rooms**.
+itself. Rooms, direct messages, attachments, replies, reactions, edits, typing
+and read receipts show up in the DMS chat window, **including end-to-end
+encrypted rooms** — with the history before this device signed in, your
+account's own notification settings, and room pictures.
 
 This is a DMS *chat plugin*: it ships a small program called a **bridge** rather
 than QML. The bridge translates Matrix into newline-delimited JSON and hands it
@@ -58,8 +60,9 @@ sign in before enabling the plugin, or are working on the bridge outside DMS.
 ## Encrypted history, and how to unlock it
 
 **Signing in creates a new device**, exactly as adding Element on a new phone
-does. A new device has no keys to messages sent before it existed. Those
-messages are not shown here at all -- this bridge does not fetch older history.
+does. A new device has no keys to messages sent before it existed. Scrolling
+back fetches them all the same (see "Older history" below); the ones it cannot
+decrypt yet show as waiting, and are filled in once the device is verified.
 
 An encrypted message that arrives but cannot be decrypted yet -- most of what a
 new device sees in its first sync, or a message whose sender shared the key
@@ -117,20 +120,25 @@ Unencrypted rooms are readable immediately either way.
 | Send and receive text | yes |
 | End-to-end encrypted rooms | yes, via pure-Go olm |
 | Messages that cannot be decrypted yet | shown as waiting, and filled in when their key arrives — see above |
-| Replies | yes |
-| Message edits | yes — the edit replaces the original in place |
+| Replies | yes — click the quote to go to what it answers |
+| Message edits | yes, both ways — `Ctrl+E`, or `↑` in an empty box, edits your last message; edited messages say so |
+| Reactions | yes, both ways — `Ctrl+T`, or press one under a message; encrypted in encrypted rooms |
+| Typing | yes, both ways — "Ada is typing…" under the room's name |
 | Images, video, audio, files | yes, including encrypted attachments |
 | Formatted messages | yes — Markdown both ways, see "Formatting" below |
 | Read receipts | yes, both ways — what you read elsewhere counts as read here |
-| Rooms, with per-room display names | yes |
+| Rooms, with per-room display names and pictures | yes |
 | Delete for everyone (redaction) | yes |
-| Direct messages named after the other person | yes |
+| Direct messages named after, and pictured as, the other person | yes |
 | Spaces | listed and taggable, but they are containers rather than conversations |
 | Invitations | shown in the conversation list, and joined or declined from it |
-| History before this device existed | not shown — see "Signing in creates a new device" above |
-| Backfill of older messages | not yet — the room shows what has arrived since signing in |
+| Starting a direct chat, joining a room | yes — type `@name:server` or `#room:server` into the search box |
+| History before this device existed | fetched as you scroll back — see "Older history" below |
+| Messages missed while the shell was off | fetched when it comes back, even past the 50 a sync carries |
+| Notification settings (All / Mentions / Mute) | followed — see "Notifications" below |
+| Signing out | on this plugin's settings page |
 | Search | local only — the DMS store indexes what it has received |
-| Reactions, threads, calls, spaces as hierarchy | not modelled by the contract yet |
+| Threads, calls, spaces as hierarchy | not modelled by the contract yet — a thread reply shows as a reply |
 
 ## Formatting
 
@@ -159,6 +167,56 @@ sent from DMS, that body is the pipe table as you typed it. A numbered list
 starting at an absurd number (ten digits or more) also arrives as the plain
 body. Converting it would crash the bridge, so the HTML is not converted.
 
+## Older history
+
+Scrolling to the top of a conversation fetches what came before it from the
+homeserver, a page at a time — the whole room, as far back as your account may
+see it, not just what has arrived since this device signed in. A conversation
+too short to scroll fetches on its own. The homeserver's
+`/timestamp_to_event` finds where to start; a homeserver without it is walked
+back from the newest message instead, which is slower but gets there.
+
+History is decrypted with whatever keys this device has, and what it has no key
+for yet shows as *Waiting for this message* and is tried again like anything
+else — so verifying the device with the recovery key fills in the history too.
+None of it counts as unread, and none of it notifies.
+
+The other kind of gap is fixed by itself. After time away, a sync brings each
+room's newest 50 events and nothing before them; a busy room's messages from
+the middle of that absence used to be simply missing. They are fetched right
+after the sync, a couple of rooms at a time, up to a thousand messages a room.
+Those can be unread — they arrived while nobody was looking — but they do not
+notify: the newest ones already said there was something new.
+
+## Notifications
+
+Matrix keeps your notification settings on the homeserver, shared by every
+client of the account, and DMS follows them: a room set to **Mentions and
+keywords** in Element only notifies here when you are mentioned, a **muted**
+room never does, and a message that mentions you gets through even if group
+notifications are off in the Chat Manager's settings. Keywords and
+**Disable notifications** for the whole account work the same way.
+
+Mute goes both ways: a room muted in Element shows as muted here, and muting a
+conversation here mutes the room in Element too. Turn **Follow my Matrix
+notification settings** off below and DMS's own settings decide alone, as they
+did before.
+
+## Starting a conversation
+
+Type an address into the chat window's search box: `@name:server` for a person
+— a direct chat with them, or the one you already have — or `#room:server`
+(or a `!room-id`) for a room to join. `Enter` opens it. The server can be left
+off for someone on your own homeserver: `@ada` means `@ada:your.server`.
+
+A new direct chat is created the way Element creates one: private, marked as a
+direct chat for both of you, and encrypted from the start. Without encryption
+working on this device it is not created at all.
+
+```sh
+dms ipc call chats start matrixChat "@ada:example.org"
+```
+
 ## What counts as unread
 
 Matrix keeps your read position for every room, and every client of yours moves
@@ -168,7 +226,9 @@ conversation arrives.
 
 Rooms read before this bridge learned to look are caught up on once, at the next
 start — one filtered sync, recorded in `~/.local/share/dms-matrix/catchup` so no
-later start repeats it.
+later start repeats it. The first start of the version with pictures runs it
+once more, to find the pictures earlier versions never kept, and asks for the
+picture of the other person in each direct chat.
 
 The other direction works too: opening a conversation here posts a read receipt
 for the newest message in it, so a room read on this machine stops being unread
@@ -203,10 +263,18 @@ chat filters below. That only hides them; nothing is answered on your behalf.
 
 On the plugin's own settings page, **Settings → Plugins → Matrix Chat**:
 
+- **Account** — who is signed in, on which homeserver and device, whether the
+  device is verified and the key backup connected, how many messages are still
+  waiting for their keys — and **Sign out**, after asking, optionally deleting
+  the Matrix messages stored on this computer as well.
 - **Send read receipts** — off still clears your own unread count; it only stops
   telling the sender.
 - **Download attachments automatically**, and a size limit above which they wait
   until you open them.
+- **Send typing notifications** — off still shows you when others are typing.
+- **Follow my Matrix notification settings** — see "Notifications" above.
+- **Show pictures** — room and profile pictures, fetched from your homeserver as
+  small thumbnails.
 - **Chat filters** — which categories appear in the conversation list and the
   chat runner. Hiding is only hiding: search still finds them and nothing is
   deleted.
@@ -219,7 +287,8 @@ On the plugin's own settings page, **Settings → Plugins → Matrix Chat**:
 | Encryption keys | `~/.local/share/dms-matrix/crypto.db` | matrixChat |
 | Sync position | `~/.local/share/dms-matrix/sync.json` | matrixChat |
 | One-off catch-up marker | `~/.local/share/dms-matrix/catchup` | matrixChat |
-| Room names and pending invitations | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
+| Room names, pictures' addresses, pending invitations, how far back history has been fetched | `~/.local/share/dms-matrix/rooms.json` | matrixChat |
+| Room and profile pictures | `~/.cache/DankMaterialShell/chat/media/matrixChat/avatars/` | matrixChat, in DMS's cache |
 | Messages waiting for their keys | `~/.local/share/dms-matrix/undecryptable.json`, mode 0600 | matrixChat |
 | Messages and conversations | `~/.local/share/DankMaterialShell/chat/history.db` | DMS |
 | Cached attachments | `~/.cache/DankMaterialShell/chat/media/` | DMS |
@@ -229,9 +298,9 @@ On the plugin's own settings page, **Settings → Plugins → Matrix Chat**:
 key beside it decrypts your message keys. Keep both out of dotfile repos and
 shared backups.
 
-Signing out logs the device out on the homeserver and deletes the session, the
-crypto store, the sync position and the room cache locally. Stock DMS has no
-Sign out button for it yet; removing the DankMaterialShell session from another
+Signing out — the button on this plugin's settings page — logs the device out
+on the homeserver and deletes the session, the crypto store, the sync position
+and the room cache locally. Removing the DankMaterialShell session from another
 client (Element: Settings → Sessions) does the same locally on the bridge's next
 sync, and puts the sign-in form back. The crypto store goes with the session
 deliberately: keeping it would leave a later login inheriting keys for a device
@@ -260,6 +329,8 @@ output there too.
 | Sign-in says the password was not accepted | The homeserver's own words; check the user id form, `@you:example.org` |
 | Rooms are named after their id | The first sync is still filling in state; it settles within a few seconds |
 | Messages say *Waiting for this message* | This device does not have their key yet. Verify it with your recovery key: the backup is restored, other people's devices start sharing with it, and every waiting message is tried again. Keeping another of your devices (Element) signed in lets it answer this one's requests for missing keys |
+| Scrolling up stops early | The homeserver says that is as far back as your account may see — rooms that only show history from when you joined |
+| A room notifies although it is muted in Element | **Follow my Matrix notification settings** is off, or the shell started before the first sync brought the settings |
 | A room is missing | It may be filtered out; check **Chat filters**, especially Spaces and Low priority |
 | Attachment will not open | The download error is in the shell's log (`quickshell log`). Encrypted attachments received before the version that kept their key are opened by fetching their message again for it, which needs that message to be decryptable on this device. One that was already downloaded back then was saved still encrypted, and DMS keeps opening that copy |
 

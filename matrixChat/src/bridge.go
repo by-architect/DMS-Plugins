@@ -14,6 +14,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/pushrules"
 
 	_ "modernc.org/sqlite"
 )
@@ -54,8 +55,26 @@ type bridge struct {
 	degraded bool
 
 	// history holds what an initial sync carried until the response has been
-	// read through, so it reaches the host as a batch -- see onMessage.
-	history []messageObj
+	// read through, so it reaches the host as a batch -- see onMessage -- and
+	// heldReactions the reactions to it, sent straight after.
+	history       []messageObj
+	heldReactions []reactionObj
+
+	// calls is where the host's calls wait their turn. See lanes.go.
+	calls lanes
+
+	// pushRules is the account's push rules -- Matrix's notification
+	// settings, which every client of the account shares -- or nil until the
+	// sync has brought them. See pushrules.go.
+	pushRules *pushrules.PushRuleset
+
+	// gapFills is the rooms whose missed messages are being fetched right
+	// now, so a second limited sync does not start the same walk twice. See
+	// history.go.
+	gapFills map[id.RoomID]bool
+
+	// avatars fetches pictures in the background. See avatars.go.
+	avatars avatarFetcher
 
 	// dispatching is set while a sync response is being read through, which
 	// is when a placeholder for an undecryptable message is held back with
@@ -248,6 +267,12 @@ func (b *bridge) startClient(sess *session) error {
 	// and both decide whether an arriving message is worth interrupting
 	// someone for. Costs nothing on a start that has already caught up.
 	b.catchUp(ctx, client)
+
+	// The account's notification settings, likewise: a sync resumed from a
+	// stored position only carries them when they change, so without asking
+	// they would not be known until the user next edited them in Element --
+	// and every message would be judged without them. See pushrules.go.
+	b.loadPushRules(ctx, client)
 
 	done := make(chan struct{})
 	b.mu.Lock()
@@ -454,8 +479,10 @@ func (b *bridge) dropClient() {
 	b.crypto, b.db, b.waiting = nil, nil, nil
 	b.rooms = map[id.RoomID]*roomInfo{}
 	b.firstSyncDone, b.degraded = false, false
-	b.history = nil
+	b.history, b.heldReactions = nil, nil
 	b.dispatching, b.retryFull = false, false
+	b.pushRules = nil
+	b.gapFills = nil
 	b.mu.Unlock()
 
 	// Kept on disk past the session: see waitingFile.
@@ -519,6 +546,9 @@ func (b *bridge) handleLogin(ctx context.Context, c call) {
 // two things. Nothing here is remembered between attempts: a failed password is
 // not worth keeping, and keeping it is exactly what this design avoids.
 func (b *bridge) emitLoginForm() {
+	// Signed out, so there is no account for the settings page to describe.
+	emitEvent("account", map[string]any{"account": nil})
+
 	emitEvent("auth", map[string]any{
 		"method": "form",
 		"title":  "Sign in to your Matrix homeserver.",
@@ -642,16 +672,6 @@ func (b *bridge) handleLogout(ctx context.Context, c call) {
 
 	emitState("needsLogin")
 	b.emitLoginForm()
-	ok(c.ID, nil)
-}
-
-// handleHistory is asked to backfill older messages.
-//
-// Matrix does have a real backfill API, and this is where /messages would be
-// paginated into the store. It is not implemented yet: answering ok with no
-// messages is the contract's way of saying there is nothing more right now,
-// which stops the conversation view retrying rather than leaving it spinning.
-func (b *bridge) handleHistory(c call) {
 	ok(c.ID, nil)
 }
 

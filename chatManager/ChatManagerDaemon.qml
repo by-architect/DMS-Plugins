@@ -169,6 +169,25 @@ PluginComponent {
             return "CHATS_OPEN_SUCCESS";
         }
 
+        // A conversation opened from an address, where the provider can: a
+        // person you have no conversation with yet, a room to join. The
+        // existing conversation, when there is one.
+        //
+        // Answered before it is open, since opening means asking the provider;
+        // if it refuses, a toast says why.
+        function start(provider: string, handle: string): string {
+            if (!chatCore.available)
+                return "CHATS_UNAVAILABLE: the chat manager is not running";
+            if (!chatCore.supports(provider, "startChat"))
+                return `CHATS_UNSUPPORTED: ${provider} cannot start conversations`;
+
+            chatCore.startChat(provider, handle, chatId => {
+                if (chatId !== "")
+                    root.openChatPopout(provider, chatId);
+            });
+            return "CHATS_START_PENDING";
+        }
+
         // Step through the conversations with something waiting, one per
         // press: the keybind equivalent of working down the unread list.
         //

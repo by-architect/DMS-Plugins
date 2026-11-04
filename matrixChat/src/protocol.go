@@ -47,9 +47,14 @@ type chatObj struct {
 	// ReadUpTo is how far this conversation has been read, as Matrix itself
 	// knows it: our own read receipt, wherever it was sent from. Without it a
 	// room read on a phone an hour ago comes back unread here, and notifies.
-	ReadUpTo   int64  `json:"readUpTo,omitempty"`
-	Archived   bool   `json:"archived,omitempty"`
-	Muted      bool   `json:"muted,omitempty"`
+	ReadUpTo int64 `json:"readUpTo,omitempty"`
+	Archived bool  `json:"archived,omitempty"`
+	// Muted is said only when the room's mute on Matrix itself has changed --
+	// set or lifted in Element, say -- so a mute the user set here is never
+	// undone by an ordinary republish. Nil is "no news". See pushrules.go.
+	Muted *bool `json:"muted,omitempty"`
+	// AvatarPath is the room's picture, or for a direct chat the other
+	// person's, once it has been fetched into the media directory.
 	AvatarPath string `json:"avatarPath,omitempty"`
 	// Subject is the room topic. The contract carries it for mail-shaped
 	// providers; a Matrix topic is the same idea.
@@ -75,8 +80,10 @@ type messageObj struct {
 	FromMe     bool   `json:"fromMe,omitempty"`
 	SenderID   string `json:"senderId,omitempty"`
 	SenderName string `json:"senderName,omitempty"`
-	Kind       string `json:"kind,omitempty"`
-	Text       string `json:"text,omitempty"`
+	// SenderAvatarPath is the sender's picture in this room, once fetched.
+	SenderAvatarPath string `json:"senderAvatarPath,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	Text             string `json:"text,omitempty"`
 	// BodyHTML is the formatted body. Matrix sends HTML alongside the plain
 	// text, so the host can render it without the bridge flattening it first.
 	BodyHTML string `json:"bodyHtml,omitempty"`
@@ -101,6 +108,28 @@ type messageObj struct {
 	FileName   string `json:"fileName,omitempty"`
 	FileSize   int64  `json:"fileSize,omitempty"`
 	Duration   int    `json:"duration,omitempty"`
+
+	// EditedTS is when this text replaced the original, for an edit. The host
+	// keeps the newest version whichever order the copies arrive in.
+	EditedTS int64 `json:"editedTs,omitempty"`
+
+	// What the account's own Matrix notification settings say about a message
+	// arriving now: Silent when they would not notify for it -- a room muted
+	// or set to mentions only in Element -- and Highlight when it mentions us.
+	Silent    bool `json:"silent,omitempty"`
+	Highlight bool `json:"highlight,omitempty"`
+}
+
+// reactionObj is one reaction, an m.reaction annotating a message.
+type reactionObj struct {
+	ID         string `json:"id"`
+	ChatID     string `json:"chatId"`
+	MessageID  string `json:"messageId"`
+	Key        string `json:"key"`
+	SenderID   string `json:"senderId,omitempty"`
+	SenderName string `json:"senderName,omitempty"`
+	FromMe     bool   `json:"fromMe,omitempty"`
+	TS         int64  `json:"ts,omitempty"`
 }
 
 // out serialises stdout across the reader goroutine and every WhatsApp event

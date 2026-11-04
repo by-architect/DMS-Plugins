@@ -55,6 +55,7 @@ dms ipc call chats toggle                   # the window, with the conversation 
 dms ipc call chats popout "Ada"             # one conversation, by name, number or address
 dms ipc call chats conversation whatsappChat "<id>"   # by provider and id
 dms ipc call chats unread                   # the next conversation with something waiting
+dms ipc call chats start matrixChat "@ada:example.org"   # start one, where the provider can
 dms ipc call chats status                   # is the manager up, and what is enabled
 ```
 
@@ -218,6 +219,130 @@ open, so a conversation opened from the launcher would otherwise be placed by a
 cache that can be hours old and cheerfully report nothing waiting; and marking it
 read before asking would erase the very thing being asked for.
 
+### Older history
+
+A provider that can fetch older messages declares the `history` capability.
+The conversation then offers to page past what this device has stored --
+reaching the top of it, or opening one too short to scroll, asks for more --
+and the host asks the provider instead of stopping where it happened to start
+listening:
+
+```json
+{"id":21,"method":"history","params":{"chatId":"…","before":1755300000000,"limit":50}}
+```
+
+The bridge sends what it found as a batch marked `backfill`, then answers
+whether there is anything older still:
+
+```json
+{"event":"messages","backfill":true,"messages":[…]}
+{"id":21,"ok":true,"result":{"hasMore":true}}
+```
+
+The host waits for the answer -- on a lane of its own, so nothing else waits
+with it -- makes sure the batch is stored, and pages again, so the page the
+shell gets holds what was fetched. `hasMore: false` is the beginning, and is
+remembered: that conversation is not asked again until the manager restarts.
+A backfill batch is never counted as unread, whatever the read position says;
+nobody is waiting on history. A provider without the capability is still asked
+when the store has nothing older, without waiting, as before.
+
+### Reactions
+
+`reactions` is a provider where a message can carry them. It reports each one,
+with its own id:
+
+```json
+{"event":"reaction","reaction":{"id":"$r","chatId":"…","messageId":"$m","key":"👍","senderId":"…","senderName":"Ada","fromMe":false,"ts":1755300000000}}
+```
+
+(and a `reactions` batch of them), and answers `react` with the new reaction's
+id and `unreact` by taking one back:
+
+```json
+{"id":22,"method":"react","params":{"chatId":"…","messageId":"$m","key":"👍"}}
+→ {"id":22,"ok":true,"result":{"reactionId":"$r"}}
+{"id":23,"method":"unreact","params":{"chatId":"…","messageId":"$m","reactionId":"$r","key":"👍"}}
+```
+
+A reaction taken back elsewhere arrives as an ordinary `deleted` event naming
+the reaction's id; the host knows a deletion can name a reaction. Reactions are
+stored apart from messages, so an edit or a redelivery never loses them, and a
+page of messages comes with them summed up per key -- how many, who, and
+whether one is ours.
+
+### Edits
+
+`edit` is a provider that lets you change the text of a message you sent:
+
+```json
+{"id":24,"method":"edit","params":{"chatId":"…","messageId":"$m","text":"corrected"}}
+```
+
+Only text messages, and only your own: an edit is a whole new message on most
+services, and a caption edited as plain text would turn a photo into words on
+everyone else's screen. Edits arriving from the service carry `editedTs` on the
+message, which the store goes by: an older copy of a message -- the original,
+paged in after its correction -- never puts back text that was corrected, an
+"edit" from anyone but the author is ignored, and the message stays where it
+was written rather than where it was edited.
+
+### Typing
+
+`typing` is a provider that says who is typing, and passes on that you are:
+
+```json
+{"event":"typing","chatId":"…","users":["Ada"]}
+{"id":25,"method":"typing","params":{"chatId":"…","typing":true}}
+```
+
+The whole list each time, empty when nobody is. It goes straight to the shell
+as a `chat.typing` push -- never stored, and never waiting for a state update.
+The shell says typing at most every few seconds while you type, and says it has
+stopped when the field empties, the message goes, or you pause.
+
+### Starting a conversation
+
+`startChat` opens a conversation from whatever reaches it on that service -- a
+user, a room address -- and answers with its id:
+
+```json
+{"id":26,"method":"startChat","params":{"handle":"@ada:example.org"}}
+→ {"id":26,"ok":true,"result":{"chatId":"!room:example.org","name":"Ada"}}
+```
+
+What a handle is, and the words when it is not one, are the provider's. The
+window offers it when the search box holds something that looks like an
+address -- starting with `@`, `#` or `!` -- and `dms ipc call chats start
+<provider> <handle>` does it from a keybind.
+
+### Notification settings the service keeps
+
+Some services keep notification settings of their own, shared by every client
+of the account. A provider can pass them on per message, and both hints are
+optional:
+
+| On a message | Means |
+|---|---|
+| `"silent": true` | the service's settings would not notify for it -- a room set to mentions only, say. Stored and counted like any other; never a notification |
+| `"highlight": true` | it mentions the user, and gets through even with group notifications off |
+
+`mute` is a provider that also keeps a mute set here in step with its service:
+muting a conversation in the window sends `setMuted` (chatId, muted), and a
+conversation muted elsewhere arrives with `"muted": true` on its chat.
+
+### The account, for the provider's own settings page
+
+A provider can describe the account it is signed in to:
+
+```json
+{"event":"account","account":{"userId":"@ada:example.org","verified":true}}
+```
+
+The host keeps the latest and hands it over as `account` on the provider's
+status, untouched -- what is in it is between the bridge and its own settings
+page. `null` is signed out.
+
 ### Notifications wait for the sync to finish
 
 A bridge that has just connected is not reporting news. It is replaying what
@@ -281,7 +406,9 @@ anywhere.
 ```
 
 The manager's Go tests, a parse check over every QML file, and the QtTest suites
-in `tests/`. The QML here cannot be loaded outside DMS, so what the suites cover
+in `tests/`, run on the Qt that quickshell itself is built on -- key handling
+differs between Qt releases, and an older Qt lying around in the Nix store once
+failed paste tests that pass in the shell. The QML here cannot be loaded outside DMS, so what the suites cover
 is what stands on its own and has been wrong before: the rules a message's links
 go through (`links.js`), and the key behaviour the whole keymap rests on — which
 chords a focused text field takes for itself, checked against every state a
@@ -320,8 +447,9 @@ in this conversation changes nothing on screen.
 
 Everything the shell asks goes down one socket, and most of it is a quick read
 of the store, answered in the order it arrived. What waits on a provider --
-sending, fetching an attachment, signing in, switching a provider on -- is
-answered on a lane of its own, so a photo being uploaded does not freeze
-switching conversation or the launcher's lookups. Requests on the same lane
+sending, editing, reacting, fetching an attachment or an older page, signing
+in, switching a provider on -- is answered on a lane of its own, so a photo
+being uploaded does not freeze switching conversation or the launcher's
+lookups. Requests on the same lane
 still keep their order: two messages sent into one conversation never overtake
 each other.

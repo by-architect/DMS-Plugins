@@ -37,6 +37,7 @@ FocusScope {
     readonly property bool resolving: popout?.resolving ?? false
 
     readonly property bool hasOverlay: conversation.hasOverlay
+    readonly property bool holdsEscape: conversation.holdsEscape
 
     readonly property bool showingConversation: !resolving && candidates.length === 0 && resolveError === ""
 

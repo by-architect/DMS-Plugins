@@ -30,6 +30,10 @@ Item {
 
     property var replyTarget: null
 
+    // The message of ours being edited, or null. Its text is put in the field
+    // to be changed, and Enter replaces it rather than sending a new message.
+    property var editTarget: null
+
     // Whether the window or popout this composer is in is the one on screen.
     //
     // There are two composers -- the window keeps one loaded for good, and the
@@ -41,6 +45,39 @@ Item {
 
     signal sent
     signal replyCleared
+    signal editCleared
+
+    // Up was pressed with nothing typed: go back and edit the last message.
+    signal editLastRequested
+
+    // What was in the field when editing began, put back when it ends -- a
+    // half-written message is not lost to a quick correction of the last one.
+    property var _stash: null
+
+    onEditTargetChanged: {
+        if (root.editTarget) {
+            if (root._stash === null)
+                root._stash = {
+                    "text": input.text,
+                    "staged": root.staged.slice()
+                };
+            root._restoringDraft = true;
+            input.text = root.editTarget.text || "";
+            input.cursorPosition = input.text.length;
+            root._restoringDraft = false;
+            root.staged = [];
+            root.takeFocus();
+            return;
+        }
+        if (root._stash !== null) {
+            root._restoringDraft = true;
+            input.text = root._stash.text;
+            input.cursorPosition = input.text.length;
+            root._restoringDraft = false;
+            root.staged = root._stash.staged;
+            root._stash = null;
+        }
+    }
 
     // The conversation this composer's text belongs to, and so the one its
     // draft is filed under. Followed with a delay of one turn, because opening
@@ -90,6 +127,12 @@ Item {
     function _saveDraft() {
         if (root._draftChatId === "")
             return;
+        // While editing, the field holds the message being corrected; the
+        // draft is what was set aside for it.
+        if (root._stash !== null) {
+            root.chatCore.saveDraft(root._draftProvider, root._draftChatId, root._stash.text, root._stash.staged);
+            return;
+        }
         root.chatCore.saveDraft(root._draftProvider, root._draftChatId, input.text, root.staged);
     }
 
@@ -144,10 +187,13 @@ Item {
 
     readonly property bool hasStaged: staged.length > 0
 
-    height: replyBar.height + stagedStrip.height + inputRow.height + Theme.spacingS * 2 + (replyBar.visible ? Theme.spacingXS : 0) + (stagedStrip.visible ? Theme.spacingXS : 0)
+    height: editBar.height + replyBar.height + stagedStrip.height + inputRow.height + Theme.spacingS * 2 + (editBar.visible ? Theme.spacingXS : 0) + (replyBar.visible ? Theme.spacingXS : 0) + (stagedStrip.visible ? Theme.spacingXS : 0)
 
     function stage(path) {
         if (!path)
+            return;
+        // An edit changes words; a file is a message of its own.
+        if (root.editTarget)
             return;
         const clean = String(path).replace("file://", "").trim();
         if (clean === "")
@@ -172,6 +218,17 @@ Item {
         const text = input.text.trim();
         if (!root.canSend)
             return;
+
+        if (root.editTarget) {
+            const target = root.editTarget;
+            // Emptying a message is deleting it, which has its own key and
+            // its own confirmation; and unchanged is no edit at all.
+            if (text !== "" && text !== (target.text || "").trim())
+                root.chatCore.editMessage(target.id, text, null);
+            root.editCleared();
+            return;
+        }
+
         if (text === "" && !root.hasStaged)
             return;
 
@@ -372,6 +429,51 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
         anchors.margins: Theme.spacingS
         spacing: Theme.spacingXS
 
+        // What is being edited, with a way out of it.
+        StyledRect {
+            id: editBar
+            width: parent.width
+            height: root.editTarget ? editRow.implicitHeight + Theme.spacingS : 0
+            visible: root.editTarget !== null
+            radius: Theme.cornerRadius / 2
+            color: Theme.withAlpha(Theme.primary, 0.1)
+
+            Row {
+                id: editRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Theme.spacingS
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "edit"
+                    size: Theme.fontSizeMedium
+                    color: Theme.primary
+                }
+
+                StyledText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - Theme.fontSizeMedium - 32 - Theme.spacingS * 2
+                    text: root.editTarget ? I18n.tr("Editing: %1").arg(root.chatCore.previewText(root.editTarget.text, root.editTarget.provider ?? root.chatCore.activeProvider)) : ""
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    elide: Text.ElideRight
+                }
+
+                DankActionButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    buttonSize: 24
+                    iconSize: Theme.fontSizeSmall
+                    iconName: "close"
+                    iconColor: Theme.surfaceVariantText
+                    tooltipText: I18n.tr("Stop editing")
+                    onClicked: root.editCleared()
+                }
+            }
+        }
+
         // What is being replied to, with a way out of it.
         StyledRect {
             id: replyBar
@@ -513,12 +615,15 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 enabled: root.canSend
                 keyForwardTargets: [pasteKeys]
                 onSubmitted: root.send()
+                onUpOnEmpty: root.editLastRequested()
 
                 onFocusStateChanged: hasFocus => root.fieldFocused = hasFocus
 
                 placeholderText: {
                     if (!root.canSend)
                         return I18n.tr("This provider cannot send messages");
+                    if (root.editTarget)
+                        return I18n.tr("Edit your message");
                     if (root.hasStaged)
                         return I18n.tr("Add a caption");
                     return root.canAttach ? I18n.tr("Message, or paste an image") : I18n.tr("Message");
@@ -527,7 +632,13 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 // Typing or pasting a path and pressing space attaches it,
                 // which is how a file manager's "copy path" ends up here.
                 onTextChanged: {
-                    if (!root.canAttach || root.pasting || root._restoringDraft)
+                    // Said to the conversation when the provider passes it on:
+                    // typing, and later stopping. Not for a draft put back, and
+                    // not for correcting a message already sent.
+                    if (!root._restoringDraft && !root.editTarget && root.onScreen)
+                        root.chatCore.noteTyping(input.text);
+
+                    if (!root.canAttach || root.pasting || root._restoringDraft || root.editTarget)
                         return;
                     if (!input.text.endsWith(" "))
                         return;
@@ -552,10 +663,10 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: Math.max(0, (Theme.fieldHeight - 36) / 2)
                 buttonSize: 36
-                iconName: root.pasting ? "hourglass_empty" : "send"
+                iconName: root.pasting ? "hourglass_empty" : (root.editTarget ? "check" : "send")
                 iconColor: (input.text.trim() !== "" || root.hasStaged) ? Theme.primary : Theme.surfaceVariantText
                 enabled: root.canSend && (input.text.trim() !== "" || root.hasStaged)
-                tooltipText: I18n.tr("Send")
+                tooltipText: root.editTarget ? I18n.tr("Save the edit") : I18n.tr("Send")
                 onClicked: root.send()
             }
         }

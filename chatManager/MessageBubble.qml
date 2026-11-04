@@ -34,6 +34,11 @@ Item {
     signal forwardRequested
     signal copyRequested
     signal deleteRequested
+    signal editRequested
+    signal reactRequested
+
+    // The quoted message was clicked: the conversation goes to it.
+    signal quoteClicked(string messageId)
 
     readonly property bool fromMe: message?.fromMe ?? false
     readonly property string kind: message?.kind ?? "text"
@@ -45,6 +50,12 @@ Item {
     readonly property string senderAvatar: message?.senderAvatarPath ?? ""
 
     readonly property string linkUrl: message?.linkUrl ?? ""
+
+    // Reactions, one entry per key, with ours marked -- see ChatCore.react.
+    readonly property var reactions: message?.reactions ?? []
+    // Not on a message still on its way: the service does not know it yet.
+    readonly property bool canReact: root.chatCore.activeSupports("reactions") && !root.isDeleted && !root.isSystem && root.status !== "pending" && root.status !== "failed"
+    readonly property bool edited: (message?.editedTs ?? 0) > 0
 
     // The message this one answers, when it is among those loaded. A reply
     // used to say only "Reply", which tells nobody what was being answered.
@@ -136,6 +147,43 @@ Item {
             return "";
         const date = new Date(timestamp);
         return SettingsData.use24HourClock ? date.toLocaleTimeString(Qt.locale(), "HH:mm") : date.toLocaleTimeString(Qt.locale(), "h:mm AP");
+    }
+
+    function formatSize(bytes) {
+        if (!bytes || bytes <= 0)
+            return "";
+        const units = ["B", "KB", "MB", "GB"];
+        let size = bytes;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) {
+            size /= 1024;
+            unit++;
+        }
+        return (unit === 0 || size >= 10 ? Math.round(size) : size.toFixed(1)) + " " + units[unit];
+    }
+
+    function formatDuration(seconds) {
+        if (!seconds || seconds <= 0)
+            return "";
+        const minutes = Math.floor(seconds / 60);
+        const rest = String(seconds % 60).padStart(2, "0");
+        return minutes + ":" + rest;
+    }
+
+    // What an attachment that is not a picture is: its name, how big, how long.
+    readonly property string attachmentDetails: {
+        if (root.isDeleted || root.kind === "image" || root.kind === "sticker" || !root.hasMedia)
+            return "";
+        const parts = [];
+        if ((root.message?.fileName ?? "") !== "")
+            parts.push(root.message.fileName);
+        const duration = root.formatDuration(root.message?.duration ?? 0);
+        if (duration !== "")
+            parts.push(duration);
+        const size = root.formatSize(root.message?.fileSize ?? 0);
+        if (size !== "")
+            parts.push(size);
+        return parts.join("  ·  ");
     }
 
     height: isSystem ? systemLabel.implicitHeight + Theme.spacingS : bubble.height + (showSender ? senderLabel.height + 2 : 0)
@@ -251,7 +299,18 @@ Item {
                 width: Math.min(Math.max(replyColumn.implicitWidth + Theme.spacingS * 2, 80), root.width * 0.72 - Theme.spacingM * 2)
                 height: replyColumn.implicitHeight + Theme.spacingXS * 2
                 radius: Theme.cornerRadius / 2
-                color: Theme.withAlpha(Theme.surfaceVariantText, 0.12)
+                color: Theme.withAlpha(Theme.surfaceVariantText, quoteArea.containsMouse && root.quoted ? 0.2 : 0.12)
+
+                // Clicking the quote goes to what it quotes, when that is
+                // among the messages loaded.
+                MouseArea {
+                    id: quoteArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: root.quoted !== null
+                    cursorShape: root.quoted ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: root.quoteClicked(root.replyToId)
+                }
 
                 Column {
                     id: replyColumn
@@ -438,18 +497,76 @@ Item {
                 }
             }
 
-            // Filename for attachments that are not images.
+            // Name, length and size for attachments that are not pictures.
             StyledText {
-                visible: (root.message?.fileName ?? "") !== "" && root.kind === "document"
-                text: root.message?.fileName ?? ""
+                width: Math.min(implicitWidth, root.width * 0.72 - Theme.spacingM * 2)
+                visible: root.attachmentDetails !== ""
+                text: root.attachmentDetails
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 elide: Text.ElideMiddle
             }
 
+            // What people answered it with. One line: past that, what does
+            // not fit is cut off rather than pushing the conversation around.
+            Row {
+                id: reactionRow
+                width: Math.min(implicitWidth, root.width * 0.72 - Theme.spacingM * 2)
+                clip: true
+                spacing: Theme.spacingXS
+                visible: root.reactions.length > 0 && !root.isDeleted
+
+                Repeater {
+                    model: root.reactions
+
+                    StyledRect {
+                        id: chip
+
+                        required property var modelData
+
+                        width: chipLabel.implicitWidth + Theme.spacingS * 2
+                        height: chipLabel.implicitHeight + Theme.spacingXS
+                        radius: height / 2
+                        color: chip.modelData.mine ? Theme.withAlpha(Theme.primary, chipArea.containsMouse ? 0.32 : 0.22) : Theme.withAlpha(Theme.surfaceVariantText, chipArea.containsMouse ? 0.22 : 0.14)
+                        border.color: chip.modelData.mine ? Theme.primary : "transparent"
+                        border.width: chip.modelData.mine ? 1 : 0
+
+                        StyledText {
+                            id: chipLabel
+                            anchors.centerIn: parent
+                            text: chip.modelData.count > 1 ? chip.modelData.key + " " + chip.modelData.count : chip.modelData.key
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: chip.modelData.mine ? Theme.primary : Theme.surfaceText
+                        }
+
+                        // Pressing one adds the same reaction, or takes ours
+                        // back -- the way it works everywhere else.
+                        MouseArea {
+                            id: chipArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: root.canReact
+                            cursorShape: root.canReact ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: root.chatCore.react(root.message.id, chip.modelData.key)
+                        }
+                    }
+                }
+            }
+
             Row {
                 anchors.right: parent.right
                 spacing: Theme.spacingXS
+
+                // Said, because an edited message reads as though it was
+                // always worded that way otherwise.
+                StyledText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.edited && !root.isDeleted
+                    text: I18n.tr("edited")
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    font.italic: true
+                    color: Theme.surfaceVariantText
+                }
 
                 StyledText {
                     anchors.verticalCenter: parent.verticalCenter
@@ -496,11 +613,31 @@ Item {
             DankActionButton {
                 buttonSize: 26
                 iconSize: Theme.fontSizeSmall
+                iconName: "add_reaction"
+                iconColor: Theme.surfaceVariantText
+                tooltipText: I18n.tr("React")
+                visible: root.canReact
+                onClicked: root.reactRequested()
+            }
+
+            DankActionButton {
+                buttonSize: 26
+                iconSize: Theme.fontSizeSmall
                 iconName: "reply"
                 iconColor: Theme.surfaceVariantText
                 tooltipText: I18n.tr("Reply")
                 visible: root.chatCore.activeSupports("reply")
                 onClicked: root.replyRequested()
+            }
+
+            DankActionButton {
+                buttonSize: 26
+                iconSize: Theme.fontSizeSmall
+                iconName: "edit"
+                iconColor: Theme.surfaceVariantText
+                tooltipText: I18n.tr("Edit")
+                visible: root.chatCore.canEdit(root.message)
+                onClicked: root.editRequested()
             }
 
             DankActionButton {

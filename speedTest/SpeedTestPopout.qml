@@ -2,6 +2,7 @@ import QtQuick
 import qs.Common
 import qs.Widgets
 import qs.Modules.Plugins
+import qs.DCommon.Widgets as DC
 import "speedtest.js" as Speed
 
 // Top to bottom: what is happening now (a test running, the last one
@@ -329,7 +330,7 @@ PopoutComponent {
 
                 // Both lines on one scale, so upload sits below download the
                 // way it does in the numbers.
-                DankSparkline {
+                DC.DSparkline {
                     width: historyColumn.width
                     height: 56
                     values: popout.history.map(r => Math.max(0, r.down))

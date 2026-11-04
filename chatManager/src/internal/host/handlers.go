@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dmschatmanager/internal/chat"
@@ -76,6 +77,16 @@ func HandleRequest(conn *models.Conn, req models.Request, manager *Manager) {
 		handleInvite(ctx, conn, req, manager, true)
 	case "chat.declineInvite":
 		handleInvite(ctx, conn, req, manager, false)
+	case "chat.react":
+		handleReact(ctx, conn, req, manager, false)
+	case "chat.unreact":
+		handleReact(ctx, conn, req, manager, true)
+	case "chat.edit":
+		handleEdit(ctx, conn, req, manager)
+	case "chat.typing":
+		handleTyping(conn, req, manager)
+	case "chat.startChat":
+		handleStartChat(ctx, conn, req, manager)
 	case "chat.deleteLocal":
 		handleDeleteLocal(ctx, conn, req, manager)
 	case "chat.purge":
@@ -277,15 +288,45 @@ func handleHistory(ctx context.Context, conn *models.Conn, req models.Request, m
 		return
 	}
 
-	// Nothing stored and the caller wants older messages: ask the bridge to
-	// backfill. It answers by streaming message events, so this request
-	// returns what we have now and the UI updates when they land.
-	if len(msgs) == 0 && before > 0 {
-		if b, err := m.bridgeFor(provider); err == nil {
-			b.notify(MethodHistory, map[string]any{
-				"chatId": chatID, "before": before, "limit": limit,
-			})
+	b, bridgeErr := m.bridgeFor(provider)
+	canFetch := bridgeErr == nil && b.HasCapability(CapHistory) && !m.HistoryEnded(provider, chatID)
+
+	switch {
+	case before > 0 && !hasMore && canFetch && len(msgs) < limit:
+		// The store ran out short of what was asked, and the provider can look
+		// further back: ask it, wait for what it finds to be stored, and page
+		// again. Answered on a lane of its own (see laneFor), so the wait holds
+		// up nothing else.
+		from := before
+		if len(msgs) > 0 {
+			from = msgs[0].TS
 		}
+		more, err := m.fetchHistory(ctx, b, provider, chatID, from, limit-len(msgs))
+		if err != nil {
+			log.Warnf("chat: could not fetch older messages for %s/%s: %v", provider, chatID, err)
+			// Still more, as far as anyone knows: the next scroll asks again.
+			hasMore = true
+			break
+		}
+		if again, againMore, err := m.Store().Page(ctx, provider, chatID, before, limit); err == nil {
+			msgs, hasMore = again, againMore
+		}
+		hasMore = hasMore || more
+
+	case !hasMore && canFetch:
+		// Everything stored fits in this page, and the provider can fetch what
+		// is older. Saying there is more is what makes reaching the top of the
+		// conversation ask for it, rather than stopping where this device
+		// happened to start listening.
+		hasMore = true
+
+	case len(msgs) == 0 && before > 0 && bridgeErr == nil && !b.HasCapability(CapHistory):
+		// A provider without the capability may still backfill: asked, it
+		// answers by streaming message events, so this request returns what
+		// there is now and the UI updates when they land.
+		b.notify(MethodHistory, map[string]any{
+			"chatId": chatID, "before": before, "limit": limit,
+		})
 	}
 
 	if msgs == nil {
@@ -304,6 +345,67 @@ func handleHistory(ctx context.Context, conn *models.Conn, req models.Request, m
 	models.Respond(conn, req.ID, historyResult{
 		Messages: msgs, HasMore: hasMore, ReadUpTo: readUpTo, Unread: unread,
 	})
+}
+
+const (
+	// historyBudget is how long one request waits on a provider for older
+	// messages: under the request's own timeout, so the shell always hears
+	// back, if only that there may be more.
+	historyBudget = 25 * time.Second
+
+	// historyRounds is how many times a provider is asked before an answer
+	// with nothing older in it is handed back as it is.
+	historyRounds = 3
+
+	// historyMinimum is the least asked for at once. A page that came back
+	// three short of full is still worth a page's round trip.
+	historyMinimum = 20
+)
+
+// fetchHistory asks a provider for messages older than from, and waits until
+// what it sent has been stored. Reports whether the provider says there is
+// still more before that.
+//
+// A provider can answer with nothing older than from and still say there is
+// more: a stretch of history that was all reactions, or room changes, or
+// messages this device already had. That is asked again, a few times, rather
+// than handed to the shell as an empty page claiming more -- which shows
+// nothing new and leaves the reader nothing left to scroll to.
+func (m *Manager) fetchHistory(ctx context.Context, b *bridge, provider, chatID string, from int64, limit int) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, historyBudget)
+	defer cancel()
+
+	if limit < historyMinimum {
+		limit = historyMinimum
+	}
+
+	for round := 1; ; round++ {
+		frame, err := b.call(ctx, MethodHistory, map[string]any{
+			"chatId": chatID, "before": from, "limit": limit,
+		})
+		if err != nil {
+			return true, err
+		}
+
+		var reply historyReply
+		if len(frame.Result) > 0 {
+			_ = json.Unmarshal(frame.Result, &reply)
+		}
+		m.drainIngest(ctx)
+
+		// A provider that does not say has nothing more it can find: offering
+		// to page further would only ask it the same question again.
+		if reply.HasMore == nil || !*reply.HasMore {
+			m.markHistoryEnded(provider, chatID)
+			return false, nil
+		}
+		if round >= historyRounds || ctx.Err() != nil {
+			return true, nil
+		}
+		if older, _, err := m.Store().Page(ctx, provider, chatID, from, 1); err == nil && len(older) > 0 {
+			return true, nil
+		}
+	}
 }
 
 type searchResult struct {
@@ -710,8 +812,234 @@ func handleSetFlag(ctx context.Context, conn *models.Conn, req models.Request, m
 		return
 	}
 
+	// A service that keeps its own notification settings is told too, so the
+	// conversation is quiet on the user's phone as well as here. Best effort:
+	// the mute here stands either way.
+	if flag == "muted" {
+		if b, err := m.bridgeFor(provider); err == nil && b.HasCapability(CapMute) {
+			b.notify(MethodSetMuted, map[string]any{"chatId": chatID, "muted": value})
+		}
+	}
+
 	m.markDirty()
 	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+}
+
+// handleReact adds a reaction to a message, or with remove takes ours back.
+//
+// Toggling is the shell's to decide -- it knows whether the key it shows is
+// ours -- so both directions are explicit here, and asking for what is already
+// so is a success rather than a second reaction or a failed removal.
+func handleReact(ctx context.Context, conn *models.Conn, req models.Request, m *Manager, remove bool) {
+	provider, chatID, ok := chatTarget(conn, req)
+	if !ok {
+		return
+	}
+	messageID := models.GetOr(req, "messageId", "")
+	key := models.GetOr(req, "key", "")
+	if messageID == "" || key == "" {
+		models.RespondError(conn, req.ID, "messageId and key are required")
+		return
+	}
+
+	b, err := m.bridgeFor(provider)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if !b.HasCapability(CapReactions) {
+		models.RespondError(conn, req.ID, fmt.Sprintf("%s has no reactions", provider))
+		return
+	}
+
+	mine, err := m.Store().MyReaction(ctx, provider, chatID, messageID, key)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+
+	if remove {
+		if mine == "" {
+			models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+			return
+		}
+		if _, err := b.call(ctx, MethodUnreact, map[string]any{
+			"chatId": chatID, "messageId": messageID, "reactionId": mine, "key": key,
+		}); err != nil {
+			models.RespondError(conn, req.ID, err.Error())
+			return
+		}
+		if err := m.Store().DeleteReaction(ctx, provider, chatID, mine); err != nil {
+			log.Warnf("chat: could not forget a reaction taken back: %v", err)
+		}
+		m.markDirty()
+		models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+		return
+	}
+
+	if mine != "" {
+		models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+		return
+	}
+	frame, err := b.call(ctx, MethodReact, map[string]any{
+		"chatId": chatID, "messageId": messageID, "key": key,
+	})
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+
+	// Recorded at once rather than when the provider echoes it, so it is on
+	// screen as soon as it is sent -- and so a second press takes it back
+	// instead of reacting twice. The echo fills in the rest under the same id.
+	var reply reactReply
+	if len(frame.Result) > 0 {
+		_ = json.Unmarshal(frame.Result, &reply)
+	}
+	if reply.ReactionID != "" {
+		if err := m.Store().PutReactions(ctx, []chat.Reaction{{
+			Provider: provider, ChatID: chatID, ID: reply.ReactionID, MessageID: messageID,
+			Key: key, FromMe: true, TS: time.Now().UnixMilli(),
+		}}); err != nil {
+			log.Warnf("chat: could not record a reaction: %v", err)
+		}
+	}
+	m.markDirty()
+	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+}
+
+// handleEdit replaces the text of one of our own messages.
+//
+// Only text, and only ours: an edit carries a whole new message on most
+// services, and a caption edited as plain text would turn a photo into words on
+// everybody else's screen.
+func handleEdit(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
+	provider, chatID, ok := chatTarget(conn, req)
+	if !ok {
+		return
+	}
+	messageID := models.GetOr(req, "messageId", "")
+	text := models.GetOr(req, "text", "")
+	if messageID == "" {
+		models.RespondError(conn, req.ID, "messageId is required")
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		models.RespondError(conn, req.ID, "an edit cannot leave a message empty; delete it instead")
+		return
+	}
+
+	b, err := m.bridgeFor(provider)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if !b.HasCapability(CapEdit) {
+		models.RespondError(conn, req.ID, fmt.Sprintf("%s cannot edit messages", provider))
+		return
+	}
+
+	msg, err := m.Store().MessageByID(ctx, provider, chatID, messageID)
+	if err != nil {
+		models.RespondError(conn, req.ID, "that message is not stored here")
+		return
+	}
+	switch {
+	case !msg.FromMe:
+		models.RespondError(conn, req.ID, "only your own messages can be edited")
+		return
+	case msg.Kind != chat.KindText:
+		models.RespondError(conn, req.ID, "only text messages can be edited")
+		return
+	case msg.Status == chat.StatusPending || msg.Status == chat.StatusFailed:
+		models.RespondError(conn, req.ID, "that message has not been sent yet")
+		return
+	case msg.Text == text:
+		models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+		return
+	}
+
+	if _, err := b.call(ctx, MethodEdit, map[string]any{
+		"chatId": chatID, "messageId": messageID, "text": text,
+	}); err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+
+	if err := m.Store().EditMessage(ctx, provider, chatID, messageID, text); err != nil {
+		log.Warnf("chat: could not record an edit: %v", err)
+	}
+	m.markDirty()
+	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+}
+
+// handleTyping tells a provider whether we are typing into a conversation.
+//
+// Never waited on and never an error: a typing notice that does not arrive is
+// one nobody misses, and the shell sends another in a few seconds anyway.
+func handleTyping(conn *models.Conn, req models.Request, m *Manager) {
+	provider, chatID, ok := chatTarget(conn, req)
+	if !ok {
+		return
+	}
+	typing := models.GetOr(req, "typing", true)
+
+	if b, err := m.bridgeFor(provider); err == nil && b.HasCapability(CapTyping) {
+		b.notify(MethodTyping, map[string]any{"chatId": chatID, "typing": typing})
+	}
+	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
+}
+
+type startChatResponse struct {
+	ChatID string `json:"chatId"`
+	Name   string `json:"name,omitempty"`
+}
+
+// handleStartChat opens a conversation from what the user typed to reach it.
+//
+// What a handle is -- a user, a room address, a phone number -- is entirely the
+// provider's business, and so are its words when it is not one.
+func handleStartChat(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
+	provider := models.GetOr(req, "provider", "")
+	handle := strings.TrimSpace(models.GetOr(req, "handle", ""))
+	if provider == "" || handle == "" {
+		models.RespondError(conn, req.ID, "provider and handle are required")
+		return
+	}
+
+	b, err := m.bridgeFor(provider)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if !b.HasCapability(CapStartChat) {
+		models.RespondError(conn, req.ID, fmt.Sprintf("%s cannot start conversations", provider))
+		return
+	}
+
+	frame, err := b.call(ctx, MethodStartChat, map[string]any{"handle": handle})
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	var reply startChatReply
+	if len(frame.Result) > 0 {
+		_ = json.Unmarshal(frame.Result, &reply)
+	}
+	if reply.ChatID == "" {
+		models.RespondError(conn, req.ID, fmt.Sprintf("%s did not say which conversation it opened", provider))
+		return
+	}
+
+	// A row straight away, so the conversation opens under its name rather
+	// than its id while the provider is still catching up with it.
+	if err := m.Store().UpsertChat(ctx, chat.Chat{
+		Provider: provider, ID: reply.ChatID, Name: reply.Name, Unread: -1,
+	}); err != nil {
+		log.Warnf("chat: could not record the conversation just started: %v", err)
+	}
+	m.markDirty()
+	models.Respond(conn, req.ID, startChatResponse{ChatID: reply.ChatID, Name: reply.Name})
 }
 
 type fetchMediaResponse struct {

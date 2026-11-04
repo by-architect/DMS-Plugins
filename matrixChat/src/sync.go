@@ -27,12 +27,15 @@ func (b *bridge) registerHandlers(syncer *mautrix.DefaultSyncer) {
 	// --- account data
 	syncer.OnEventType(event.AccountDataDirectChats, b.onDirectChats)
 	syncer.OnEventType(event.AccountDataRoomTags, b.onRoomTags)
+	syncer.OnEventType(event.AccountDataPushRules, b.onPushRules)
 
 	// --- the conversation itself
 	syncer.OnEventType(event.EventMessage, b.onMessage)
 	syncer.OnEventType(event.EventSticker, b.onMessage)
+	syncer.OnEventType(event.EventReaction, b.onReaction)
 	syncer.OnEventType(event.EventRedaction, b.onRedaction)
 	syncer.OnEventType(event.EphemeralEventReceipt, b.onReceipt)
+	syncer.OnEventType(event.EphemeralEventTyping, b.onTyping)
 
 	// With encryption running, the crypto helper takes encrypted events and
 	// reports the ones it cannot open -- see watchDecryption. Without it,
@@ -59,6 +62,10 @@ type publishingSyncer struct {
 }
 
 func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.RespSync, since string) error {
+	// Before the events move each room's newest event on: a gap is filled back
+	// to where the room stood before this response. See history.go.
+	gaps := s.b.notePagination(resp, since)
+
 	s.b.setDispatching(true)
 	err := s.DefaultSyncer.ProcessResponse(ctx, resp, since)
 	s.b.setDispatching(false)
@@ -70,6 +77,12 @@ func (s *publishingSyncer) ProcessResponse(ctx context.Context, resp *mautrix.Re
 		return err
 	}
 	s.b.afterSync(resp, since)
+
+	// After the newest events have gone out, so what is filled in lands
+	// behind them, and in the background, so the sync goes on meanwhile.
+	for _, gap := range gaps {
+		go s.b.fillGap(gap)
+	}
 	return nil
 }
 
@@ -124,9 +137,17 @@ func (b *bridge) afterSync(resp *mautrix.RespSync, since string) {
 	// here is an invitation nobody ever sees.
 	changed := b.noteMembership(resp)
 
+	// Rooms muted or unmuted on Matrix since the host was last told. Here,
+	// once the whole response is in: a first sync brings the push rules before
+	// the rooms they name. See pushrules.go.
+	b.reportMutes()
+
 	if first || wasFirst {
 		emitState("connected")
 		go b.publishRooms()
+		// Who is signed in, and whether this device is trusted yet, for the
+		// plugin's settings page. See account.go.
+		go b.emitAccount()
 		return
 	}
 
@@ -255,6 +276,8 @@ func (b *bridge) chatFor(roomID id.RoomID) chatObj {
 	if invited {
 		chat.LastText = b.inviteLine(roomID)
 	}
+	// Likewise the picture, which may only now be asked for.
+	chat.AvatarPath = b.roomAvatar(roomID)
 	return chat
 }
 
@@ -310,9 +333,15 @@ func (b *bridge) onMember(ctx context.Context, evt *event.Event) {
 			name = string(user)
 		}
 		info.Members[user] = name
+		if avatar := content.AvatarURL.ParseOrIgnore(); !avatar.IsEmpty() {
+			info.MemberAvatars[user] = avatar
+		} else {
+			delete(info.MemberAvatars, user)
+		}
 	default:
 		// Left, banned or knocked: they no longer name the room.
 		delete(info.Members, user)
+		delete(info.MemberAvatars, user)
 	}
 
 	// Our own membership is not just another member: it decides whether this
@@ -356,6 +385,7 @@ func (b *bridge) onRoomAvatar(ctx context.Context, evt *event.Event) {
 		return
 	}
 	b.updateRoom(evt.RoomID, func(info *roomInfo) { info.AvatarURL = content.URL.ParseOrIgnore() })
+	b.touchRoom(evt.RoomID)
 }
 
 // onDirectChats is how Matrix records which rooms are one-to-one.

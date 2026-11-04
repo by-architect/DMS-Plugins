@@ -258,7 +258,9 @@ func (p *NotifyPolicy) suppress(ctx context.Context, m Message, prefs NotifyPref
 		}
 	}
 
-	if !prefs.Groups && p.isGroup(ctx, m) {
+	// A message that names the user gets through: turning group notifications
+	// off is not asking to miss being spoken to.
+	if !prefs.Groups && !m.Highlight && p.isGroup(ctx, m) {
 		return "group message"
 	}
 

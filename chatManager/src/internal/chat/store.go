@@ -78,6 +78,25 @@ CREATE INDEX IF NOT EXISTS idx_msg_id      ON messages(provider, id);
 -- and a channel nobody ever writes in is all messages and no answer.
 CREATE INDEX IF NOT EXISTS idx_msg_mine    ON messages(provider, chat_id, from_me, ts);
 
+-- One row per person per reaction, keyed on the reaction's own id: that is what
+-- a service names when a reaction is taken back. Kept apart from messages so a
+-- message rewritten by an edit or a redelivery never loses its reactions, and
+-- so a reaction can arrive before the message it is on.
+CREATE TABLE IF NOT EXISTS reactions (
+  provider    TEXT NOT NULL,
+  chat_id     TEXT NOT NULL,
+  id          TEXT NOT NULL,
+  message_id  TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  sender_id   TEXT NOT NULL DEFAULT '',
+  sender_name TEXT NOT NULL DEFAULT '',
+  from_me     INTEGER NOT NULL DEFAULT 0,
+  ts          INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider, chat_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(provider, chat_id, message_id);
+
 -- Volatile per-provider state (sync cursors, last open chat) belongs here and
 -- not in the shell's settings.json: it changes far too often to be worth
 -- round-tripping through a user-editable config file.
@@ -122,6 +141,7 @@ var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN link_title TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN link_desc TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN link_image TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE messages ADD COLUMN edited_ts INTEGER NOT NULL DEFAULT 0`,
 }
 
 // HistoryStore is the message store. Safe for concurrent use.
@@ -453,6 +473,10 @@ SELECT COUNT(*) FROM messages
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM reactions WHERE provider = ? AND chat_id = ?`, provider, chatID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM chats WHERE provider = ? AND id = ?`, provider, chatID); err != nil {
 		return err
 	}
@@ -524,16 +548,33 @@ LIMIT ?`, provider, chatID, KindSystem, KindDeleted, KindUnsupported, provider, 
 
 // ---------------------------------------------------------------- messages
 
+// staleVersion is true when the incoming copy of a message must not replace the
+// text already stored: it is older than an edit the store has -- the original
+// arriving after its correction, which history paging does as a matter of
+// course -- or it claims to be an edit by somebody other than the message's
+// author, which no service lets anyone make.
+const staleVersion = `(excluded.edited_ts < messages.edited_ts
+   OR (excluded.edited_ts > 0 AND messages.sender_id != '' AND excluded.sender_id != ''
+       AND excluded.sender_id != messages.sender_id))`
+
 const messageUpsert = `
 INSERT INTO messages (provider, chat_id, id, ts, from_me, sender_id, sender_name, sender_avatar_path,
                       kind, text, body_html, status, reply_to, cc, bcc, media_path, media_ref,
                       media_mime, media_w, media_h, file_name, file_size, duration,
-                      link_url, link_title, link_desc, link_image)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                      link_url, link_title, link_desc, link_image, edited_ts)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(provider, chat_id, id) DO UPDATE SET
-  text        = CASE WHEN excluded.text != '' THEN excluded.text ELSE messages.text END,
-  body_html   = CASE WHEN excluded.body_html != '' THEN excluded.body_html ELSE messages.body_html END,
-  kind        = excluded.kind,
+  text        = CASE WHEN ` + staleVersion + ` THEN messages.text
+                     WHEN excluded.text != '' THEN excluded.text ELSE messages.text END,
+  body_html   = CASE WHEN ` + staleVersion + ` THEN messages.body_html
+                     WHEN excluded.body_html != '' THEN excluded.body_html ELSE messages.body_html END,
+  kind        = CASE WHEN ` + staleVersion + ` THEN messages.kind ELSE excluded.kind END,
+  edited_ts   = CASE WHEN ` + staleVersion + ` THEN messages.edited_ts
+                     ELSE MAX(messages.edited_ts, excluded.edited_ts) END,
+  -- An edit that arrives first creates the row at the edit's time, which is the
+  -- only time it knows. The original is the one copy that carries the real
+  -- one, so when it turns up the message moves back to where it was written.
+  ts          = CASE WHEN excluded.edited_ts = 0 AND messages.edited_ts > 0 THEN excluded.ts ELSE messages.ts END,
   sender_name = CASE WHEN excluded.sender_name != '' THEN excluded.sender_name ELSE messages.sender_name END,
   sender_avatar_path = CASE WHEN excluded.sender_avatar_path != '' THEN excluded.sender_avatar_path ELSE messages.sender_avatar_path END,
   -- Status only ratchets forward. A redelivered copy of an old message must not
@@ -589,7 +630,7 @@ func (s *HistoryStore) putMessage(ctx context.Context, tx *sql.Tx, m Message) (b
 		m.Provider, m.ChatID, m.ID, m.TS, m.FromMe, m.SenderID, m.SenderName, m.SenderAvatarPath, m.Kind, m.Text,
 		m.BodyHTML, m.Status, m.ReplyTo, string(cc), string(bcc), m.MediaPath, m.MediaRef,
 		m.MediaMime, m.MediaW, m.MediaH, m.FileName, m.FileSize, m.Duration,
-		m.LinkURL, m.LinkTitle, m.LinkDesc, m.LinkImage,
+		m.LinkURL, m.LinkTitle, m.LinkDesc, m.LinkImage, m.EditedTS,
 		statusRank(m.Status), statusRank(existing))
 	return isNew && err == nil, err
 }
@@ -652,7 +693,7 @@ func (s *HistoryStore) InsertMessages(ctx context.Context, msgs []Message) ([]bo
 const messageSelect = `
 SELECT provider, chat_id, id, ts, from_me, sender_id, sender_name, sender_avatar_path, kind, text,
        body_html, status, reply_to, cc, bcc, media_path, media_ref, media_mime, media_w, media_h,
-       file_name, file_size, duration, link_url, link_title, link_desc, link_image
+       file_name, file_size, duration, link_url, link_title, link_desc, link_image, edited_ts
 FROM messages
 `
 
@@ -693,6 +734,9 @@ LIMIT ?`, provider, chatID, before, limit+1)
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
+
+	// Best effort: a page without its reactions is still the conversation.
+	_ = s.attachReactions(ctx, provider, chatID, msgs)
 	return msgs, hasMore, nil
 }
 
@@ -724,7 +768,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			&m.SenderName, &m.SenderAvatarPath, &m.Kind, &m.Text, &m.BodyHTML, &m.Status, &m.ReplyTo, &cc, &bcc,
 			&m.MediaPath, &m.MediaRef, &m.MediaMime, &m.MediaW, &m.MediaH,
 			&m.FileName, &m.FileSize, &m.Duration,
-			&m.LinkURL, &m.LinkTitle, &m.LinkDesc, &m.LinkImage); err != nil {
+			&m.LinkURL, &m.LinkTitle, &m.LinkDesc, &m.LinkImage, &m.EditedTS); err != nil {
 			return nil, err
 		}
 		if cc != "" {
@@ -756,10 +800,20 @@ UPDATE messages SET status = ?
 
 // MarkDeleted turns a message into a tombstone. The row survives so the
 // conversation keeps its shape and reply targets still resolve.
+//
+// The id may as well be a reaction's: a service takes a reaction back the way
+// it deletes a message, and the deletion does not say which it was. Either way
+// the reactions go -- the one named, or every one on the deleted message, which
+// nobody can see any more.
 func (s *HistoryStore) MarkDeleted(ctx context.Context, provider, chatID, id string) error {
-	_, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, `
 UPDATE messages SET kind = ?, text = '', body_html = '', media_path = '', media_ref = ''
- WHERE provider = ? AND chat_id = ? AND id = ?`, KindDeleted, provider, chatID, id)
+ WHERE provider = ? AND chat_id = ? AND id = ?`, KindDeleted, provider, chatID, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM reactions WHERE provider = ? AND chat_id = ? AND (id = ? OR message_id = ?)`,
+		provider, chatID, id, id)
 	return err
 }
 
@@ -769,8 +823,12 @@ UPDATE messages SET kind = ?, text = '', body_html = '', media_path = '', media_
 // such as the placeholder written while a send is in flight. A message deleted
 // by its sender keeps its row and becomes a tombstone instead.
 func (s *HistoryStore) DeleteMessage(ctx context.Context, provider, chatID, id string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM messages WHERE provider = ? AND chat_id = ? AND id = ?`, provider, chatID, id); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM messages WHERE provider = ? AND chat_id = ? AND id = ?`, provider, chatID, id)
+		`DELETE FROM reactions WHERE provider = ? AND chat_id = ? AND message_id = ?`, provider, chatID, id)
 	return err
 }
 
@@ -843,7 +901,7 @@ SELECT `+hitColumns+`
 const hitColumns = `m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m.sender_name,
        m.sender_avatar_path, m.kind, m.text, m.body_html, m.status, m.reply_to, m.cc, m.bcc,
        m.media_path, m.media_ref, m.media_mime, m.media_w, m.media_h, m.file_name, m.file_size,
-       m.duration, m.link_url, m.link_title, m.link_desc, m.link_image,
+       m.duration, m.link_url, m.link_title, m.link_desc, m.link_image, m.edited_ts,
        COALESCE(c.name, '')`
 
 func scanHits(rows *sql.Rows) ([]SearchHit, error) {
@@ -855,7 +913,7 @@ func scanHits(rows *sql.Rows) ([]SearchHit, error) {
 			&h.SenderName, &h.SenderAvatarPath, &h.Kind, &h.Text, &h.BodyHTML, &h.Status, &h.ReplyTo, &cc, &bcc,
 			&h.MediaPath, &h.MediaRef, &h.MediaMime, &h.MediaW, &h.MediaH,
 			&h.FileName, &h.FileSize, &h.Duration,
-			&h.LinkURL, &h.LinkTitle, &h.LinkDesc, &h.LinkImage, &h.ChatName); err != nil {
+			&h.LinkURL, &h.LinkTitle, &h.LinkDesc, &h.LinkImage, &h.EditedTS, &h.ChatName); err != nil {
 			return nil, err
 		}
 		if cc != "" {
@@ -1054,9 +1112,10 @@ func (s *HistoryStore) PurgeProvider(ctx context.Context, provider string) error
 	defer tx.Rollback()
 
 	for _, stmt := range []string{
-		`DELETE FROM messages WHERE provider = ?`,
-		`DELETE FROM chats    WHERE provider = ?`,
-		`DELETE FROM meta     WHERE provider = ?`,
+		`DELETE FROM messages  WHERE provider = ?`,
+		`DELETE FROM reactions WHERE provider = ?`,
+		`DELETE FROM chats     WHERE provider = ?`,
+		`DELETE FROM meta      WHERE provider = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, provider); err != nil {
 			return err
@@ -1073,14 +1132,29 @@ func (s *HistoryStore) TrimOlderThan(ctx context.Context, cutoff int64) (int64, 
 	if err != nil {
 		return 0, err
 	}
+	// Reactions on messages that are gone, rather than every reaction older
+	// than the cutoff: a reaction made today to last year's message belongs
+	// to that message, and goes when it does.
+	if _, err := s.db.ExecContext(ctx, `
+DELETE FROM reactions WHERE NOT EXISTS (
+  SELECT 1 FROM messages m
+   WHERE m.provider = reactions.provider AND m.chat_id = reactions.chat_id AND m.id = reactions.message_id)`); err != nil {
+		return 0, err
+	}
 	return res.RowsAffected()
 }
 
 // MediaPaths lists every cached attachment path, so the media cache can tell
 // which files on disk are still referenced.
+//
+// Pictures of people and conversations count as well: a provider writes them
+// into the cache beside the attachments, and one the sweep took for unused
+// would be the first thing it deleted.
 func (s *HistoryStore) MediaPaths(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT media_path FROM messages WHERE media_path != ''`)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT media_path FROM messages WHERE media_path != ''
+UNION SELECT sender_avatar_path FROM messages WHERE sender_avatar_path != ''
+UNION SELECT avatar_path FROM chats WHERE avatar_path != ''`)
 	if err != nil {
 		return nil, err
 	}

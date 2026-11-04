@@ -124,6 +124,11 @@ func TestSuppressionLadder(t *testing.T) {
 		assert.Equal(t, "group message", newPolicy().suppressionReason(ctx, fresh("group"), prefs))
 		assert.Empty(t, newPolicy().suppressionReason(ctx, fresh("dm"), prefs),
 			"turning off groups leaves direct messages alone")
+
+		mention := fresh("group")
+		mention.Highlight = true
+		assert.Empty(t, newPolicy().suppressionReason(ctx, mention, prefs),
+			"a message that names the user gets through with groups off")
 	})
 }
 

@@ -55,6 +55,21 @@ type persistedRoom struct {
 
 	Tags    []string          `json:"tags,omitempty"`
 	Members map[string]string `json:"members,omitempty"`
+
+	// Pictures, kept as their Matrix content addresses: the files themselves
+	// live in the host's media cache, and are fetched again if it was cleared.
+	AvatarURL     string            `json:"avatarUrl,omitempty"`
+	MemberAvatars map[string]string `json:"memberAvatars,omitempty"`
+
+	// Where paging back through the room's history got to, so a restart does
+	// not start the walk over. See history.go.
+	BackfillToken string `json:"backfillToken,omitempty"`
+	BackfillTS    int64  `json:"backfillTs,omitempty"`
+	BackfillDone  bool   `json:"backfillDone,omitempty"`
+
+	// What the host was last told about the room's mute on Matrix, so only a
+	// change is reported -- see pushrules.go.
+	PushMuted bool `json:"pushMuted,omitempty"`
 }
 
 type roomStore struct {
@@ -103,12 +118,22 @@ func (s *roomStore) load() map[id.RoomID]*roomInfo {
 		for user, name := range p.Members {
 			info.Members[id.UserID(user)] = name
 		}
+		info.AvatarURL = id.ContentURIString(p.AvatarURL).ParseOrIgnore()
+		for user, uri := range p.MemberAvatars {
+			if parsed := id.ContentURIString(uri).ParseOrIgnore(); !parsed.IsEmpty() {
+				info.MemberAvatars[id.UserID(user)] = parsed
+			}
+		}
+		info.BackfillToken = p.BackfillToken
+		info.BackfillTS = p.BackfillTS
+		info.BackfillDone = p.BackfillDone
+		info.PushMuted = p.PushMuted
 		rooms[roomID] = info
 	}
 	return rooms
 }
 
-func (s *roomStore) save(rooms map[id.RoomID]*roomInfo) {
+func (s *roomStore) save(rooms map[id.RoomID]*roomInfo, self id.UserID) {
 	stored := make(map[id.RoomID]persistedRoom, len(rooms))
 
 	for roomID, info := range rooms {
@@ -129,13 +154,31 @@ func (s *roomStore) save(rooms map[id.RoomID]*roomInfo) {
 			LastEventTS: info.LastEventTS,
 
 			Tags: info.Tags,
+
+			BackfillToken: info.BackfillToken,
+			BackfillTS:    info.BackfillTS,
+			BackfillDone:  info.BackfillDone,
+			PushMuted:     info.PushMuted,
 		}
-		// Only worth keeping when they are what names the room.
+		if !info.AvatarURL.IsEmpty() {
+			p.AvatarURL = info.AvatarURL.String()
+		}
+		// Only worth keeping when they are what names the room -- and its
+		// members' pictures only when they are what pictures it.
 		if len(info.Members) <= maxStoredMembers {
 			p.Members = make(map[string]string, len(info.Members))
 			for user, name := range info.Members {
 				p.Members[string(user)] = name
 			}
+			p.MemberAvatars = make(map[string]string, len(info.MemberAvatars))
+			for user, uri := range info.MemberAvatars {
+				p.MemberAvatars[string(user)] = uri.String()
+			}
+		} else if name, ok := info.Members[self]; ok {
+			// Our own name, whatever the size of the room: it is what a
+			// message mentioning us by name is matched against. See
+			// pushrules.go.
+			p.Members = map[string]string{string(self): name}
 		}
 		stored[roomID] = p
 	}
@@ -168,6 +211,10 @@ func (b *bridge) snapshotRooms() map[id.RoomID]*roomInfo {
 		for user, name := range info.Members {
 			copied.Members[user] = name
 		}
+		copied.MemberAvatars = make(map[id.UserID]id.ContentURI, len(info.MemberAvatars))
+		for user, uri := range info.MemberAvatars {
+			copied.MemberAvatars[user] = uri
+		}
 		out[roomID] = &copied
 	}
 	return out
@@ -181,7 +228,7 @@ func (b *bridge) persistRooms() {
 	if store == nil {
 		return
 	}
-	store.save(b.snapshotRooms())
+	store.save(b.snapshotRooms(), b.selfID())
 }
 
 // hydrate fills in rooms the cache does not know about.
@@ -250,6 +297,7 @@ func (b *bridge) applyState(roomID id.RoomID, state mautrix.RoomStateMap) {
 		event.StateCanonicalAlias,
 		event.StateTopic,
 		event.StateEncryption,
+		event.StateRoomAvatar,
 		event.StateMember,
 	} {
 		for _, evt := range state[eventType] {
@@ -275,6 +323,8 @@ func (b *bridge) applyState(roomID id.RoomID, state mautrix.RoomStateMap) {
 				b.onTopic(ctx, evt)
 			case event.StateEncryption:
 				b.onEncryption(ctx, evt)
+			case event.StateRoomAvatar:
+				b.onRoomAvatar(ctx, evt)
 			case event.StateMember:
 				b.onMember(ctx, evt)
 			}

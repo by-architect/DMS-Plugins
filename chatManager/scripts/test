@@ -34,7 +34,28 @@ find_qt_tool() {
             return 0
         }
     done
-    found=$(find /nix/store -maxdepth 3 -type f -name "$name" -path '*qtdeclarative*/bin/*' 2>/dev/null | sort | tail -1)
+
+    # The Qt quickshell itself runs on, so the tests see what the shell does.
+    # Key handling differs between Qt releases: picked by store path, this
+    # found an older Qt beside the shell's, whose text field takes Ctrl+V
+    # differently, and two paste tests failed that pass where it matters. On
+    # NixOS bin/quickshell is a small wrapper beside the real program.
+    local qs qt bin
+    qs=$(readlink -f "$(command -v quickshell 2>/dev/null)" 2>/dev/null) || true
+    if [ -n "$qs" ]; then
+        for bin in "$(dirname "$qs")/.quickshell-wrapped" "$qs"; do
+            [ -f "$bin" ] || continue
+            qt=$(ldd "$bin" 2>/dev/null | sed -n 's|.*=> \(/nix/store/[^/]*qtdeclarative[^/]*\)/lib/libQt6Quick\.so.*|\1|p' | head -1)
+            if [ -n "$qt" ] && [ -x "$qt/bin/$name" ]; then
+                printf '%s' "$qt/bin/$name"
+                return 0
+            fi
+        done
+    fi
+
+    # Otherwise the newest Qt 6 there is -- by version, not by store hash.
+    found=$(find /nix/store -maxdepth 3 -type f -name "$name" -path '*qtdeclarative-6*/bin/*' 2>/dev/null |
+        sed -E 's|.*qtdeclarative-([0-9.]+)/.*|\1 &|' | sort -V | tail -1 | cut -d' ' -f2-)
     [ -n "$found" ] && printf '%s' "$found"
 }
 
@@ -49,9 +70,11 @@ qmllint=$(find_qt_tool qmllint || true)
 step "qml parses"
 if [ -n "$qmllint" ]; then
     # Only errors matter here: the imports cannot resolve outside the shell, so
-    # the warnings are all about qs.* being absent.
+    # the warnings are all about qs.* being absent. A syntax error is one of
+    # those warnings in newer qmllint -- tagged [syntax] rather than called an
+    # error -- so it is looked for by name.
     for component in *.qml; do
-        if "$qmllint" "$component" 2>&1 | grep -E ': Error'; then
+        if "$qmllint" "$component" 2>&1 | grep -E ': Error|\[syntax\]'; then
             echo "FAIL: $component"
             failures=$((failures + 1))
         fi

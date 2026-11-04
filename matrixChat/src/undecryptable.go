@@ -435,36 +435,9 @@ func (b *bridge) onEncryptedWithoutCrypto(ctx context.Context, evt *event.Event)
 // anyway -- held to the end of the response being read, so that a first sync
 // full of them is one batch rather than a frame each.
 func (b *bridge) noteUndecryptable(evt *event.Event, cause error) {
-	if evt == nil || evt.ID == "" || evt.RoomID == "" {
+	w, shown, retry, keep := classifyUndecryptable(evt, cause)
+	if !keep {
 		return
-	}
-	content, _ := evt.Content.Parsed.(*event.EncryptedEventContent)
-
-	// The relation travels outside the encryption, which says what the event
-	// is about to be without reading it.
-	shown := true
-	if content != nil && content.RelatesTo != nil {
-		switch content.RelatesTo.Type {
-		case event.RelAnnotation, event.RelReference:
-			// A reaction, or a step of a verification or a poll: nothing this
-			// bridge shows when it can read it, so nothing worth waiting for.
-			return
-		case event.RelReplace:
-			// An edit lands on the message it corrects, which is already in
-			// the conversation; a placeholder of its own would be a stray row.
-			shown = false
-		}
-	}
-
-	retry := worthRetrying(cause) && content != nil && content.SessionID != ""
-	if !retry && !shown {
-		return
-	}
-
-	w := waitingEvent{RoomID: evt.RoomID, EventID: evt.ID, Sender: evt.Sender, TS: evt.Timestamp, Shown: shown}
-	if content != nil {
-		w.SessionID = content.SessionID
-		w.SenderKey = content.SenderKey
 	}
 
 	var msg messageObj
@@ -502,6 +475,50 @@ func (b *bridge) noteUndecryptable(evt *event.Event, cause error) {
 	}
 	b.mu.Unlock()
 	emitMessages([]messageObj{msg})
+}
+
+// classifyUndecryptable decides what an event that could not be decrypted
+// becomes: whether a placeholder stands in for it (shown), and whether it is
+// worth writing down to try again when its key turns up (retry). keep false is
+// an event to let go of altogether.
+//
+// Shared by the sync, which meets these as they arrive, and by history paging,
+// which meets them by the page.
+func classifyUndecryptable(evt *event.Event, cause error) (w waitingEvent, shown, retry, keep bool) {
+	if evt == nil || evt.ID == "" || evt.RoomID == "" {
+		return w, false, false, false
+	}
+	content, _ := evt.Content.Parsed.(*event.EncryptedEventContent)
+
+	// The relation travels outside the encryption, which says what the event
+	// is about to be without reading it.
+	shown = true
+	if content != nil && content.RelatesTo != nil {
+		switch content.RelatesTo.Type {
+		case event.RelAnnotation, event.RelReference:
+			// A reaction, or a step of a verification or a poll. A reaction
+			// is shown once it can be read, but it is a small thing to wait
+			// a key for, and a placeholder for it would be a stray row in
+			// the conversation -- so it is let go.
+			return w, false, false, false
+		case event.RelReplace:
+			// An edit lands on the message it corrects, which is already in
+			// the conversation; a placeholder of its own would be a stray row.
+			shown = false
+		}
+	}
+
+	retry = worthRetrying(cause) && content != nil && content.SessionID != ""
+	if !retry && !shown {
+		return w, false, false, false
+	}
+
+	w = waitingEvent{RoomID: evt.RoomID, EventID: evt.ID, Sender: evt.Sender, TS: evt.Timestamp, Shown: shown}
+	if content != nil {
+		w.SessionID = content.SessionID
+		w.SenderKey = content.SenderKey
+	}
+	return w, shown, retry, true
 }
 
 // standIn is the row that takes a message's place in the conversation while it
@@ -682,6 +699,8 @@ func (b *bridge) retryPass(ctx context.Context, kit retryKit, full bool) {
 
 	if recovered := b.deliverRecovered(results); len(recovered) > 0 {
 		logf("info", "decrypted %d message(s) that had been waiting for their keys", len(recovered))
+		// Fewer waiting now, which the settings page counts.
+		go b.emitAccount()
 		// The rooms again, with where they have been read: the host counts
 		// unread afresh from that, and a message that was a placeholder
 		// until now was not counted when it arrived.

@@ -79,6 +79,10 @@ type ProviderStatus struct {
 	// straight back to the bridge with chat.authSubmit and never stored here.
 	AuthTitle  string          `json:"authTitle,omitempty"`
 	AuthFields []wireAuthField `json:"authFields,omitempty"`
+
+	// Account is what the provider says about the account it is signed in to,
+	// for its own settings page to show: free-form, and passed on untouched.
+	Account json.RawMessage `json:"account,omitempty"`
 }
 
 // discoverProviders scans for type "chat" plugins.

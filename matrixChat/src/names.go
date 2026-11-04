@@ -58,10 +58,26 @@ type roomInfo struct {
 
 	// Tags are the room's m.tag account data: favourite, low priority.
 	Tags []string
+
+	// MemberAvatars maps a member to their picture in this room, which is
+	// per-room in Matrix just as a display name is.
+	MemberAvatars map[id.UserID]id.ContentURI
+
+	// BackfillToken is where paging back through this room's history carries
+	// on from, and BackfillTS the time of the oldest event it lies behind.
+	// BackfillDone is the beginning reached: there is nothing older to fetch.
+	// See history.go.
+	BackfillToken string
+	BackfillTS    int64
+	BackfillDone  bool
+
+	// PushMuted is whether the account's push rules mute this room -- what
+	// Element's Mute does -- as last told to the host. See pushrules.go.
+	PushMuted bool
 }
 
 func newRoomInfo() *roomInfo {
-	return &roomInfo{Members: map[id.UserID]string{}}
+	return &roomInfo{Members: map[id.UserID]string{}, MemberAvatars: map[id.UserID]id.ContentURI{}}
 }
 
 // room returns the cached room, creating it if this is the first time we have

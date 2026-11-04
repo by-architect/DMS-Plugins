@@ -72,6 +72,165 @@ PluginSettings {
     property string verifyResult: ""
     property bool verifyFailed: false
 
+    // The account, as the bridge describes it: who is signed in, the device,
+    // and whether it is verified. Nothing streams state to this page, so it is
+    // read again every few seconds while the page is open -- signing in from
+    // the chat window, verifying below, and signing out all change it.
+    readonly property var provider: root.chat ? root.chat.providerById("matrixChat") : null
+    readonly property var account: root.provider?.account ?? null
+    readonly property bool signedIn: (root.account?.userId ?? "") !== ""
+
+    // Connected is signed in, whatever the account says -- a chat manager not
+    // rebuilt since this page learned to show the account says nothing at all.
+    readonly property bool canSignOut: root.signedIn || (root.provider?.enabled === true && root.provider?.state === "connected")
+
+    property bool confirmingSignOut: false
+    property bool clearHistoryOnSignOut: false
+
+    Timer {
+        interval: 4000
+        repeat: true
+        triggeredOnStart: true
+        running: root.chat !== null && typeof root.chat.refreshProviders === "function"
+        onTriggered: root.chat.refreshProviders()
+    }
+
+    function accountSummary() {
+        if (!root.chat || !root.chat.available)
+            return "The chat manager is not running, so there is no account to show.";
+        if (!root.provider || !root.provider.enabled)
+            return "Matrix Chat is switched off.";
+        if (!root.signedIn) {
+            if (root.provider.state === "needsLogin")
+                return "Not signed in. Open the chat window to sign in, or run ./login.sh from this plugin's folder.";
+            return root.provider.state === "connected" ? "Signed in." : "Connecting…";
+        }
+        return "Signed in as " + root.account.userId;
+    }
+
+    function accountDetails() {
+        if (!root.signedIn)
+            return "";
+        const parts = [];
+        if (root.account.homeserver)
+            parts.push(root.account.homeserver);
+        if (root.account.deviceId)
+            parts.push("device " + root.account.deviceId);
+        return parts.join("  ·  ");
+    }
+
+    function trustSummary() {
+        if (!root.signedIn)
+            return "";
+        if (root.account.encryption === false)
+            return "Encryption is not working on this device: encrypted rooms can be neither read nor written to. The chat manager's log says why.";
+        let text = root.account.verified ? "This device is verified." : "This device is not verified yet, so other people's devices may not share their keys with it, and older encrypted messages stay unreadable. Verify it with your recovery key below.";
+        if (root.account.verified && root.account.keyBackup)
+            text += " Your key backup is connected: keys your other devices save reach this one too.";
+        const waiting = root.account.waitingForKeys ?? 0;
+        if (waiting > 0)
+            text += " " + waiting + (waiting === 1 ? " message is" : " messages are") + " waiting for keys.";
+        return text;
+    }
+
+    function signOut() {
+        root.confirmingSignOut = false;
+        if (!root.chat)
+            return;
+        root.chat.logout("matrixChat");
+        if (root.clearHistoryOnSignOut)
+            root.chat.purge("matrixChat");
+        root.clearHistoryOnSignOut = false;
+    }
+
+    // ------------------------------------------------------------- account
+
+    StyledText {
+        width: parent ? parent.width : 0
+        text: "Account"
+        font.pixelSize: Theme.fontSizeMedium
+        font.weight: Font.Medium
+        color: Theme.surfaceText
+    }
+
+    StyledText {
+        width: parent ? parent.width : 0
+        text: root.accountSummary()
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceText
+        wrapMode: Text.WordWrap
+    }
+
+    StyledText {
+        width: parent ? parent.width : 0
+        visible: text !== ""
+        text: root.accountDetails()
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceVariantText
+        wrapMode: Text.WrapAnywhere
+    }
+
+    StyledText {
+        width: parent ? parent.width : 0
+        visible: text !== ""
+        text: root.trustSummary()
+        font.pixelSize: Theme.fontSizeSmall
+        color: root.signedIn && (root.account.encryption === false || !root.account.verified) ? Theme.warning : Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+    }
+
+    DankButton {
+        visible: root.canSignOut && !root.confirmingSignOut
+        text: "Sign out"
+        iconName: "logout"
+        backgroundColor: "transparent"
+        textColor: Theme.error
+        onClicked: root.confirmingSignOut = true
+    }
+
+    // Signing out is not undone by signing in again: it is a new device then,
+    // which starts without the keys this one holds. So it asks first.
+    StyledText {
+        width: parent ? parent.width : 0
+        visible: root.confirmingSignOut
+        text: "Sign out of " + (root.account?.userId ?? "Matrix") + " on this computer? This device is removed from your account, along with the keys it holds: signing in again is a new device, which has to be verified again to read encrypted history."
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceText
+        wrapMode: Text.WordWrap
+    }
+
+    DankToggle {
+        width: parent ? parent.width : 0
+        visible: root.confirmingSignOut
+        text: "Also delete Matrix messages stored here"
+        description: "Off keeps the conversations already received in the chat history, readable but no longer updated."
+        checked: root.clearHistoryOnSignOut
+        onToggled: checked => root.clearHistoryOnSignOut = checked
+    }
+
+    Row {
+        visible: root.confirmingSignOut
+        spacing: Theme.spacingS
+
+        DankButton {
+            text: "Cancel"
+            backgroundColor: "transparent"
+            textColor: Theme.surfaceText
+            onClicked: {
+                root.confirmingSignOut = false;
+                root.clearHistoryOnSignOut = false;
+            }
+        }
+
+        DankButton {
+            text: "Sign out"
+            iconName: "logout"
+            backgroundColor: Theme.error
+            textColor: Theme.onPrimary
+            onClicked: root.signOut()
+        }
+    }
+
     // Verification goes to the bridge and nowhere else. The key is not written
     // to plugin settings, which is ordinary readable config -- the bridge uses
     // it to unlock secret storage and drops it.
@@ -151,6 +310,27 @@ PluginSettings {
         minimum: 1
         maximum: 100
         unit: " MB"
+    }
+
+    ToggleSetting {
+        settingKey: "sendTypingNotifications"
+        label: "Send typing notifications"
+        description: "Let people see when you are typing to them. Turning this off still shows you when they are typing."
+        defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "useMatrixNotifications"
+        label: "Follow my Matrix notification settings"
+        description: "Rooms you muted or set to mentions only in Element stay quiet here, and a message that mentions you always gets through. Muting a room here mutes it on your other devices too."
+        defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "showAvatars"
+        label: "Show pictures"
+        description: "Room and profile pictures, fetched from your homeserver as small thumbnails."
+        defaultValue: true
     }
 
     // ------------------------------------------------------------- filters
