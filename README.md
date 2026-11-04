@@ -11,7 +11,7 @@ piece of shell chrome.
 
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
-| [commandRunner](commandRunner/) | launcher | `run <name>` | — |
+| [commandRunner](commandRunner/) | launcher | `run <name>` | `adb`, for the phone commands |
 | [clipboardRunner](clipboardRunner/) | launcher | `clip <name>` | `yt-dlp`, `aria2`, `ffmpeg`, `imagemagick`, … |
 | [downloadsRunner](downloadsRunner/) | launcher | `dl <words>` | `find` |
 | [tmuxRunner](tmuxRunner/) | launcher | `tmux <name>` | `tmux`, a terminal |
@@ -30,6 +30,7 @@ piece of shell chrome.
 | [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
 | [processWidget](processWidget/) | bar widget | the pill, and its popout | `ps` |
 | [hostStatus](hostStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; `sshpass` for password hosts |
+| [phoneStatus](phoneStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; Termux's sshd and root on the phone |
 | [speedTest](speedTest/) | bar widget | the pill, and its popout | `speedtest-cli`, Ookla's `speedtest` or `librespeed-cli` |
 | [chatManager](chatManager/) | chat window + daemon | keybind / IPC, notifications, chatRunner | Go, to build |
 | [whatsappChat](whatsappChat/) | chat provider | the chat window | chatManager; Go, to build |
@@ -144,6 +145,12 @@ run            →  lists every configured command
 
 Commands live in the plugin's settings rather than in this repo, so nothing
 here needs editing to add one.
+
+Set up an Android phone in the same settings and it gets adb commands of its
+own: `run logos hotspot` turns the phone's hotspot on and connects this
+computer to it. There are also commands to show its screen, take a screenshot,
+get the newest photo, send the newest download, open the copied link, check
+the battery, switch Do Not Disturb, and lock it.
 
 They run exactly as typed with no sanitization — that is the point of a
 personal command launcher, but don't paste in commands you wouldn't otherwise
@@ -531,6 +538,11 @@ cannot exist, and puts the old value back when it is disabled or removed.
 Keybind targets for clearing the stack, and for dismissing or recalling one
 line at a time, are on its IPC handler.
 
+A notification with a one-time code in it — "Doğrulama kodunuz: 482913", an
+SMS through KDE Connect — puts the code on the clipboard as it arrives. Times,
+prices, phone numbers and order numbers are left alone; there is a switch for
+it in the settings.
+
 → [notificationLine/README.md](notificationLine/README.md)
 
 ---
@@ -638,6 +650,29 @@ its internal storage and SD card instead of the dozens of system images Android
 mounts.
 
 → [hostStatus/README.md](hostStatus/README.md)
+
+## phoneStatus
+
+Your Android phone in the bar, read over ssh from Termux instead of through
+KDE Connect: signal bars, battery and the number of notifications waiting on
+it. The popout has what KDE Connect shows and more:
+- battery level, charging, temperature and wear;
+- carrier, network type and signal strength;
+- whether mobile data is connected;
+- the Wi-Fi network it is on;
+- its hotspot and how many devices are using it;
+- ringer mode and Do Not Disturb;
+- storage and uptime;
+- what is playing;
+- the notifications on it;
+- its four newest photos.
+
+It also shows **the mobile data used this cycle by Android's own counter**:
+the same number as Settings → Network → Data usage, from the same cycle day and
+warning, with a bar per day. Ring (at full volume for 15 seconds), lock and an
+ssh session are buttons in the popout. Most of it needs root on the phone.
+
+→ [phoneStatus/README.md](phoneStatus/README.md)
 
 ## speedTest
 

@@ -124,6 +124,38 @@ drained faster.
 Bottom corners stack upwards with the newest line at the bottom; top corners
 hang downwards with the newest at the top.
 
+## One-time codes
+
+A notification that brings a login code — an SMS mirrored by KDE Connect, a
+mail, a bank — puts the code on the clipboard as it arrives, and a toast says
+which one. Paste it into the browser without reading the line at all.
+
+What counts, from [`codes.js`](codes.js):
+
+- **five or six digits**, written whole or in halves: `482913`, `482 913`,
+  `482-913`, Google's `G-482913`;
+- standing on its own — not part of a bigger number (`1234567`, `12.345`), a
+  time or a date (`10:30`, `04/11`), money (`₺123456`, `123456 TL`), a
+  reference (`#123456`, `order-123456`) or a phone number
+  (`+90 532 123 45 67`);
+- and the text says it is a code: *code, passcode, OTP, PIN, password,
+  verification, 2FA, one-time, sign in, login, security, kod, şifre, parola,
+  doğrulama, onay, giriş, tek kullanımlık, güvenlik*. With several numbers, the
+  one nearest after that word wins.
+
+**Without a code word too** drops the last rule: a lone five or six digit
+number counts as well, unless there are two different ones. It catches codes
+from senders that do not say "code", and order numbers with them.
+
+Only notifications that arrive while the plugin runs are looked at, not the
+ones already there when it loads, nor what a shell reload carries over. It
+works under Do Not Disturb too, where no line is drawn. The code goes through
+`dms cl copy`, so it also lands in the clipboard history.
+
+```sh
+dms ipc call notificationLine findCode "Doğrulama kodunuz: 482 913"   # 482913, or NONE
+```
+
 ## Settings
 
 | Setting | Default | |
@@ -141,6 +173,8 @@ hang downwards with the newest at the top.
 | Line lifetime | 0 s | one flat duration for every line; 0 follows the per-urgency timeouts |
 | Show age / icon / app name | on | each part of the line can be dropped |
 | Replace the built-in popups | on | see above |
+| Copy codes to the clipboard | on | see [One-time codes](#one-time-codes) |
+| Without a code word too | off | a lone 5–6 digit number counts as a code as well |
 
 ## IPC and keybinds
 
@@ -155,6 +189,7 @@ dms ipc call notificationLine clearAll       # clear the lines *and* the notific
 dms ipc call notificationLine recall         # put the most recent hidden notification back on the stack
 dms ipc call notificationLine test           # send a test notification
 dms ipc call notificationLine suppress off   # put the built-in popups back
+dms ipc call notificationLine findCode "…"   # the code that text would copy, or NONE
 dms ipc call notificationLine status         # position, line count, timing mode, suppression
 ```
 
@@ -182,6 +217,12 @@ Without the `dms` CLI on your PATH, every call has the longer equivalent:
 ```sh
 SHELL_PATH=$(quickshell list --all | grep -oE '/[^ ]*/shell\.qml' | head -1)
 quickshell -p "$SHELL_PATH" ipc call notificationLine dismiss
+```
+
+## Tests
+
+```sh
+qmltestrunner -input tests/tst_codes.qml   # on NixOS add -import <qtdeclarative>/lib/qt-6/qml
 ```
 
 ## Install

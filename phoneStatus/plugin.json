@@ -1,0 +1,14 @@
+{
+    "id": "phoneStatus",
+    "name": "Phone Status",
+    "description": "Your Android phone in the bar, read over ssh (Termux): battery, signal, Wi-Fi, hotspot, notifications, what is playing, newest photos, and the mobile data used this cycle by Android's own counter",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "widget",
+    "capabilities": ["dankbar-widget", "monitoring"],
+    "icon": "smartphone",
+    "component": "./PhoneStatusWidget.qml",
+    "settings": "./PhoneStatusSettings.qml",
+    "dependencies": ["ssh"],
+    "permissions": ["settings_read", "settings_write", "process"]
+}

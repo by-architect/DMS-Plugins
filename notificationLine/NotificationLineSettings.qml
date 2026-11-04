@@ -216,6 +216,28 @@ PluginSettings {
 
     StyledText {
         width: parent.width
+        text: "One-time codes"
+        font.pixelSize: Theme.fontSizeLarge
+        font.weight: Font.Bold
+        color: Theme.surfaceText
+    }
+
+    ToggleSetting {
+        settingKey: "copyCodes"
+        label: "Copy codes to the clipboard"
+        description: "When a notification brings a 5 or 6 digit code (\"Your code is 482913\", \"Doğrulama kodunuz: 482 913\"), it goes straight to the clipboard, ready to paste. Times, dates, prices, phone numbers and order numbers are left alone."
+        defaultValue: true
+    }
+
+    ToggleSetting {
+        settingKey: "copyCodesAnyNumber"
+        label: "Without a code word too"
+        description: "Off: only when the text says it is a code -- code, kod, şifre, OTP, PIN, verification, doğrulama, giriş and the like. On: also a lone 5 or 6 digit number with no such word, which catches more codes and more order numbers."
+        defaultValue: false
+    }
+
+    StyledText {
+        width: parent.width
         text: "Shell integration"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold

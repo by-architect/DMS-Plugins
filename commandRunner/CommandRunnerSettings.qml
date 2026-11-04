@@ -48,4 +48,36 @@ PluginSettings {
             }
         ]
     }
+
+    StyledText {
+        width: parent.width
+        text: "Phone"
+        font.pixelSize: Theme.fontSizeLarge
+        font.weight: Font.Bold
+        color: Theme.surfaceText
+    }
+
+    StringSetting {
+        settingKey: "phoneName"
+        label: "Phone name"
+        description: "Adds commands for an Android phone over adb: \"run <name> hotspot\" turns its hotspot on and connects to it, and there are screen, screenshot, photo, file, link, battery, Do Not Disturb and lock commands too. Empty: none."
+        placeholder: "Logos"
+        defaultValue: ""
+    }
+
+    StringSetting {
+        settingKey: "phoneAddress"
+        label: "adb address"
+        description: "host:port where the phone answers adb over the network (wireless debugging, or adb tcpip). When it does not answer, a phone on a USB cable is used. Empty: USB only."
+        placeholder: "100.70.50.3:5555"
+        defaultValue: ""
+    }
+
+    StringSetting {
+        settingKey: "phoneHotspot"
+        label: "Hotspot Wi-Fi name"
+        description: "The network the phone's hotspot makes. Empty: asked of the phone (needs root), else the phone name."
+        placeholder: "same as the phone name"
+        defaultValue: ""
+    }
 }

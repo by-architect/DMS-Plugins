@@ -7,6 +7,7 @@ import Quickshell.Services.Notifications
 import qs.Common
 import qs.Services
 import qs.Modules.Plugins
+import "codes.js" as Codes
 
 // Owns the configuration, the expiry clock, the per-screen line stacks, and
 // the switch that takes the shipped notification popups off screen.
@@ -55,6 +56,8 @@ PluginComponent {
     readonly property bool showIcon: cfgValue("showIcon", true)
     readonly property bool showAppName: cfgValue("showAppName", true)
     readonly property bool suppressBuiltin: cfgValue("suppressBuiltin", true)
+    readonly property bool copyCodes: cfgValue("copyCodes", true)
+    readonly property bool copyAnyNumber: cfgValue("copyCodesAnyNumber", false)
 
     // "focused" mode is resolved when a notification arrives rather than
     // continuously: the compositor's focused output is a poll, not a binding,
@@ -287,6 +290,12 @@ PluginComponent {
             root.syncTracked();
         }
 
+        // Every arrival lands in allWrappers, popup or not -- a code that
+        // comes in under Do Not Disturb is copied all the same.
+        function onAllWrappersChanged() {
+            root.copyNewCodes();
+        }
+
         // A duplicate of something already on screen is dropped, and the
         // shell restarts the original's timer instead -- but only a running
         // one, and while this clock owns the line that timer is stopped. So
@@ -297,6 +306,53 @@ PluginComponent {
             if (e && e.holds === 0)
                 e.at = Date.now();
         }
+    }
+
+    // ---- one-time codes to the clipboard ---------------------------------
+    //
+    // A login code arrives as a notification -- an SMS through KDE Connect, a
+    // mail, an authenticator -- and is wanted in a browser a moment later. So
+    // the code is put on the clipboard as it arrives (see codes.js for what
+    // counts as one), ready to paste.
+    //
+    // Only notifications that arrive while this runs: the server numbers them
+    // upwards, and everything up to the newest number seen is done with. That
+    // leaves out what was there when the plugin loaded, and what a shell
+    // reload carried over from before.
+
+    property int newestSeenId: -1
+    property string lastCode: ""
+
+    function copyNewCodes() {
+        let newest = root.newestSeenId;
+        for (const w of NotificationService.allWrappers) {
+            const n = w ? w.notification : null;
+            const id = n ? n.id : -1;
+            if (id <= root.newestSeenId)
+                continue;
+            newest = Math.max(newest, id);
+            if (!root.copyCodes || n.lastGeneration)
+                continue;
+            const code = Codes.find(w.summary, w.body, root.copyAnyNumber);
+            if (code)
+                root.copyCode(code, w.appName);
+        }
+        root.newestSeenId = newest;
+    }
+
+    function copyCode(code, appName) {
+        Quickshell.execDetached([Proc.dmsBin, "cl", "copy", code]);
+        root.lastCode = code;
+        ToastService.showInfo(I18n.tr("Code %1 copied").arg(code), appName || "");
+    }
+
+    function skipExistingCodes() {
+        let newest = -1;
+        for (const w of NotificationService.allWrappers) {
+            if (w && w.notification)
+                newest = Math.max(newest, w.notification.id);
+        }
+        root.newestSeenId = newest;
     }
 
     // ---- one-at-a-time actions, for keybinds -----------------------------
@@ -483,6 +539,7 @@ PluginComponent {
     Component.onCompleted: {
         syncSuppression();
         syncTracked();
+        skipExistingCodes();
         console.info("notificationLine: daemon ready (ipc target 'notificationLine')");
     }
 
@@ -541,6 +598,12 @@ PluginComponent {
             return w ? ("RECALLED\t" + w.appName + "\t" + w.summary) : "NOTHING";
         }
 
+        // The code a notification text would give, for checking what counts:
+        // dms ipc call notificationLine findCode "Your code is 482913"
+        function findCode(text: string): string {
+            return Codes.find("", text, root.copyAnyNumber) || "NONE";
+        }
+
         function suppress(state: string): string {
             const on = state !== "off" && state !== "false" && state !== "0";
             PluginService.savePluginData(root.pluginId, "suppressBuiltin", on);
@@ -550,7 +613,7 @@ PluginComponent {
         function status(): string {
             const list = root.visibleList();
             const timing = root.ownsTiming ? (root.lifetime > 0 ? root.lifetime + "s" : "urgency") : "shell";
-            return [root.position, "lines=" + list.length + "/" + root.maxLines, "cap=" + NotificationService.maxVisibleNotifications + "/" + root.serviceCap, "tracked=" + root.tracked.length, "timing=" + timing, "suppressed=" + root.suppressionApplied].join("\t");
+            return [root.position, "lines=" + list.length + "/" + root.maxLines, "cap=" + NotificationService.maxVisibleNotifications + "/" + root.serviceCap, "tracked=" + root.tracked.length, "timing=" + timing, "suppressed=" + root.suppressionApplied, "copyCodes=" + root.copyCodes, "lastCode=" + (root.lastCode || "-")].join("\t");
         }
     }
 }
