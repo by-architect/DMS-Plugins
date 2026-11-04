@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import qs.Common
+import qs.Services
 import "links.js" as Links
 import "markdown.js" as Markdown
 
@@ -814,6 +815,23 @@ Item {
                 "staged": staged ? staged.slice() : []
             };
         root._drafts = next;
+    }
+
+    // ------------------------------------------------------------ emoji
+
+    // The emoji picked most recently, newest first: what the emoji picker
+    // opens on, and what the reaction picker offers first. Kept with the
+    // plugin's settings, so they are still there after a restart.
+    readonly property var recentEmoji: {
+        const saved = root._setting("recentEmoji", []);
+        return Array.isArray(saved) ? saved : [];
+    }
+
+    function noteEmoji(emoji) {
+        if (!emoji)
+            return;
+        const next = [emoji].concat(root.recentEmoji.filter(e => e !== emoji)).slice(0, 24);
+        PluginService.savePluginData("chatManager", "recentEmoji", next);
     }
 
     // openLink opens a link out of a message, if it is one worth opening.

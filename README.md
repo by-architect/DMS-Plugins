@@ -779,10 +779,15 @@ remember.
 | `Ctrl+R` / `Ctrl+F` | Reply, again to take the reply back / forward |
 | `Ctrl+T` | React — the selected message, or the newest one somebody else sent |
 | `Ctrl+E` / `↑` in an empty box | Edit your selected message, or your last one |
+| `Ctrl+.` | Pick an emoji by name (also the 😊 button) — or type `:joy:`, `:+1:` in the message |
 | `Ctrl+Delete` / `Ctrl+Shift+Delete` | Delete for you / for everyone, after confirming |
 | `Ctrl+V` | Attach an image or file from the clipboard |
 | `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
 | `Esc` | Leave an edit, clear the selection, then close |
+
+Emoji are found by name — "laugh", "heart", "thumbs up" — in the emoji picker
+and in the reaction picker alike, with the ones you used last offered first,
+and a finished `:shortcode:` in a message turns into its emoji as you type.
 
 Reactions, editing and typing appear where the provider supports them: a
 reaction shows under its message — press one to add the same, or to take yours

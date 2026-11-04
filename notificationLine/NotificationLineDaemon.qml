@@ -75,8 +75,17 @@ PluginComponent {
 
     // ---- the lines currently on screen -----------------------------------
 
+    // Lines brought back from the notification history after the
+    // notifications themselves were cleared -- see recallOne. Plain objects
+    // shaped like the shell's notification wrappers, as far as a line reads
+    // one, marked `ghost`: the notification they stood for is gone, so they
+    // carry no actions and no timer of the shell's.
+    property var recalled: []
+
+    onRecalledChanged: syncTracked()
+
     function visibleList() {
-        return NotificationService.visibleNotifications.filter(w => w && w.popup);
+        return NotificationService.visibleNotifications.filter(w => w && w.popup).concat(root.recalled);
     }
 
     // Leaves the stack, stays in the notification centre -- the same thing
@@ -84,8 +93,25 @@ PluginComponent {
     function retire(w) {
         if (!w)
             return false;
+        if (w.ghost) {
+            root.recalled = root.recalled.filter(r => r !== w);
+            return true;
+        }
         w.popup = false;
         return true;
+    }
+
+    // Gone for good: out of the notification centre, and for a recalled line
+    // out of the history it was recalled from.
+    function dismissForGood(w) {
+        if (!w)
+            return;
+        if (w.ghost) {
+            NotificationService.removeFromHistory(w.historyId);
+            root.retire(w);
+            return;
+        }
+        NotificationService.dismissNotification(w);
     }
 
     // ---- expiry ----------------------------------------------------------
@@ -197,6 +223,11 @@ PluginComponent {
         for (const e of root.tracked) {
             if (!e.w || e.holds > 0)
                 continue;
+            // Under the shell's clock, the shell times its own lines; a
+            // recalled one has no timer of the shell's, so it is timed here
+            // whoever owns the rest.
+            if (!root.ownsTiming && !e.w.ghost)
+                continue;
             const ms = root.timeoutFor(e.w);
             // 0 means "never expires" -- critical notifications default to it.
             if (ms > 0 && now - e.at >= ms)
@@ -207,7 +238,7 @@ PluginComponent {
     Timer {
         interval: 250
         repeat: true
-        running: root.ownsTiming && root.tracked.length > 0
+        running: (root.ownsTiming && root.tracked.length > 0) || root.recalled.length > 0
         onTriggered: root.reap()
     }
 
@@ -285,26 +316,78 @@ PluginComponent {
 
     // Puts the most recent notification that is not currently a line back on
     // the stack. Pressing it repeatedly walks backwards through the
-    // notification centre.
+    // notification centre -- and on into the notification history, which is
+    // what is left after "clear all": that empties the centre, and recall used
+    // to find nothing at all to bring back.
     function recallOne() {
         const shown = root.visibleList();
-        const all = NotificationService.notifications;
-        for (let i = all.length - 1; i >= 0; i--) {
-            const w = all[i];
-            if (!w || shown.indexOf(w) !== -1)
-                continue;
-            w.popup = true;
-            if (NotificationService.visibleNotifications.indexOf(w) === -1)
-                NotificationService.visibleNotifications = [...NotificationService.visibleNotifications, w];
-            root.syncTracked();
-            // Under the shell's clock nothing else would start this one's
-            // timer -- processQueue() only times notifications on their way
-            // in -- so a recalled line would stay up until dismissed.
-            if (!root.ownsTiming && w.timer && w.timer.interval > 0)
-                w.timer.restart();
-            return w;
+        const live = NotificationService.notifications;
+
+        let wrapper = null;
+        for (let i = live.length - 1; i >= 0; i--) {
+            const w = live[i];
+            if (w && shown.indexOf(w) === -1) {
+                wrapper = w;
+                break;
+            }
         }
+
+        // The newest history entry that is neither still a live notification
+        // nor already recalled.
+        const liveKeys = {};
+        for (const w of live) {
+            if (w && w.notification)
+                liveKeys[w.notification.id + "|" + w.time.getTime()] = true;
+        }
+        const recalledIds = {};
+        for (const r of root.recalled)
+            recalledIds[r.historyId] = true;
+        let entry = null;
+        for (const item of NotificationService.historyList || []) {
+            if (!item || recalledIds[item.id] || liveKeys[item.sourceNotificationId + "|" + item.timestamp])
+                continue;
+            entry = item;
+            break;
+        }
+
+        if (wrapper && (!entry || wrapper.time.getTime() >= entry.timestamp))
+            return root.recallWrapper(wrapper);
+        if (entry)
+            return root.recallEntry(entry);
         return null;
+    }
+
+    function recallWrapper(w) {
+        w.popup = true;
+        if (NotificationService.visibleNotifications.indexOf(w) === -1)
+            NotificationService.visibleNotifications = [...NotificationService.visibleNotifications, w];
+        root.syncTracked();
+        // Under the shell's clock nothing else would start this one's timer --
+        // processQueue() only times notifications on their way in -- so a
+        // recalled line would stay up until dismissed.
+        if (!root.ownsTiming && w.timer && w.timer.interval > 0)
+            w.timer.restart();
+        return w;
+    }
+
+    function recallEntry(item) {
+        const ghost = {
+            "ghost": true,
+            "historyId": item.id,
+            "appName": item.appName || "app",
+            "summary": item.summary || "",
+            "body": item.body || "",
+            "htmlBody": item.htmlBody || item.body || "",
+            "time": new Date(item.timestamp),
+            "urgency": typeof item.urgency === "number" ? item.urgency : NotificationUrgency.Normal,
+            "displayImage": NotificationService.notificationImageSource(item.image || "", item.appIcon || ""),
+            "hasDisplayImage": NotificationService.notificationHasImage(item.image || ""),
+            "fallbackIconName": NotificationService.notificationFallbackIcon(item.image || "", item.appIcon || ""),
+            "actions": [],
+            "popup": true
+        };
+        root.recalled = root.recalled.concat([ghost]);
+        return ghost;
     }
 
     // ---- built-in popup suppression -------------------------------------
@@ -430,6 +513,7 @@ PluginComponent {
 
         function clear(): string {
             const n = root.visibleList().length;
+            root.recalled = [];
             NotificationService.dismissAllPopups();
             return "CLEARED " + n;
         }
@@ -438,6 +522,7 @@ PluginComponent {
             const n = NotificationService.notifications.length;
             // clearAllNotifications() returns early when the centre is empty,
             // which leaves transient lines -- `test` sends one -- on screen.
+            root.recalled = [];
             NotificationService.dismissAllPopups();
             NotificationService.clearAllNotifications();
             return "CLEARED " + n;

@@ -3,6 +3,7 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "emoji.js" as Emoji
 
 // The message input.
 //
@@ -49,6 +50,9 @@ Item {
 
     // Up was pressed with nothing typed: go back and edit the last message.
     signal editLastRequested
+
+    // The emoji button was pressed.
+    signal emojiRequested
 
     // What was in the field when editing began, put back when it ends -- a
     // half-written message is not lost to a quick correction of the last one.
@@ -611,7 +615,7 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
             ComposerField {
                 id: input
                 anchors.bottom: parent.bottom
-                width: parent.width - 36 - Theme.spacingS
+                width: parent.width - 36 * 2 - Theme.spacingS * 2
                 enabled: root.canSend
                 keyForwardTargets: [pasteKeys]
                 onSubmitted: root.send()
@@ -632,6 +636,18 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 // Typing or pasting a path and pressing space attaches it,
                 // which is how a file manager's "copy path" ends up here.
                 onTextChanged: {
+                    // A :shortcode: just finished becomes its emoji, the way
+                    // Element, Slack and GitHub do it. Not in a draft put
+                    // back, which is text as it was left.
+                    if (!root._restoringDraft && !root.pasting) {
+                        const swapped = Emoji.replaceShortcodeAt(input.text, input.cursorPosition);
+                        if (swapped) {
+                            input.text = swapped.text;
+                            input.cursorPosition = swapped.cursor;
+                            return;
+                        }
+                    }
+
                     // Said to the conversation when the provider passes it on:
                     // typing, and later stopping. Not for a draft put back, and
                     // not for correcting a message already sent.
@@ -659,6 +675,17 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
             }
 
             // At the bottom, beside the line being typed, as the field grows.
+            DankActionButton {
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Math.max(0, (Theme.fieldHeight - 36) / 2)
+                buttonSize: 36
+                iconName: "mood"
+                iconColor: Theme.surfaceVariantText
+                enabled: root.canSend
+                tooltipText: I18n.tr("Emoji (Ctrl+.)")
+                onClicked: root.emojiRequested()
+            }
+
             DankActionButton {
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: Math.max(0, (Theme.fieldHeight - 36) / 2)

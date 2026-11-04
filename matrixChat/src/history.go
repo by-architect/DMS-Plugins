@@ -482,6 +482,7 @@ func (b *bridge) deliverHistory(ctx context.Context, roomID id.RoomID, events, m
 
 	helper := b.currentCrypto()
 	names := memberNames(members)
+	b.rememberNames(roomID, names)
 
 	var msgs []messageObj
 	var reactions []reactionObj
@@ -633,18 +634,42 @@ func nameSenders(msgs []messageObj, reactions []reactionObj, names map[id.UserID
 		return
 	}
 	for i := range msgs {
-		if msgs[i].SenderName == msgs[i].SenderID {
+		if unnamed(msgs[i].SenderName, msgs[i].SenderID) {
 			if name := names[id.UserID(msgs[i].SenderID)]; name != "" {
 				msgs[i].SenderName = name
 			}
 		}
 	}
 	for i := range reactions {
-		if reactions[i].SenderName == reactions[i].SenderID {
+		if unnamed(reactions[i].SenderName, reactions[i].SenderID) {
 			if name := names[id.UserID(reactions[i].SenderID)]; name != "" {
 				reactions[i].SenderName = name
 			}
 		}
+	}
+}
+
+// unnamed is whether a sender's name is only what their account id was made
+// into for want of one.
+func unnamed(name, senderID string) bool {
+	return name == senderID || name == fallbackName(id.UserID(senderID))
+}
+
+// rememberNames keeps the names a page of history came with as the answer to
+// who those senders are, so naming them asks the homeserver nothing more --
+// and someone who has left is named without joining the member list, where
+// they would start naming the room.
+func (b *bridge) rememberNames(roomID id.RoomID, names map[id.UserID]string) {
+	if len(names) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.lookedUpNames == nil {
+		b.lookedUpNames = map[string]string{}
+	}
+	for user, name := range names {
+		b.lookedUpNames[string(roomID)+" "+string(user)] = name
 	}
 }
 

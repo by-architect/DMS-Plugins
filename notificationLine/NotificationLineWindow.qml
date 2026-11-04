@@ -33,7 +33,7 @@ PanelWindow {
     // Newest last while the stack grows upward from a bottom anchor (the
     // Minecraft chat direction), newest first when it hangs from the top.
     readonly property var lines: {
-        const all = NotificationService.visibleNotifications.filter(w => w && w.popup);
+        const all = win.host.visibleList();
         const trimmed = all.slice(Math.max(0, all.length - win.host.maxLines));
         return win.isBottom ? trimmed : trimmed.slice().reverse();
     }

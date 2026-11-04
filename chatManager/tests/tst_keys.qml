@@ -26,7 +26,7 @@ Item {
 
     // Everything the conversation binds while a message can be written. All of
     // these must arrive, in every state, without touching what is being typed.
-    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+E", "Ctrl+T", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
+    readonly property var keymap: ["Ctrl+K", "Ctrl+J", "Ctrl+R", "Ctrl+F", "Ctrl+E", "Ctrl+T", "Ctrl+.", "Ctrl+Shift+C", "Ctrl+Return", "Ctrl+Delete", "Ctrl+Shift+Delete"]
 
     // The two answers to an invitation. An invitation has no composer -- the
     // field is hidden, and the keyboard with it -- so these never compete with
@@ -49,6 +49,7 @@ Item {
             "Ctrl+F": [Qt.Key_F, Qt.ControlModifier],
             "Ctrl+E": [Qt.Key_E, Qt.ControlModifier],
             "Ctrl+T": [Qt.Key_T, Qt.ControlModifier],
+            "Ctrl+.": [Qt.Key_Period, Qt.ControlModifier],
             "Ctrl+Y": [Qt.Key_Y, Qt.ControlModifier],
             "Ctrl+N": [Qt.Key_N, Qt.ControlModifier],
             "Ctrl+Shift+C": [Qt.Key_C, Qt.ControlModifier | Qt.ShiftModifier],

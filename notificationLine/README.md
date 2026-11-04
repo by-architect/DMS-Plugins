@@ -161,7 +161,11 @@ dms ipc call notificationLine status         # position, line count, timing mode
 `dismiss` and `recall` are inverses: hold the dismiss key to walk the stack
 down one line at a time, hold the recall key to walk back up through the
 notification centre. `clear` leaves everything in the notification centre;
-`clearAll` is the destructive one.
+`clearAll` empties it — but not the notification history, so `recall` still
+brings them back one at a time, newest first, out of the history once the
+centre has nothing left. A line brought back that way has no buttons (the app
+that sent it has let go of it); middle-click it to delete it from the history
+as well.
 
 Niri, as an example:
 

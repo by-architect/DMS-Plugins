@@ -36,6 +36,9 @@ FocusScope {
     // The message awaiting a reaction, or null.
     property var reactTarget: null
 
+    // Whether the emoji picker is open, to put one in the message.
+    property bool pickingEmoji: false
+
     // The message of ours being edited, or null. The composer is in that mode
     // for as long as this is set.
     property var editTarget: null
@@ -88,7 +91,7 @@ FocusScope {
 
     // True while anything is layered over the conversation. Escape belongs to
     // the overlay then, and the modal must not act on it.
-    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null || reactTarget !== null
+    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null || reactTarget !== null || pickingEmoji
 
     // Whether Escape is this view's to answer rather than the window's to
     // close on: an overlay, or an edit -- which is a mode the composer is in,
@@ -653,6 +656,14 @@ FocusScope {
         onActivated: root.reactToSelected()
     }
 
+    // An emoji into the message being written. Ctrl+. as on other desktops'
+    // emoji pickers, and one the text field leaves alone.
+    Shortcut {
+        sequences: ["Ctrl+."]
+        enabled: !root.hasOverlay && !root.isInvite && composer.canSend
+        onActivated: root.pickingEmoji = true
+    }
+
     // Opens the selected message's attachment or link. Ctrl+Enter rather than
     // Shift+Enter, and only with something selected, so plain Enter keeps
     // meaning send and nothing else has to be thought about while typing.
@@ -766,11 +777,25 @@ FocusScope {
         visible: root.reactTarget !== null
         focus: visible
         message: root.reactTarget
+        chatCore: root.chatCore
 
         onCancelled: root.reactTarget = null
         onPicked: key => {
             root.chatCore.react(root.reactTarget?.id ?? "", key);
             root.reactTarget = null;
+        }
+    }
+
+    ChatEmojiPicker {
+        anchors.fill: parent
+        z: 15
+        visible: root.pickingEmoji
+        chatCore: root.chatCore
+
+        onCancelled: root.pickingEmoji = false
+        onPicked: emoji => {
+            root.pickingEmoji = false;
+            composer.insertText(emoji);
         }
     }
 
@@ -1072,6 +1097,7 @@ FocusScope {
             editTarget: root.editTarget
 
             onEditCleared: root.editTarget = null
+            onEmojiRequested: root.pickingEmoji = true
             onEditLastRequested: root.startEdit(root.chatCore.lastEditable())
 
             // Anything in here that takes the keyboard gives it straight back.

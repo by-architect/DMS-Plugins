@@ -127,7 +127,7 @@ Unencrypted rooms are readable immediately either way.
 | Images, video, audio, files | yes, including encrypted attachments |
 | Formatted messages | yes — Markdown both ways, see "Formatting" below |
 | Read receipts | yes, both ways — what you read elsewhere counts as read here |
-| Rooms, with per-room display names and pictures | yes |
+| Rooms, with per-room display names and pictures | yes — a sender whose name the sync never sent (big rooms after a restart) is looked up once; an account with no name at all shows as `WhatsApp …0197` or `+90555…`, not its whole id |
 | Delete for everyone (redaction) | yes |
 | Direct messages named after, and pictured as, the other person | yes |
 | Spaces | listed and taggable, but they are containers rather than conversations |

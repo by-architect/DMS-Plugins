@@ -51,6 +51,15 @@ StyledRect {
             ]
         },
         {
+            "title": I18n.tr("Writing"),
+            "binds": [
+                {
+                    "keys": "Ctrl + .",
+                    "text": I18n.tr("Pick an emoji to put in the message -- or type its :name:, like :joy: or :+1:")
+                }
+            ]
+        },
+        {
             "title": I18n.tr("Acting on the selected message"),
             "binds": [
                 {

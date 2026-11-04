@@ -338,7 +338,7 @@ func TestNotePaginationFindsGaps(t *testing.T) {
 func TestGapIsFilledBackToWhatWasHere(t *testing.T) {
 	b := testBridge()
 	client := &fakeHistory{pages: map[string]*mautrix.RespMessages{
-		"gap": {Chunk: []*event.Event{textEvent("$m3", testAda, 3000, "c"), textEvent("$m2", testAda, 2000, "b")}, End: "gap2"},
+		"gap":  {Chunk: []*event.Event{textEvent("$m3", testAda, 3000, "c"), textEvent("$m2", testAda, 2000, "b")}, End: "gap2"},
 		"gap2": {Chunk: []*event.Event{textEvent("$m1", testAda, 1500, "a"), textEvent("$had", testAda, 1000, "already here")}, End: "gap3"},
 	}}
 
@@ -757,5 +757,32 @@ func TestOwnNameIsKeptInBigRooms(t *testing.T) {
 	got := store.load()[testRoom]
 	if len(got.Members) != 1 || got.Members[testSelf] != "Me Myself" {
 		t.Errorf("members = %v, want only our own name", got.Members)
+	}
+}
+
+// An account with no display name is called something readable, not its id.
+func TestFallbackName(t *testing.T) {
+	for in, want := range map[id.UserID]string{
+		"@ada:example.org":                         "ada",
+		"@whatsapp_905551234567:example.org":       "+905551234567",
+		"@whatsapp_lid-26139372290197:example.org": "WhatsApp …0197",
+		"@telegram_123456789:example.org":          "Telegram …6789",
+		"@signal_8d6f0c1e-2b5a-4c3e:example.org":   "Signal …4c3e",
+	} {
+		if got := fallbackName(in); got != want {
+			t.Errorf("fallbackName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A member the room has no name for is asked about once, and without a client
+// to ask, goes by the readable form of their id.
+func TestSenderNameWithoutAName(t *testing.T) {
+	b := testBridge()
+	b.updateRoom(testRoom, func(info *roomInfo) {
+		info.Members["@whatsapp_lid-26139372290197:example.org"] = "@whatsapp_lid-26139372290197:example.org"
+	})
+	if got := b.senderName(testRoom, "@whatsapp_lid-26139372290197:example.org"); got != "WhatsApp …0197" {
+		t.Errorf("senderName = %q", got)
 	}
 }

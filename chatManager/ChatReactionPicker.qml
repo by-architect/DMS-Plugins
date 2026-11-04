@@ -3,18 +3,23 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Common
 import qs.Widgets
+import "emoji.js" as Emoji
 
 // Choose a reaction.
 //
 // The usual few are one key away -- 1 to 8, or the arrows and Enter -- and
 // anything else can be typed into the box under them, for the reaction that is
-// not one of the eight. An overlay like the forward picker: it is a moment's
-// choice about the conversation already open.
+// not one of the eight: by name ("laugh", ":fire:"), with the matches shown as
+// they are typed, or as an emoji pasted in. An overlay like the forward picker:
+// it is a moment's choice about the conversation already open.
 StyledRect {
     id: root
 
     // The message being reacted to, shown so a mis-selected one is caught.
     property var message: null
+
+    // For the recently used emoji, and to remember the one picked.
+    property var chatCore: null
 
     signal picked(string key)
     signal cancelled
@@ -44,13 +49,22 @@ StyledRect {
     function pick(index) {
         const key = root.choices[index];
         if (key)
-            root.picked(key);
+            root.pickKey(key);
     }
 
+    // What the box below finds for what is typed in it.
+    readonly property var matches: custom.text.trim() === "" ? [] : Emoji.search(custom.text, 24)
+
     function pickTyped() {
-        const key = custom.text.trim();
+        // The first match for a name; an emoji typed or pasted as it is.
+        const key = root.matches.length > 0 && /^[a-z0-9_:+\-\s]+$/i.test(custom.text.trim()) ? root.matches[0] : Emoji.resolve(custom.text);
         if (key !== "")
-            root.picked(key);
+            root.pickKey(key);
+    }
+
+    function pickKey(key) {
+        root.chatCore?.noteEmoji(key);
+        root.picked(key);
     }
 
     Keys.onPressed: event => {
@@ -189,7 +203,7 @@ StyledRect {
         DankTextField {
             id: custom
             width: parent.width
-            placeholderText: I18n.tr("Or type any reaction, then Enter")
+            placeholderText: I18n.tr("Or search: laugh, fire, ok… then Enter")
             leftIconName: "add_reaction"
 
             onAccepted: root.pickTyped()
@@ -200,6 +214,43 @@ StyledRect {
             Keys.onUpPressed: event => {
                 root.forceActiveFocus();
                 event.accepted = true;
+            }
+        }
+
+        // What the typed name matches, the first being what Enter picks.
+        Flow {
+            width: parent.width
+            spacing: Theme.spacingXS
+            visible: root.matches.length > 0
+
+            Repeater {
+                model: root.matches
+
+                StyledRect {
+                    id: match
+
+                    required property string modelData
+                    required property int index
+
+                    width: 40
+                    height: 40
+                    radius: Theme.cornerRadius / 2
+                    color: matchArea.containsMouse ? Theme.surfaceHover : (match.index === 0 ? Theme.withAlpha(Theme.primary, 0.14) : "transparent")
+
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: match.modelData
+                        font.pixelSize: Theme.fontSizeLarge + 2
+                    }
+
+                    MouseArea {
+                        id: matchArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.pickKey(match.modelData)
+                    }
+                }
             }
         }
 

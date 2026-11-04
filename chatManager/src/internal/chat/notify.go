@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,10 +11,18 @@ import (
 	"dmschatmanager/internal/notify"
 )
 
-// NotifyAppName is deliberately distinct from the shell's own "DMS", so a user
-// can write a notification rule that mutes chats without muting everything else
-// the shell says.
+// NotifyAppName is what a chat notification says it came from when the
+// provider has no name of its own. Normally it is the provider's name --
+// "Matrix", "Signal" -- which says more in fewer letters, and is what a
+// notification rule matches to quiet one service without the others. Either
+// way it is distinct from the shell's own "DMS".
 const NotifyAppName = "DMS Chats"
+
+// maxRoomInTitle is how much of a group's name goes after the sender's in a
+// notification's title. The title shares its line with the message on a
+// one-line notification, and a group called "İYC Mersin 2025-2026 Erkek
+// Öğrenci Yurdu" left no room for what was said in it.
+const maxRoomInTitle = 24
 
 // NotifyPrefs is the effective notification policy for one provider.
 //
@@ -344,7 +353,7 @@ func (p *NotifyPolicy) NotifyCatchUp(ctx context.Context, msgs []Message, provid
 			// not thirty things to be told one after another.
 			remaining := len(order) - i
 			p.send(notify.Notification{
-				AppName: NotifyAppName,
+				AppName: appNameFor(providerName),
 				Icon:    "material:chat",
 				Summary: providerNameOr(providerName),
 				Body:    plural(remaining, "more conversation", "more conversations") + " with unread messages",
@@ -359,15 +368,27 @@ func (p *NotifyPolicy) NotifyCatchUp(ctx context.Context, msgs []Message, provid
 
 		n := p.notificationFor(ctx, latest, providerName, prefs)
 		if len(group) > 1 {
-			// The newest message, under a count of how much is waiting behind
-			// it. A count alone says nothing about whether it matters.
-			n.Body = plural(len(group), "new message", "new messages") + "\n" + n.Body
+			// The newest message, with a count of how much is waiting behind
+			// it beside the name. A count alone says nothing about whether it
+			// matters -- and in the body it pushed the message off a one-line
+			// notification.
+			n.Summary += " (" + strconv.Itoa(len(group)) + ")"
 		}
 		if p.send(n, focusKey{provider: latest.Provider, chatID: latest.ChatID}) {
 			shown++
 		}
 	}
 	return shown
+}
+
+// appNameFor is the provider's name as a notification's source: "Matrix" for
+// the plugin called "Matrix Chat", since every one of them is a chat.
+func appNameFor(providerName string) string {
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(providerName), " Chat"))
+	if name == "" {
+		return NotifyAppName
+	}
+	return name
 }
 
 func providerNameOr(providerName string) string {
@@ -378,31 +399,48 @@ func providerNameOr(providerName string) string {
 }
 
 // notificationFor builds what one message looks like on screen.
+//
+// Who in the title, what in the body, and nothing else in either: the title is
+// the person -- with the group after them, shortened, when it is one -- and the
+// body is the message alone. The body used to start with the sender too, which
+// on a one-line notification left the message a few letters wide.
 func (p *NotifyPolicy) notificationFor(ctx context.Context, m Message, providerName string, prefs NotifyPrefs) notify.Notification {
 	body := "New message"
 	if prefs.Preview {
 		// Without its formatting markers, which a notification cannot draw.
 		if preview := StripMarkup(m.Preview()); preview != "" {
 			body = preview
-			// In a group, who spoke matters as much as what they said.
-			if m.SenderName != "" && p.isGroup(ctx, m) {
-				body = m.SenderName + ": " + body
-			}
+		}
+	}
+
+	c, haveChat := Chat{}, false
+	if p.store != nil {
+		if found, err := p.store.ChatByID(ctx, m.Provider, m.ChatID); err == nil {
+			c, haveChat = found, true
 		}
 	}
 
 	n := notify.Notification{
-		AppName: NotifyAppName,
+		AppName: appNameFor(providerName),
 		Icon:    "material:chat",
-		Summary: p.titleFor(ctx, m, providerName),
+		Summary: p.titleFor(m, c, haveChat, providerName),
 		Body:    body,
 		Actions: openActions,
 	}
 
-	// An image attachment shows as the notification's own preview. Only for
-	// already-cached files -- notifying must never trigger a download.
-	if prefs.Preview && m.Kind == KindImage && m.MediaPath != "" {
+	// An image attachment shows as the notification's own preview; otherwise
+	// the picture of whoever wrote, which says who it is before a word is
+	// read. Only files already cached -- notifying must never trigger a
+	// download.
+	switch {
+	case prefs.Preview && m.Kind == KindImage && m.MediaPath != "":
 		n.FilePath = m.MediaPath
+	case haveChat && c.IsGroup && m.SenderAvatarPath != "":
+		n.FilePath = m.SenderAvatarPath
+	case haveChat && c.AvatarPath != "":
+		n.FilePath = c.AvatarPath
+	case m.SenderAvatarPath != "":
+		n.FilePath = m.SenderAvatarPath
 	}
 	return n
 }
@@ -426,19 +464,37 @@ func plural(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + many
 }
 
-// titleFor names the conversation, falling back through sender then provider so
-// a notification is never headed by a raw identifier.
-func (p *NotifyPolicy) titleFor(ctx context.Context, m Message, providerName string) string {
-	if p.store != nil {
-		if c, err := p.store.ChatByID(ctx, m.Provider, m.ChatID); err == nil && c.Name != "" {
-			return c.Name
+// titleFor names who a message is from: the person in a direct conversation,
+// "person · group" in a group, never a raw identifier -- see ShortName.
+func (p *NotifyPolicy) titleFor(m Message, c Chat, haveChat bool, providerName string) string {
+	room := ""
+	if haveChat {
+		room = ShortName(c.Name)
+	}
+	sender := ShortName(m.SenderName)
+
+	if haveChat && c.IsGroup {
+		switch {
+		case sender != "" && room != "":
+			return sender + " · " + clipRunes(room, maxRoomInTitle)
+		case room != "":
+			return room
 		}
 	}
-	if m.SenderName != "" {
-		return m.SenderName
+	if room != "" {
+		return room
 	}
-	if providerName != "" {
-		return providerName
+	if sender != "" {
+		return sender
 	}
-	return "Message"
+	return providerNameOr(providerName)
+}
+
+// clipRunes shortens text to at most limit characters, ending it with "…".
+func clipRunes(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return strings.TrimRight(string(runes[:limit-1]), " -·,") + "…"
 }

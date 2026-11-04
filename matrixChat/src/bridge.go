@@ -97,6 +97,10 @@ type bridge struct {
 	downloads     chan messageObj
 	downloadsOnce sync.Once
 
+	// lookedUpNames is the members whose names have been asked for, as
+	// "<room> <user>" -> the name, "" when there was none. See senderName.
+	lookedUpNames map[string]string
+
 	configured bool
 	stopOnce   sync.Once
 }

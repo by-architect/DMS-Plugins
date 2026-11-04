@@ -62,6 +62,28 @@ dms ipc call chats status                   # is the manager up, and what is ena
 `popout` asks which one you meant, in the popout itself, when a name matches
 more than one conversation -- with the arrows and Enter, like every list here.
 
+## What a notification says
+
+Who in the title, what in the body, nothing else in either — some setups show
+a notification as a single line, and every word of the title is a word less of
+the message:
+
+| | title | body |
+|---|---|---|
+| direct conversation | `Hamza Ayvaz` | the message |
+| group | `Hamza Ayvaz · İYC Mersin 2025-2026 Er…` | the message |
+
+It comes from the provider by name (`Matrix`, `Signal`, `WhatsApp`), so a
+notification rule can quiet one service and not the others, and carries the
+sender's picture (the conversation's, in a direct one) when it is cached — or
+the photo, when that is what was sent.
+
+Names are shortened for it: what is only there to tell accounts apart goes.
+`Ada (WA)` is `Ada`; `Ada (@ada:example.org)` is `Ada`;
+`@whatsapp_905551234567:server` is `+905551234567`; an account a bridge made
+with nothing better to go by, `@whatsapp_lid-26139372290197:server`, is
+`WhatsApp …0197`. Email addresses stay as they are.
+
 ## Notifications open their conversation
 
 Clicking a chat notification opens that conversation in the popout; one that
@@ -353,7 +375,7 @@ twenty notifications for conversations already dealt with.
 So messages that arrive before a provider reports `connected` are held, and
 judged a few seconds after it does: anything the provider says has since been
 read is dropped, and what is left is announced **one notification per
-conversation** — "3 new messages", under the newest one — for at most five
+conversation** — the newest message, with "(3)" beside the name — for at most five
 conversations, with the rest counted in a single line. A provider that never
 reports connected is flushed anyway after 45 seconds, and one switched off
 loses whatever it was holding rather than notifying about it later.

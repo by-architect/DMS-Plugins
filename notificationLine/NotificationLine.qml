@@ -258,7 +258,7 @@ Item {
                     return;
                 }
                 if (mouse.button === Qt.MiddleButton) {
-                    NotificationService.dismissNotification(line.wrapper);
+                    line.host.dismissForGood(line.wrapper);
                     return;
                 }
                 // The action the sender marked "default" is what a click on

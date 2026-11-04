@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -146,10 +150,10 @@ func (b *bridge) displayName(roomID id.RoomID) string {
 		if user == self {
 			continue
 		}
-		if name = strings.TrimSpace(name); name != "" {
+		if name = strings.TrimSpace(name); name != "" && name != string(user) {
 			others = append(others, name)
 		} else {
-			others = append(others, string(user))
+			others = append(others, fallbackName(user))
 		}
 	}
 	sort.Strings(others)
@@ -168,17 +172,133 @@ func (b *bridge) displayName(roomID id.RoomID) string {
 }
 
 // senderName is how this person is called in this room.
+//
+// A name the room does not know yet is asked for, once: the sync lazily loads
+// members, sending each one's name only the first time this device needs it,
+// and the names of a big room's members are not kept across a restart -- so
+// after one, everybody who had spoken before it went by their raw account id
+// for good. Failing that, the account id made readable; see fallbackName.
 func (b *bridge) senderName(roomID id.RoomID, user id.UserID) string {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
+	name := ""
 	if info, ok := b.rooms[roomID]; ok {
-		if name := strings.TrimSpace(info.Members[user]); name != "" {
-			return name
+		name = strings.TrimSpace(info.Members[user])
+	}
+	b.mu.RUnlock()
+
+	if name != "" && name != string(user) {
+		return name
+	}
+	if looked := b.lookUpName(roomID, user); looked != "" {
+		return looked
+	}
+	return fallbackName(user)
+}
+
+// nameLookupTimeout bounds the one question about a member's name, which is
+// asked while a message is being read in.
+const nameLookupTimeout = 4 * time.Second
+
+// lookUpName asks the homeserver what a member is called in a room, once per
+// member and room for as long as the bridge runs, and "" when it does not say.
+func (b *bridge) lookUpName(roomID id.RoomID, user id.UserID) string {
+	key := string(roomID) + " " + string(user)
+
+	b.mu.Lock()
+	if name, asked := b.lookedUpNames[key]; asked {
+		b.mu.Unlock()
+		return name
+	}
+	client := b.client
+	if client == nil || user == "" {
+		b.mu.Unlock()
+		return ""
+	}
+	if b.lookedUpNames == nil {
+		b.lookedUpNames = map[string]string{}
+	}
+	// Recorded before asking, so a second message from them while the
+	// question is out does not ask again.
+	b.lookedUpNames[key] = ""
+	b.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), nameLookupTimeout)
+	defer cancel()
+	var member event.MemberEventContent
+	if err := client.StateEvent(ctx, roomID, event.StateMember, string(user), &member); err != nil {
+		logf("debug", "could not look up the name of %s: %v", user, err)
+		return ""
+	}
+	name := strings.TrimSpace(member.Displayname)
+
+	b.mu.Lock()
+	b.lookedUpNames[key] = name
+	if name != "" && (member.Membership == event.MembershipJoin || member.Membership == event.MembershipInvite) {
+		if info, ok := b.rooms[roomID]; ok {
+			if known := strings.TrimSpace(info.Members[user]); known == "" || known == string(user) {
+				info.Members[user] = name
+			}
 		}
 	}
-	// A user id is at least readable, and better than an empty sender.
-	return string(user)
+	b.mu.Unlock()
+	return name
+}
+
+// fallbackName is what an account with no display name is called: not its
+// whole id, "@whatsapp_lid-26139372290197:example.net", but the part that
+// means something -- a bridged phone number as the number, any other bridged
+// account as its service and the end of its id, an ordinary account as the
+// name before the server.
+func fallbackName(user id.UserID) string {
+	local := user.Localpart()
+	if local == "" {
+		return string(user)
+	}
+	m := puppetLocalpart.FindStringSubmatch(local)
+	if m == nil {
+		return local
+	}
+	service, lid, rest := m[1], m[2], m[3]
+	if service == "whatsapp" && lid == "" && allDigits(rest) {
+		return "+" + rest
+	}
+	tail := strings.ReplaceAll(rest, "-", "")
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
+	}
+	return puppetServices[service] + " …" + tail
+}
+
+// The accounts bridges make for the people they bring in: "whatsapp_<number>",
+// "whatsapp_lid-<id>", "signal_<uuid>", "telegram_<id>".
+var puppetLocalpart = regexp.MustCompile(`^(whatsapp|signal|telegram|discord|instagram|meta|facebook|slack|gmessages|imessage|linkedin|twitter|bluesky)_(lid-)?([0-9a-zA-Z_=.\-]+)$`)
+
+var puppetServices = map[string]string{
+	"whatsapp":  "WhatsApp",
+	"signal":    "Signal",
+	"telegram":  "Telegram",
+	"discord":   "Discord",
+	"instagram": "Instagram",
+	"meta":      "Messenger",
+	"facebook":  "Messenger",
+	"slack":     "Slack",
+	"gmessages": "SMS",
+	"imessage":  "iMessage",
+	"linkedin":  "LinkedIn",
+	"twitter":   "Twitter",
+	"bluesky":   "Bluesky",
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // handlesFor lists what a user might type to reach this room.
