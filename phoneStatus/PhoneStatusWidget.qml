@@ -12,13 +12,13 @@ PluginComponent {
 
     layerNamespacePlugin: "phone-status"
 
-    readonly property var S: PhoneStatusService
-    readonly property var r: S.result
-    readonly property bool reachable: S.online
+    readonly property var svc: PhoneStatusService
+    readonly property var r: svc.result
+    readonly property bool reachable: svc.online
     readonly property var battery: r ? r.battery : null
     readonly property bool lowBattery: battery !== null && isFinite(battery.level) && battery.level <= 15 && battery.state !== "charging"
     readonly property color accent: !reachable ? Theme.surfaceVariantText : (lowBattery ? Theme.error : Theme.surfaceText)
-    readonly property int waiting: S.showNotificationCount ? S.notifications.length : 0
+    readonly property int waiting: svc.showNotificationCount ? svc.notifications.length : 0
     readonly property string levelText: battery && isFinite(battery.level) ? battery.level + "%" : ""
 
     popoutWidth: 480

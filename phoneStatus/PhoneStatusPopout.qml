@@ -13,8 +13,8 @@ import "phone.js" as Phone
 PopoutComponent {
     id: popout
 
-    readonly property var S: PhoneStatusService
-    readonly property var r: S.result
+    readonly property var svc: PhoneStatusService
+    readonly property var r: svc.result
     readonly property int maxBodyHeight: 680
 
     property real nowMs: Date.now()
@@ -23,9 +23,9 @@ PopoutComponent {
     Component.onCompleted: PhoneStatusService.popouts++
     Component.onDestruction: PhoneStatusService.popouts = Math.max(0, PhoneStatusService.popouts - 1)
 
-    headerText: S.phoneName || "Phone"
+    headerText: svc.phoneName || "Phone"
     detailsText: {
-        if (!S.host)
+        if (!svc.host)
             return "No phone picked yet";
         const parts = [];
         if (popout.r) {
@@ -35,10 +35,10 @@ PopoutComponent {
             if (p.android)
                 parts.push("Android " + p.android);
         }
-        if (S.checking)
+        if (svc.checking)
             parts.push("checking…");
-        else if (S.checkedMs > 0)
-            parts.push((S.online ? "checked " : "last seen ") + Phone.agoText(S.online ? S.checkedMs : S.onlineMs, popout.nowMs));
+        else if (svc.checkedMs > 0)
+            parts.push((svc.online ? "checked " : "last seen ") + Phone.agoText(svc.online ? svc.checkedMs : svc.onlineMs, popout.nowMs));
         return parts.join(" · ");
     }
 
@@ -208,20 +208,20 @@ PopoutComponent {
 
                 // Not set up, not reachable, or no root: say so first.
                 Card {
-                    visible: !popout.S.host || (!popout.S.online && popout.S.state !== "") || (popout.r !== null && !popout.r.root)
+                    visible: !popout.svc.host || (!popout.svc.online && popout.svc.state !== "") || (popout.r !== null && !popout.r.root)
 
                     StyledText {
                         width: parent.width
                         wrapMode: Text.WordWrap
                         font.pixelSize: Theme.fontSizeSmall
-                        color: popout.S.host && popout.S.online ? Theme.surfaceVariantText : Theme.warning
+                        color: popout.svc.host && popout.svc.online ? Theme.surfaceVariantText : Theme.warning
                         text: {
-                            const S = popout.S;
-                            if (!S.host)
+                            const svc = popout.svc;
+                            if (!svc.host)
                                 return "Pick the phone under Settings → Plugins → Phone Status. It has to be in SSH Hosts first: Termux's sshd (port 8022 unless you changed it), with a key.";
-                            if (!S.online)
-                                return S.phoneName + " is " + (S.state === "unreachable" ? "not reachable" : "not answering") + (S.detail ? ": " + S.detail : "") + (popout.r ? ". What is below is from " + Phone.agoText(S.onlineMs, popout.nowMs) + "." : "");
-                            return "Termux has no root on " + S.phoneName + ", so only the battery is shown. Allow it su in Magisk (or the ROM's root settings) to see the rest.";
+                            if (!svc.online)
+                                return svc.phoneName + " is " + (svc.state === "unreachable" ? "not reachable" : "not answering") + (svc.detail ? ": " + svc.detail : "") + (popout.r ? ". What is below is from " + Phone.agoText(svc.onlineMs, popout.nowMs) + "." : "");
+                            return "Termux has no root on " + svc.phoneName + ", so only the battery is shown. Allow it su in Magisk (or the ROM's root settings) to see the rest.";
                         }
                     }
                 }
@@ -480,11 +480,11 @@ PopoutComponent {
                     visible: popout.r !== null && popout.r.root
 
                     CardTitle {
-                        text: popout.S.notifications.length === 0 ? "No notifications" : (popout.S.notifications.length === 1 ? "1 notification" : popout.S.notifications.length + " notifications")
+                        text: popout.svc.notifications.length === 0 ? "No notifications" : (popout.svc.notifications.length === 1 ? "1 notification" : popout.svc.notifications.length + " notifications")
                     }
 
                     Repeater {
-                        model: popout.S.notifications.concat(popout.showOngoing ? popout.S.ongoing : [])
+                        model: popout.svc.notifications.concat(popout.showOngoing ? popout.svc.ongoing : [])
 
                         Row {
                             id: note
@@ -530,9 +530,9 @@ PopoutComponent {
 
                     // Running services and the like, folded away.
                     StyledText {
-                        visible: popout.S.ongoing.length > 0
+                        visible: popout.svc.ongoing.length > 0
                         width: parent.width
-                        text: (popout.showOngoing ? "Hide " : "Show ") + popout.S.ongoing.length + " ongoing (" + Array.from(new Set(popout.S.ongoing.map(n => n.app))).join(", ") + ")"
+                        text: (popout.showOngoing ? "Hide " : "Show ") + popout.svc.ongoing.length + " ongoing (" + Array.from(new Set(popout.svc.ongoing.map(n => n.app))).join(", ") + ")"
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.primary
                         elide: Text.ElideRight
@@ -549,7 +549,7 @@ PopoutComponent {
                 Card {
                     id: photoCard
 
-                    readonly property var paths: popout.r && popout.S.showPhotos ? popout.r.photos : []
+                    readonly property var paths: popout.r && popout.svc.showPhotos ? popout.r.photos : []
 
                     visible: paths.length > 0
 
@@ -568,7 +568,7 @@ PopoutComponent {
                                 id: thumb
 
                                 required property string modelData
-                                readonly property string local: popout.S.photoFiles[modelData] || ""
+                                readonly property string local: popout.svc.photoFiles[modelData] || ""
 
                                 width: (parent.width - Theme.spacingS * 3) / 4
                                 height: width
