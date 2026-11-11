@@ -1,0 +1,16 @@
+{
+    "id": "matrixBar",
+    "name": "Matrix Bar",
+    "description": "A second bar on the left edge for every machine in matrix: CPU, GPU, memory, swap, disks, removable disks and battery as bars with their percentage, then SSH connections, Syncthing, rsync and backups; a phone adds its signal, Wi-Fi or mobile data, calls and the mobile data used this cycle. Each machine is read over one ssh that stays open",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "daemon",
+    "capabilities": ["daemon", "monitoring"],
+    "icon": "view_sidebar",
+    "settings": "./MatrixBarSettings.qml",
+    "dependencies": ["ssh"],
+    "permissions": ["settings_read", "settings_write", "process"],
+    "components": {
+        "daemon": "./MatrixBarDaemon.qml"
+    }
+}

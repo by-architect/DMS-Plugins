@@ -2,12 +2,12 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twenty-four plugins in six shapes: **launcher** plugins that answer a trigger word
+Twenty-five plugins in seven shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, **bar widgets** that live in the bar and open a popout under themselves,
-the **chat manager** that is the chat system itself, **chat providers** that
-connect an outside messaging service to it, and an **overlay** that replaces a
-piece of shell chrome.
+a **bar** of its own on the left edge, the **chat manager** that is the chat
+system itself, **chat providers** that connect an outside messaging service to
+it, and an **overlay** that replaces a piece of shell chrome.
 
 | Plugin | Shape | How you reach it | Needs |
 |---|---|---|---|
@@ -32,6 +32,7 @@ piece of shell chrome.
 | [hostStatus](hostStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; `sshpass` for password hosts |
 | [phoneStatus](phoneStatus/) | bar widget | the pill, and its popout | sshManager, `ssh`; Termux's sshd and root on the phone |
 | [speedTest](speedTest/) | bar widget | the pill, and its popout | `speedtest-cli`, Ookla's `speedtest` or `librespeed-cli` |
+| [matrixBar](matrixBar/) | bar | the left screen edge; keybind / IPC to hide it | `matrix`, `ssh`; root on a phone |
 | [chatManager](chatManager/) | chat window + daemon | keybind / IPC, notifications, chatRunner | Go, to build |
 | [whatsappChat](whatsappChat/) | chat provider | the chat window | chatManager; Go, to build |
 | [signalChat](signalChat/) | chat provider | the chat window | chatManager; Go, to build; `signal-cli` |
@@ -689,6 +690,35 @@ pill turns amber below a speed you set.
 
 ---
 
+# A bar of its own
+
+## matrixBar
+
+A second bar on the left edge with one block for every machine in matrix —
+this one first, underlined — drawn from DankBar's own settings so the two
+look alike. Unlike DankBar's single column of pills it puts two things side
+by side:
+
+- CPU and GPU, memory and swap, disk 1 and disk 2, and every removable disk,
+  as bars filling from the bottom with the percentage under each;
+- the battery, when there is one;
+- a phone's signal next to one icon for Wi-Fi or mobile data, and its calls
+  (with missed calls) next to the mobile data used this cycle, as a ring;
+- then, in circles: ssh connections to it now, Syncthing working, idle or
+  paused, and the rsync pairs and backups running now — red when one failed
+  last time.
+
+Hovering anything says more. The machines are the ones the installed
+`matrix` fans out to, each read over one ssh that stays open (riding
+ssh-link's connection), every 5 seconds — a phone every 15, as root.
+`dms ipc call matrixBar toggle` shows or hides it.
+
+![Matrix Bar](matrixBar/docs/bar.png)
+
+→ [matrixBar/README.md](matrixBar/README.md)
+
+---
+
 # Chat
 
 A chat system that knows nothing about any particular messaging service.
@@ -905,7 +935,7 @@ every bridge's own output there as well.
 ## A note on trust
 
 These plugins run as your user, with your permissions. So do all DMS plugins —
-there is no sandbox. Four are worth naming specifically:
+there is no sandbox. Five are worth naming specifically:
 
 - **commandRunner** runs what you configure, verbatim and unsanitized. That's
   the point of a command launcher, and anyone who can write its settings could
@@ -915,6 +945,11 @@ there is no sandbox. Four are worth naming specifically:
   machine. Its all-machines page runs `matrix log`, which ssh-es into every
   host matrix knows with your keys and shows the same about each of them.
   Treat the panel as you'd treat that output.
+- **matrixBar** keeps an ssh connection open to every machine matrix knows,
+  with your keys, and runs a probe there every few seconds — on a phone as
+  root, through `su`, since signal, calls and the data counter are root's to
+  read. Nothing is installed on the far end: the probe is sent each time it
+  connects, and is `matrixBar/scripts/probe.sh` to read.
 - **sshManager** can hold a plaintext password per host, deliberately kept out
   of the ordinary settings file but still just a 0600 file on disk. Any other
   enabled plugin can ask for it — there's no extra gate beyond being enabled
