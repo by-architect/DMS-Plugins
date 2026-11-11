@@ -309,7 +309,7 @@ last_phone=""
 phone() {
     full=$1 data=$2
     now=$(
-        for p in gsm.operator.alpha gsm.sim.state gsm.operator.isroaming; do
+        for p in gsm.operator.alpha gsm.sim.state gsm.operator.isroaming ro.serialno; do
             echo "mx:prop $p $(getprop $p 2>/dev/null)"
         done
         [ "$root" = 1 ] || exit 0
@@ -349,6 +349,14 @@ phone() {
                 next
             }
             /^ *mSignalStrength=/ { print "mx:tel mSignalStrength={" signal($0) "}"; next }'
+        # Whether mobile data is switched on: the setting of the SIM that
+        # carries data (multi_sim_data_call names it), else the global one.
+        sub=$(settings get global multi_sim_data_call 2>/dev/null)
+        d=$(settings get global "mobile_data$sub" 2>/dev/null)
+        case $d in 0|1) ;; *) d=$(settings get global mobile_data 2>/dev/null) ;; esac
+        echo "mx:setting data $d"
+        # The hotspot: the interfaces tethering shares the connection on.
+        echo "mx:tether $(dumpsys tethering 2>/dev/null | sed -n 's/^ *\([^ ]*\) - TetheredState.*/\1/p' | tr '\n' ' ')"
         cmd wifi status 2>/dev/null | grep -E '^Wifi is|^WifiInfo:' | head -4 |
             sed -E 's/^(WifiInfo: SSID: "[^"]*").*(RSSI: -?[0-9]+).*/\1, \2/; s/^/mx:wifi /'
         # What carries the traffic right now: the card the default route
@@ -639,16 +647,18 @@ snapshot() {
     echo "mx:end"
 }
 
-n=0
+# sh has no local variables, and the functions above use short names of
+# their own (n, f, d ...): the loop's count has a name none of them takes.
+tick=0
 while :; do
     full=0
     data=0
-    [ $((n % slow)) -eq 0 ] && full=1
-    [ $((n % (slow * 5))) -eq 0 ] && data=1
+    [ $((tick % slow)) -eq 0 ] && full=1
+    [ $((tick % (slow * 5))) -eq 0 ] && data=1
     [ "$mode" = loop ] || { full=1; data=1; }
-    snapshot "$n" "$full" "$data"
+    snapshot "$tick" "$full" "$data"
     [ "$mode" = loop ] || break
-    n=$((n + 1))
+    tick=$((tick + 1))
     sleep "$interval"
 done
 BODY

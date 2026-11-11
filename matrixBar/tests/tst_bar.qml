@@ -231,6 +231,35 @@ TestCase {
         compare(st.rsync.names.join(), "from another machine");
     }
 
+    function test_the_switches() {
+        // on mobile data, Wi-Fi on but not joined, no hotspot yet
+        const st = Bar.advance(null, Bar.parseSnapshot(phone.replace("mx:setting airplane 0", "mx:setting airplane 0\nmx:setting data 1\nmx:tether \nmx:prop ro.serialno 56853bd8")), nov11, {});
+        compare(st.serial, "56853bd8");
+        compare(Bar.switchState(st, "wifi"), true);
+        compare(Bar.switchState(st, "data"), true);
+        compare(Bar.switchState(st, "hotspot"), false);
+        compare(Bar.switchIcon("hotspot", false), "portable_wifi_off");
+        // mobile data carries the bar's connection and Wi-Fi has no network
+        verify(Bar.switchRisk(st, "data", false) !== "");
+        compare(Bar.switchRisk(st, "wifi", false), "");
+        compare(Bar.switchRisk(st, "data", true), "");
+        verify(Bar.switchTip(st, "data", null, "").indexOf("Mobile data: on") === 0);
+        compare(Bar.switchTip(st, "hotspot", {
+            "want": true,
+            "error": ""
+        }, ""), "Switching Hotspot on…");
+
+        // the hotspot comes on; a snapshot without the switches keeps them
+        const next = Bar.advance(st, Bar.parseSnapshot(lines(["mx:begin 1 0", "mx:tether wlan1 ", "mx:end"])), nov11 + 15000, {});
+        compare(Bar.switchState(next, "hotspot"), true);
+        compare(next.hotspot.ifaces.join(), "wlan1");
+        compare(Bar.switchState(next, "data"), true);
+        compare(next.serial, "56853bd8");
+        // a USB tether is not the hotspot
+        const usb = Bar.advance(st, Bar.parseSnapshot(lines(["mx:begin 1 0", "mx:tether rndis0", "mx:end"])), nov11 + 15000, {});
+        compare(Bar.switchState(usb, "hotspot"), false);
+    }
+
     function test_mobile_data_this_cycle() {
         const st = Bar.advance(null, Bar.parseSnapshot(phone), nov11, {
             "dataAllowanceBytes": 0

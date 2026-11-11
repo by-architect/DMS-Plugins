@@ -17,6 +17,8 @@ import "bar.js" as Bar
 //   signal | network   a phone only: bars, and Wi-Fi or mobile data in one icon
 //   calls | data       a phone only: the call state and missed calls, and the
 //                      mobile data used this cycle, as a ring
+//   switches           a phone only: Wi-Fi, mobile data, hotspot -- click to
+//                      switch them
 //   ssh                connections to it now
 //   Syncthing          working, idle or paused
 //   rsync              sync pairs running now
@@ -51,6 +53,18 @@ Item {
     readonly property real ringD: Math.min(22, root.inner)
     readonly property real iconS: Math.min(18, root.colW)
     readonly property real groupGap: Math.round(Theme.spacingXS * 1.5)
+    readonly property real switchGap: 1
+    readonly property real switchW: Math.floor((root.inner - root.switchGap * 2) / 3)
+
+    // The switch waiting for a second click, for a few seconds.
+    property string armedSwitch: ""
+
+    Timer {
+        id: disarm
+
+        interval: 5000
+        onTriggered: root.armedSwitch = ""
+    }
     readonly property real vpad: Theme.spacingS
 
     implicitWidth: root.blockWidth
@@ -461,6 +475,56 @@ Item {
                         contentColor: dataRing.d ? Theme.surfaceText : Theme.surfaceVariantText
                         tip: Bar.dataTip(root.s)
                         tipHost: root.tipHost
+                    }
+                }
+            }
+
+            // a phone: its Wi-Fi, mobile data and hotspot, switched with a
+            // click. One that would cut the bar off from the phone asks for
+            // a second click.
+            Row {
+                visible: root.host.android
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: root.switchGap
+
+                Repeater {
+                    model: Bar.SWITCHES
+
+                    SwitchCell {
+                        id: cell
+
+                        required property string modelData
+                        readonly property var sw: {
+                            const all = MatrixBarService.switches[root.host.name];
+                            return all ? all[cell.modelData] ?? null : null;
+                        }
+                        readonly property var now: Bar.switchState(root.s, cell.modelData)
+                        readonly property bool switching: cell.sw !== null && !cell.sw.error && cell.sw.want !== cell.now
+                        readonly property string risk: root.armedSwitch === cell.modelData ? Bar.switchRisk(root.s, cell.modelData, false) : ""
+
+                        width: root.switchW
+                        iconSize: Math.min(14, root.switchW - 2)
+                        // While switching, show where it is going.
+                        isOn: cell.switching ? cell.sw.want : cell.now
+                        icon: Bar.switchIcon(cell.modelData, cell.isOn)
+                        busy: cell.switching
+                        armed: cell.risk !== ""
+                        failed: cell.sw !== null && cell.sw.error !== ""
+                        enabled: root.online
+                        tip: Bar.switchTip(root.s, cell.modelData, cell.sw, cell.risk)
+                        tipHost: root.tipHost
+                        onClicked: {
+                            if (!root.online || cell.now === null || cell.switching)
+                                return;
+                            const want = !cell.now;
+                            if (Bar.switchRisk(root.s, cell.modelData, want) !== "" && root.armedSwitch !== cell.modelData) {
+                                root.armedSwitch = cell.modelData;
+                                disarm.restart();
+                                return;
+                            }
+                            root.armedSwitch = "";
+                            MatrixBarService.phoneSwitch(root.host.name, cell.modelData, want);
+                        }
                     }
                 }
             }

@@ -153,6 +153,7 @@ function emptySnapshot() {
         tel: [],
         wifi: [],
         uplink: null,
+        tether: null,
         missed: null,
         policy: null,
         dataRows: null
@@ -385,6 +386,9 @@ function parseSnapshot(text) {
             break;
         case "uplink":
             s.uplink = rest.trim();
+            break;
+        case "tether":
+            s.tether = rest.trim() === "" ? [] : rest.trim().split(/\s+/);
             break;
         case "prop":
             var ps = rest.indexOf(" ");
@@ -1096,6 +1100,11 @@ function emptyState() {
         airplane: false,
         uplink: null,
         net: "",
+        // the switches: mobile data on (true/false, null unknown), the
+        // hotspot { on, ifaces }, and the serial adb knows the phone by
+        dataOn: null,
+        hotspot: null,
+        serial: "",
         call: "",
         missed: -1,
         data: null,
@@ -1271,6 +1280,16 @@ function advance(prev, snap, nowMs, opts) {
             st.wifi = parseWifi(snap.wifi);
         if (snap.settings.airplane !== undefined)
             st.airplane = snap.settings.airplane === "1";
+        if (snap.settings.data === "0" || snap.settings.data === "1")
+            st.dataOn = snap.settings.data === "1";
+        if (snap.tether !== null)
+            st.hotspot = {
+                on: snap.tether.some(function (i) {
+                    return /^(wlan|softap|ap_br|swlan)/.test(i);
+                }),
+                ifaces: snap.tether
+            };
+        st.serial = props["ro.serialno"] || st.serial;
         if (snap.uplink !== null)
             st.uplink = snap.uplink;
         if (snap.tel.length > 0 || snap.wifi.length > 0 || snap.uplink !== null)
@@ -1647,6 +1666,81 @@ function callTip(st) {
     var head = st.call === "ringing" ? "Ringing" : (st.call === "offhook" ? "In a call" : "No call");
     var missed = st.missed > 0 ? st.missed + " missed call" + (st.missed === 1 ? "" : "s") : (st.missed === 0 ? "no missed calls" : "");
     return _join([head, missed]);
+}
+
+// ------------------------------------------------------------- switches
+// A phone's Wi-Fi, mobile data and hotspot, switched from the bar.
+
+var SWITCHES = ["wifi", "data", "hotspot"];
+var SWITCH_NAMES = {
+    wifi: "Wi-Fi",
+    data: "Mobile data",
+    hotspot: "Hotspot"
+};
+
+// Whether it is on now: true, false, or null when the phone has not said.
+function switchState(st, what) {
+    if (!st)
+        return null;
+    switch (what) {
+    case "wifi":
+        return st.wifi ? st.wifi.enabled : null;
+    case "data":
+        return st.dataOn;
+    case "hotspot":
+        return st.hotspot ? st.hotspot.on : null;
+    }
+    return null;
+}
+
+function switchIcon(what, on) {
+    switch (what) {
+    case "wifi":
+        return on === false ? "wifi_off" : "wifi";
+    case "data":
+        return on === false ? "mobiledata_off" : "swap_vert";
+    case "hotspot":
+        return on === false ? "portable_wifi_off" : "wifi_tethering";
+    }
+    return "toggle_off";
+}
+
+// What switching it would cost, when that is losing the phone: the bar
+// reads it over the network it has, and switching off the one it uses
+// leaves nothing to switch it back on with but a USB cable. "" when
+// nothing is lost.
+function switchRisk(st, what, wantOn) {
+    if (!st || wantOn)
+        return "";
+    var wifiUp = st.net === "wifi";
+    var mobileUp = st.net === "mobile";
+    if (what === "wifi" && wifiUp && !(st.dataOn && st.cell && st.cell.inService))
+        return "Wi-Fi is the phone's only network: without it the bar loses the phone, and only adb over USB can switch it back on.";
+    if (what === "data" && mobileUp && !(st.wifi && st.wifi.connected))
+        return "Mobile data is the phone's only network: without it the bar loses the phone, and only adb over USB can switch it back on.";
+    return "";
+}
+
+// sw: the service's word on this switch -- { want, error, via } or null.
+function switchTip(st, what, sw, armedRisk) {
+    var name = SWITCH_NAMES[what] || what;
+    var on = switchState(st, what);
+    if (armedRisk)
+        return _join([armedRisk, "Click again to switch " + name + " off anyway."]);
+    if (sw && sw.error)
+        return _join(["Could not switch " + name + " " + (sw.want ? "on" : "off"), sw.error]);
+    if (sw && sw.want !== undefined && sw.want !== on)
+        return "Switching " + name + " " + (sw.want ? "on" : "off") + "…";
+    if (on === null)
+        return name + ": not known yet";
+    var head = name + ": " + (on ? "on" : "off");
+    if (what === "wifi" && on && st.wifi && st.wifi.ssid)
+        head += " · " + st.wifi.ssid;
+    if (what === "data" && on && st.net === "mobile")
+        head += " · in use";
+    if (what === "hotspot" && on && st.hotspot.ifaces.length)
+        head += " · " + st.hotspot.ifaces.join(", ");
+    return _join([head, "Click to switch it " + (on ? "off" : "on")]);
 }
 
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

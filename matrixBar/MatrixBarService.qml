@@ -46,6 +46,7 @@ Singleton {
     readonly property int phoneSlowEvery: Math.max(1, Math.round(60 / Math.max(1, phoneSeconds)))
 
     readonly property string probeScript: Paths.strip(Qt.resolvedUrl("./scripts/probe.sh"))
+    readonly property string switchScript: Paths.strip(Qt.resolvedUrl("./scripts/switch.sh"))
 
     // ------------------------------------------------------------- machines
     // [{ name, ip, port, user, android, self }], in the devices file's order
@@ -84,6 +85,11 @@ Singleton {
     property var _streams: ({})     // name -> Process
     property var _retryAt: ({})     // name -> ms
     property var _held: ({})        // name -> true: refused us, waits for a manual retry
+
+    // name -> { wifi|data|hotspot: { want, atMs, running, error, errorMs } }
+    // A switch asked for, until the phone's snapshots show it done, or why
+    // it was not.
+    property var switches: ({})
 
     function resultFor(name) {
         return results[name] ?? null;
@@ -381,6 +387,7 @@ Singleton {
             "sinceMs": prev && prev.state === "online" && prev.sinceMs ? prev.sinceMs : now,
             "failures": 0
         });
+        _settleSwitches(proc.host);
     }
 
     function _exited(proc, code) {
@@ -433,7 +440,7 @@ Singleton {
     Timer {
         interval: 1000
         repeat: true
-        running: root.watching || Object.keys(root._streams).length > 0
+        running: root.watching || Object.keys(root._streams).length > 0 || Object.keys(root.switches).length > 0
         onTriggered: {
             const now = Date.now();
             for (const name in root._streams) {
@@ -450,6 +457,8 @@ Singleton {
                     proc.running = false;
                 }
             }
+            for (const name in root.switches)
+                root._settleSwitches(name);
             for (const name in root._retryAt) {
                 if (root._retryAt[name] <= now) {
                     Qt.callLater(root._reconcile);
@@ -465,6 +474,101 @@ Singleton {
         repeat: true
         running: root.watching
         onTriggered: root.discover()
+    }
+
+    // ----------------------------------------------------------- switches
+    // A phone's Wi-Fi, mobile data or hotspot, on or off: scripts/switch.sh,
+    // run as root on the phone. Over ssh the way the stream goes (riding
+    // ssh-link's master when there is one); when ssh cannot reach the phone
+    // -- its only network was just switched off -- over adb, but only to
+    // the phone with this one's serial, plugged in over USB.
+    //
+    // $1 the script, $2 what, $3 on|off, $4 port, $5 user@address,
+    // $6 serial; the rest are ssh's options.
+    readonly property string _switchWrap: 'f=$1 what=$2 want=$3 port=$4 dest=$5 serial=$6; shift 6; ' + 'run="su -c \'sh -s $what $want\'"; out="" rc=255; ' + 'if [ -n "$dest" ] && command -v ssh >/dev/null 2>&1; then out=$(ssh "$@" -p "$port" -- "$dest" "$run" < "$f" 2>&1); rc=$?; ' + '[ $rc -ne 255 ] && { printf "%s\\n" "$out"; exit $rc; }; fi; ' + 'adb=$(command -v adb) || for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" "$HOME/Opt/Android/Sdk"; do ' + '[ -n "$d" ] && [ -x "$d/platform-tools/adb" ] && { adb=$d/platform-tools/adb; break; }; done; ' + 'if [ -n "$serial" ] && [ -n "$adb" ] && "$adb" devices 2>/dev/null | grep -q "^$serial[[:space:]]*device"; then ' + 'out=$("$adb" -s "$serial" shell "$run" < "$f" 2>&1); rc=$?; printf "%s\\n" "$out"; exit $rc; fi; ' + 'printf "%s\\n" "$out"; echo "ssh cannot reach it${serial:+, and adb has no phone $serial}"; exit 255'
+
+    readonly property int _switchWaitMs: 45000
+
+    function switchFor(name, what) {
+        const all = switches[name];
+        return all ? all[what] ?? null : null;
+    }
+
+    function phoneSwitch(name, what, on) {
+        const h = allHosts.find(x => x.name === name);
+        if (!h || !h.android || Bar.SWITCHES.indexOf(what) < 0)
+            return false;
+        const r = results[name];
+        const serial = r && r.stats ? r.stats.serial || "" : "";
+        const dest = h.ip ? (h.user ? h.user + "@" : "") + h.ip : "";
+        _setSwitch(name, what, {
+            "want": on,
+            "atMs": Date.now(),
+            "running": true,
+            "error": ""
+        });
+        Proc.runCommand("matrixBar.switch." + name + "." + what, ["sh", "-c", _switchWrap, "matrixbar-switch", switchScript, what, on ? "on" : "off", String(h.port), dest, serial].concat(_sshOptions), (out, code) => root._switched(name, what, on, out || "", code), 0, 40000);
+        return true;
+    }
+
+    function _switched(name, what, on, out, code) {
+        const sw = switchFor(name, what);
+        if (!sw || sw.want !== on)
+            return;
+        if (code === 0) {
+            _setSwitch(name, what, Object.assign({}, sw, {
+                "running": false
+            }));
+            _settleSwitches(name);
+            return;
+        }
+        const lines = String(out).split("\n").map(l => l.trim()).filter(l => l);
+        _setSwitch(name, what, Object.assign({}, sw, {
+            "running": false,
+            "error": lines.length ? lines[lines.length - 1].slice(0, 160) : "it ended with " + code,
+            "errorMs": Date.now()
+        }));
+    }
+
+    function _setSwitch(name, what, value) {
+        const next = Object.assign({}, switches);
+        const mine = Object.assign({}, next[name] ?? {});
+        if (value)
+            mine[what] = value;
+        else
+            delete mine[what];
+        if (Object.keys(mine).length)
+            next[name] = mine;
+        else
+            delete next[name];
+        switches = next;
+    }
+
+    // Done when the phone says so; given up on when it has not after a
+    // while; an error stays a while to be read.
+    function _settleSwitches(name) {
+        const mine = switches[name];
+        if (!mine)
+            return;
+        const r = results[name];
+        const now = Date.now();
+        for (const what in mine) {
+            const sw = mine[what];
+            if (sw.error) {
+                if (now - sw.errorMs > 20000)
+                    _setSwitch(name, what, null);
+                continue;
+            }
+            if (sw.running)
+                continue;
+            if (r && r.stats && Bar.switchState(r.stats, what) === sw.want)
+                _setSwitch(name, what, null);
+            else if (now - sw.atMs > _switchWaitMs)
+                _setSwitch(name, what, Object.assign({}, sw, {
+                    "error": "the phone took it, but still shows it " + (sw.want ? "off" : "on"),
+                    "errorMs": now
+                }));
+        }
     }
 
     // ------------------------------------------------------- plugin settings
@@ -530,6 +634,29 @@ Singleton {
             return "reconnecting " + name;
         }
 
+        // A phone's switch: what is wifi, data or hotspot; state on, off or
+        // toggle. `dms ipc call matrixBar phone logos hotspot toggle`
+        function phone(name: string, what: string, state: string): string {
+            const h = root.allHosts.find(x => x.name === name);
+            if (!h || !h.android)
+                return "no phone called " + name;
+            if (Bar.SWITCHES.indexOf(what) < 0)
+                return "no switch called " + what + " (" + Bar.SWITCHES.join(", ") + ")";
+            let on;
+            if (state === "on" || state === "off")
+                on = state === "on";
+            else if (state === "toggle") {
+                const r = root.results[name];
+                const now = r && r.stats ? Bar.switchState(r.stats, what) : null;
+                if (now === null)
+                    return "not known yet whether " + what + " is on";
+                on = !now;
+            } else
+                return "on, off or toggle, not " + state;
+            root.phoneSwitch(name, what, on);
+            return "switching " + what + " " + (on ? "on" : "off") + " on " + name;
+        }
+
         // One line per machine, tab separated.
         function status(): string {
             const now = Date.now();
@@ -559,6 +686,10 @@ Singleton {
                         if (s.cell)
                             cols.push("signal " + s.cell.level + "/4 " + s.cell.rat);
                         cols.push("net " + s.net, "call " + s.call, "missed " + s.missed);
+                        for (const w of Bar.SWITCHES) {
+                            const on = Bar.switchState(s, w);
+                            cols.push(w + " " + (on === null ? "?" : (on ? "on" : "off")));
+                        }
                         if (s.data)
                             cols.push("data " + Bar.bytesText(s.data.used) + (s.data.percent >= 0 ? " " + Bar.percentText(s.data.percent) : ""));
                     }

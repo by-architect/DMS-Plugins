@@ -28,6 +28,7 @@ One block per machine, this one first:
    │  64  │
    │ ◢  ≋ │   a phone: signal | network  Wi-Fi with its strength, the mobile
    │ ✆ (8)│   a phone: calls | data used data kind (LTE, 5G…), or crossed out
+   │ ≋ ⇅ ⊚│   a phone: Wi-Fi, mobile data, hotspot — click to switch them
    │ (4)  │   ssh connections to it now
    │ (✓)  │   Syncthing: ✓ idle, ⟳ working, ‖ paused
    │ (0)  │   rsync pairs running now
@@ -45,6 +46,7 @@ dms ipc call matrixBar toggle            # show or hide the bar (also: show, hid
 dms ipc call matrixBar status            # one line per machine, tab separated
 dms ipc call matrixBar refresh           # look for machines again, reconnect all
 dms ipc call matrixBar reconnect logos   # one machine
+dms ipc call matrixBar phone logos hotspot toggle   # wifi, data or hotspot: on, off or toggle
 ```
 
 ## Where the machines come from
@@ -90,7 +92,30 @@ Read over ssh as well — the same way matrix reaches it (Nixup's sshd, then
 | Network | one icon: Wi-Fi with its strength, the mobile data kind (LTE, 5G, H+…) when that carries the traffic, crossed out when neither does. Decided by where the default route leaves (`wlan*` or a modem), the same test syncthing-guard makes |
 | Calls | the phone icon rings while a call comes in and fills during one; a red count of missed calls not yet looked at |
 | Data used | Android's own mobile data counter for this cycle — the number Settings → Network → Data usage shows — as a ring, out of the phone's data limit, else its warning, else the allowance set here. Without any of them the ring shows the gigabytes |
+| Switches | Wi-Fi, mobile data and the hotspot, filled while on: a click switches one, and it pulses until the phone's next snapshot shows it done. Mobile data is the setting of the SIM that carries data |
 | Disks | internal storage (`/data`) and each SD card or USB drive. Android mounts shared storage per app, so these are sized in init's view of the mounts, through `/proc/1/root` |
+
+### Switching a phone's Wi-Fi, mobile data and hotspot
+
+A click runs `scripts/switch.sh` on the phone as root, sent the way the
+probe is (ssh's stdin, `su -c 'sh -s …'`), riding ssh-link's connection:
+
+| | |
+|---|---|
+| Wi-Fi | `svc wifi enable` / `disable` |
+| Mobile data | `svc data enable` / `disable` |
+| Hotspot | Android's tethering service, the call Settings makes: `service call tethering 4` with a tethering request (Wi-Fi, exempt from the carrier check, which root may skip) to start, `5` to stop. The hotspot's name and password are the ones set on the phone. Android 16 put a request type in front of the request's fields; older ones are sent without it, but only Android 16 was tried |
+
+Switching off the network the phone is reached on — Wi-Fi when mobile data
+is off, mobile data when there is no Wi-Fi — would leave the bar nothing to
+switch it back on with. That click only turns the button red and says so;
+a second click within five seconds goes ahead.
+
+When ssh cannot reach the phone, the switch goes over **adb** instead: only
+to a device whose serial is the phone's own (`ro.serialno`, from its
+snapshots), so a USB cable is the way back. adb is looked for on `PATH`,
+then under `$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, `~/Android/Sdk` and
+`~/Opt/Android/Sdk`.
 
 ## How it reads
 
