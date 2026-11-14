@@ -30,6 +30,15 @@ Item {
     // Set when this message carries the Ctrl+K/J selection.
     property bool selected: false
 
+    // Set when it arrived after the conversation had last been read, as it
+    // stood when it was opened: below the "New messages" line. Drawn in the
+    // accent for as long as the conversation stays open -- the line does not
+    // move as you read, and neither does this.
+    property bool unread: false
+    readonly property bool showUnread: unread && !fromMe && !isSystem && !isDeleted
+
+    // The bubble was clicked: the conversation selects it, as Ctrl+K/J would.
+    signal selectRequested
     signal replyRequested
     signal forwardRequested
     signal copyRequested
@@ -69,6 +78,8 @@ Item {
     readonly property color bubbleColor: {
         if (root.status === "failed")
             return Theme.withAlpha(Theme.error, 0.15);
+        if (root.showUnread)
+            return Qt.tint(Theme.surfaceContainerHigh, Theme.withAlpha(Theme.primary, 0.18));
         return root.fromMe ? Theme.primarySelected : Theme.surfaceContainerHigh;
     }
 
@@ -88,6 +99,22 @@ Item {
         "fontSize": Theme.fontSizeMedium
     })
     readonly property bool hasLink: linkUrl !== ""
+
+    // openMedia opens the attachment in whatever the desktop opens it with.
+    function openMedia() {
+        if (!root.hasMedia)
+            return;
+        if (root.mediaPath !== "") {
+            Quickshell.execDetached(["xdg-open", root.mediaPath]);
+            return;
+        }
+        // Not cached yet: media is fetched only when actually opened, so the
+        // first click is what downloads it.
+        root.chatCore.fetchMedia(root.chatCore.activeProvider, root.chatCore.activeChatId, root.message.id, path => {
+            if (path)
+                Quickshell.execDetached(["xdg-open", path]);
+        });
+    }
 
     // Hover is kept alive briefly after the pointer leaves. The action row sits
     // beside the bubble, so reaching for a button crosses a gap that belongs to
@@ -249,9 +276,10 @@ Item {
         color: root.bubbleColor
 
         // Keyboard focus needs to be visible without moving anything, so it is
-        // drawn as a border rather than a size or colour change.
-        border.color: root.selected ? Theme.primary : "transparent"
-        border.width: root.selected ? 2 : 0
+        // drawn as a border rather than a size or colour change. A thinner,
+        // fainter one marks what is unread.
+        border.color: root.selected ? Theme.primary : (root.showUnread ? Theme.withAlpha(Theme.primary, 0.55) : "transparent")
+        border.width: root.selected ? 2 : (root.showUnread ? 1 : 0)
 
         // Hover is tracked across the bubble and its action row together:
         // the buttons sit outside the bubble, so leaving it to reach one used
@@ -261,26 +289,17 @@ Item {
             onHoveredChanged: root.setHovered(hovered)
         }
 
+        // A click anywhere on the bubble selects it -- the mouse's way to
+        // what Ctrl+K/J reach, so Ctrl+R, Ctrl+Shift+C and the rest act on the
+        // message clicked. What is clickable inside it -- the picture, a link,
+        // a quote, a reaction -- sits above this and keeps its own click.
         MouseArea {
             id: bubbleArea
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton
 
-            onClicked: {
-                if (!root.hasMedia)
-                    return;
-                if (root.mediaPath !== "") {
-                    Quickshell.execDetached(["xdg-open", root.mediaPath]);
-                    return;
-                }
-                // Not cached yet: media is fetched only when actually opened,
-                // so the first click is what downloads it.
-                root.chatCore.fetchMedia(root.chatCore.activeProvider, root.chatCore.activeChatId, root.message.id, path => {
-                    if (path)
-                        Quickshell.execDetached(["xdg-open", path]);
-                });
-            }
+            onClicked: root.selectRequested()
         }
 
         Column {
@@ -403,6 +422,14 @@ Item {
                         size: Theme.iconSizeLarge
                         color: Theme.surfaceVariantText
                     }
+                }
+
+                // The attachment opens on a click, as it always has; the rest
+                // of the bubble selects the message.
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openMedia()
                 }
             }
 

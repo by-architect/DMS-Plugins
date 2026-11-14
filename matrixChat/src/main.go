@@ -49,13 +49,15 @@ func main() {
 	// "typing" are m.reaction, m.replace and m.typing both ways; "startChat"
 	// opens a direct chat with @someone or joins #a:room (startchat.go); and
 	// "mute" keeps a mute set here in step with the account's push rules
-	// (pushrules.go).
+	// (pushrules.go); "members" lists who can be mentioned in a room, for the
+	// composer's "@" picker, and a mention picked there goes out as a pill
+	// in m.mentions (members.go).
 	emitEvent("ready", map[string]any{
 		"protocol": ProtocolVersion,
 		"capabilities": []string{
 			"send", "markRead", "media", "reply", "revoke", "groups", "richText",
 			"markdown", "invites", "history", "reactions", "edit", "typing",
-			"startChat", "mute",
+			"startChat", "mute", "members",
 		},
 	})
 
@@ -150,6 +152,8 @@ func (b *bridge) handle(ctx context.Context, c call) {
 		b.handleStartChat(ctx, c)
 	case "setMuted":
 		b.handleSetMuted(ctx, c)
+	case "members":
+		b.handleMembers(ctx, c)
 
 	default:
 		// Answering rather than ignoring is what keeps this bridge working

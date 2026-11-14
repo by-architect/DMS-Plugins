@@ -7,6 +7,7 @@ import qs.Common
 import qs.Services
 import "links.js" as Links
 import "markdown.js" as Markdown
+import "mentions.js" as Mentions
 
 // Client for the chat manager process, bin/chat-managerd.
 //
@@ -354,6 +355,7 @@ Item {
         // for the page -- see _settleOpen.
         setFocus(provider, chatId);
         loadHistory(0);
+        loadMembers(provider, chatId);
 
         root.chatOpened(provider, chatId);
     }
@@ -384,6 +386,7 @@ Item {
 
         setFocus(provider, chatId);
         loadHistory(ts > 0 ? ts + 1 : 0);
+        loadMembers(provider, chatId);
         markRead();
 
         root.chatOpened(provider, chatId);
@@ -430,7 +433,9 @@ Item {
     readonly property int maxRefreshPage: 500
 
     // loadHistory fetches a page ending before the given timestamp. Pass 0 for
-    // the newest page.
+    // the newest page. An older page is fifty messages unless pageSize says
+    // otherwise, and onDone, when given, runs once the page has been dealt
+    // with -- or turned away, because another load was already running.
     //
     // The newest page means one of two things. Opening a conversation, when
     // nothing of it is on screen yet, it is simply the page. Otherwise it is a
@@ -439,14 +444,19 @@ Item {
     // dropped every older page the reader had scrolled back through, cut a long
     // unread run off at its top, and moved the selection onto a different
     // message, all because a message had arrived somewhere.
-    function loadHistory(before) {
-        if (!available || !hasActiveChat)
+    function loadHistory(before, pageSize, onDone) {
+        if (!available || !hasActiveChat) {
+            if (onDone)
+                onDone();
             return;
+        }
         if (root.loadingHistory) {
             // An older page is the reader's to ask for again by scrolling. A
             // refresh is not, so it waits for the load in flight.
             if (!before)
                 root._refreshQueued = true;
+            if (onDone)
+                onDone();
             return;
         }
 
@@ -456,7 +466,7 @@ Item {
         root.loadingHistory = true;
         root._refreshQueued = false;
 
-        let limit = 50;
+        let limit = before && pageSize > 0 ? pageSize : 50;
         if (refreshing) {
             // Everything already on screen, and room for what has arrived
             // since, so the answer speaks for all of it -- delivery ticks,
@@ -489,6 +499,9 @@ Item {
                 root._refreshQueued = false;
                 if (root.hasActiveChat && root.messages.length === 0)
                     root.loadHistory(0);
+                if (onDone)
+                    onDone();
+                root._wakeLoadWaiters();
                 return;
             }
 
@@ -499,6 +512,9 @@ Item {
                 // could not be fetched.
                 root._settleOpen(provider, chatId, before, null);
                 root._runQueuedRefresh();
+                if (onDone)
+                    onDone();
+                root._wakeLoadWaiters();
                 return;
             }
 
@@ -532,7 +548,79 @@ Item {
 
             root.historyLoaded(provider, chatId);
             root._runQueuedRefresh();
+            if (onDone)
+                onDone();
+            root._wakeLoadWaiters();
         });
+    }
+
+    // What is waiting for the load in flight to finish before it asks for a
+    // page of its own -- see loadBackTo.
+    property var _loadWaiters: []
+
+    function _afterLoad(fn) {
+        root._loadWaiters = root._loadWaiters.concat([fn]);
+    }
+
+    // _wakeLoadWaiters runs what was waiting, once nothing is loading: a
+    // queued refresh may have started another load straight away, and then
+    // they wait for that one too.
+    function _wakeLoadWaiters() {
+        if (root.loadingHistory || root._loadWaiters.length === 0)
+            return;
+        const waiting = root._loadWaiters;
+        root._loadWaiters = [];
+        for (let i = 0; i < waiting.length; i++)
+            waiting[i]();
+    }
+
+    // The most pages loadBackTo reads, and how big each is: five thousand
+    // messages back. A search result further back than that is opened on a
+    // page of its own instead (see openChatAt), which the window can show but
+    // not scroll down from to the newest.
+    readonly property int backPageSize: 250
+    readonly property int maxBackPages: 20
+
+    // loadBackTo pages older messages into the open conversation until it
+    // reaches back to ts, then says whether it got there: onDone(reached).
+    //
+    // Older pages above what is on screen rather than a page around ts on its
+    // own, so the conversation is still one piece from there to the newest
+    // message -- a search result jumped to can be read on from, down to now.
+    function loadBackTo(ts, onDone) {
+        const provider = root.activeProvider;
+        const chatId = root.activeChatId;
+        let pages = 0;
+
+        const step = () => {
+            if (provider !== root.activeProvider || chatId !== root.activeChatId) {
+                onDone(false);
+                return;
+            }
+            if (root.messages.length > 0 && (root.messages[0].ts || 0) <= ts) {
+                onDone(true);
+                return;
+            }
+            if (root.messages.length === 0 || !root.hasMoreHistory || pages >= root.maxBackPages) {
+                onDone(false);
+                return;
+            }
+            if (root.loadingHistory) {
+                root._afterLoad(step);
+                return;
+            }
+            pages++;
+            const oldest = root.messages[0].id;
+            root.loadHistory(root.messages[0].ts, root.backPageSize, () => {
+                // Nothing older arrived: asking again would only ask again.
+                if (root.messages.length > 0 && root.messages[0].id === oldest && provider === root.activeProvider && chatId === root.activeChatId) {
+                    onDone((root.messages[0].ts || 0) <= ts);
+                    return;
+                }
+                step();
+            });
+        };
+        step();
     }
 
     function _runQueuedRefresh() {
@@ -665,7 +753,7 @@ Item {
         const params = {
             "provider": root.activeProvider,
             "chatId": root.activeChatId,
-            "text": text
+            "text": root.withMentions(text)
         };
         if (replyTo)
             params.replyTo = replyTo;
@@ -698,7 +786,7 @@ Item {
             "attachments": paths
         };
         if (caption)
-            params.text = caption;
+            params.text = root.withMentions(caption);
         if (replyTo)
             params.replyTo = replyTo;
 
@@ -965,6 +1053,77 @@ Item {
         });
     }
 
+    // searchChat finds messages in one conversation, newest first: the search
+    // bar inside an open conversation (Ctrl+Shift+F). Everything this device
+    // has kept of it, not only what is loaded.
+    function searchChat(provider, chatId, query, callback) {
+        if (!available || !query || !provider || !chatId) {
+            callback([]);
+            return;
+        }
+        root.link.sendRequest("chat.search", {
+            "query": query,
+            "provider": provider,
+            "chatId": chatId,
+            "limit": 200
+        }, response => {
+            if (response.error) {
+                root.log.warn("search in conversation failed:", response.error);
+                callback([]);
+                return;
+            }
+            // A manager from before a search could be kept to one
+            // conversation answers for all of them; the rest are not this one.
+            const hits = (response.result?.messages || []).filter(h => h.provider === provider && h.chatId === chatId);
+            callback(hits);
+        });
+    }
+
+    // ------------------------------------------------------------ mentions
+
+    // Who is in each conversation, as its provider listed them, by
+    // "<provider> <chatId>" -- see loadMembers. Kept while the shell runs: a
+    // list asked for again replaces it.
+    property var _members: ({})
+
+    function membersFor(provider, chatId) {
+        return root._members[provider + " " + chatId] || [];
+    }
+
+    // loadMembers asks a provider with the members capability who is in a
+    // conversation, for the composer's "@" picker. Asked when a conversation
+    // opens and again when a mention is started, so the list is there before
+    // it is wanted and current when it is.
+    function loadMembers(provider, chatId) {
+        if (!available || !provider || !chatId || !root.supports(provider, "members"))
+            return;
+        root.link.sendRequest("chat.members", {
+            "provider": provider,
+            "chatId": chatId
+        }, response => {
+            if (response.error) {
+                root.log.warn("could not list who is in the conversation:", response.error);
+                return;
+            }
+            const next = Object.assign({}, root._members);
+            next[provider + " " + chatId] = response.result?.members || [];
+            root._members = next;
+        });
+    }
+
+    // mentionPool is everyone who can be mentioned in the open conversation:
+    // its members, then whoever has written in what is loaded (mentions.js).
+    function mentionPool() {
+        return Mentions.pool(root.membersFor(root.activeProvider, root.activeChatId), root.messages);
+    }
+
+    // withMentions is text with each "@Name" picked from the members turned
+    // into the mention its provider writes -- for Matrix, a pill that notifies.
+    // Text without any, or for a provider without the markup, is unchanged.
+    function withMentions(text) {
+        return Mentions.link(text, root.membersFor(root.activeProvider, root.activeChatId));
+    }
+
     function setArchived(provider, chatId, archived) {
         if (!available)
             return;
@@ -1195,7 +1354,7 @@ Item {
             "provider": provider,
             "chatId": chatId,
             "messageId": messageId,
-            "text": text
+            "text": root.withMentions(text)
         }, response => {
             if (response.error) {
                 root.log.warn("edit failed:", response.error);

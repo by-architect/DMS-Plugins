@@ -45,6 +45,15 @@ FocusScope {
 
     property bool showingHelp: false
 
+    // Whether the search bar is open: Ctrl+Shift+F, finding a message in this
+    // conversation. An overlay as far as the keyboard goes -- its field has it
+    // while it is up, and Escape closes it.
+    property bool searching: false
+
+    // The search result to select once the page around it has loaded, when
+    // it was too far back to page to: { key, id }, or null. See jumpToHit.
+    property var _selectOnLoad: null
+
     // Whether the window or popout this is in is the one on screen. Handed
     // down to the composer, which keeps each conversation's draft and so has
     // to know when it stops being the one being typed into.
@@ -91,12 +100,13 @@ FocusScope {
 
     // True while anything is layered over the conversation. Escape belongs to
     // the overlay then, and the modal must not act on it.
-    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null || reactTarget !== null || pickingEmoji
+    readonly property bool hasOverlay: showingHelp || pendingDelete !== null || forwardSource !== null || reactTarget !== null || pickingEmoji || searching
 
     // Whether Escape is this view's to answer rather than the window's to
     // close on: an overlay, or an edit -- which is a mode the composer is in,
-    // not an overlay, since the text field keeps the keyboard throughout.
-    readonly property bool holdsEscape: hasOverlay || editTarget !== null
+    // not an overlay, since the text field keeps the keyboard throughout --
+    // or the "@" picker being open over the composer, which Escape closes.
+    readonly property bool holdsEscape: hasOverlay || editTarget !== null || composer.completing
 
     // ------------------------------------------------------------- focus
     //
@@ -212,6 +222,7 @@ FocusScope {
     // its contents as it appears. So it places itself on what is already there,
     // rather than on a signal that has been and gone.
     Component.onCompleted: {
+        root._syncRows();
         if (root.chatCore.messages.length > 0)
             root.pinView(root.chatCore.firstUnreadIndex);
         else
@@ -294,6 +305,146 @@ FocusScope {
         root.chatCore.answerInvite(root.chatCore.activeProvider, root.chatCore.activeChatId, accept);
     }
 
+    // ----------------------------------------------------------- the rows
+
+    // The message list's rows: one per message, by id, in the order of
+    // chatCore.messages. See _syncRows.
+    ListModel {
+        id: messageRows
+    }
+
+    // The ids in messageRows, in order. Read far more often than the rows
+    // change, and cheaper than asking the model for each one.
+    property var _rowIds: []
+
+    // _syncRows brings the rows in line with the messages, changing only what
+    // changed, and says whether it had to start again instead.
+    //
+    // The list used to be given chatCore.messages itself. Every push replaces
+    // that array, and a list whose model is replaced throws every row away and
+    // lays them out again from wherever it thinks it was -- DankListView even
+    // puts the view back where the user last scrolled, which for a
+    // conversation just opened is some other conversation's place. That was
+    // the view jumping up and down after opening at the unread mark, and again
+    // whenever anything arrived while reading: rows rebuilt, the view thrown
+    // somewhere, then put back. Now a row is added where a message arrived and
+    // removed where one went, and the list keeps everything else where it is
+    // -- including a page of older messages arriving above, which the list
+    // grows upwards into without moving what is on screen.
+    function _syncRows() {
+        const messages = root.chatCore.messages;
+        const ids = root._rowIds;
+
+        const wanted = {};
+        for (let i = 0; i < messages.length; i++)
+            wanted[messages[i].id] = i;
+
+        // Messages do not change places, so what is left of the rows is in
+        // their order. Starting again is right when it is not, and when
+        // nothing is left: a conversation opened, or emptied.
+        let kept = 0;
+        let last = -1;
+        let ordered = true;
+        for (let r = 0; r < ids.length; r++) {
+            const at = wanted[ids[r]];
+            if (at === undefined)
+                continue;
+            if (at <= last) {
+                ordered = false;
+                break;
+            }
+            last = at;
+            kept++;
+        }
+
+        if (!ordered || kept === 0) {
+            messageRows.clear();
+            if (messages.length > 0)
+                messageRows.append(messages.map(m => ({
+                            "mid": m.id
+                        })));
+            root._rowIds = messages.map(m => m.id);
+            return true;
+        }
+
+        const next = ids.slice();
+        // What has gone, from the end so the places still hold.
+        for (let r = next.length - 1; r >= 0; r--) {
+            if (wanted[next[r]] === undefined) {
+                messageRows.remove(r);
+                next.splice(r, 1);
+            }
+        }
+        // What is new, a run at a time.
+        let r = 0;
+        for (let i = 0; i < messages.length;) {
+            if (r < next.length && next[r] === messages[i].id) {
+                r++;
+                i++;
+                continue;
+            }
+            const run = [];
+            while (i < messages.length && !(r < next.length && next[r] === messages[i].id)) {
+                run.push(messages[i].id);
+                i++;
+            }
+            messageRows.insert(r, run.map(id => ({
+                        "mid": id
+                    })));
+            next.splice(r, 0, ...run);
+            r += run.length;
+        }
+        root._rowIds = next;
+        return false;
+    }
+
+    // _anchor is where the reader is: the first message on screen, and how
+    // far its top is from the top of the view.
+    function _anchor() {
+        const top = messageList.contentY;
+        // A few points down, since the very top can fall in the gap between
+        // two rows.
+        for (let dy = 0; dy < 64; dy += 4) {
+            const r = messageList.indexAt(1, top + dy);
+            if (r < 0 || r >= root._rowIds.length)
+                continue;
+            const item = messageList.itemAtIndex(r);
+            if (item)
+                return {
+                    "id": root._rowIds[r],
+                    "offset": item.y - top
+                };
+        }
+        return null;
+    }
+
+    // _restoreAnchor puts that message back where it was, if the rows changing
+    // moved it.
+    //
+    // The list keeps what is on screen in place by itself when rows arrive
+    // above it -- except when the first of them was itself on screen, which is
+    // exactly the case when reaching the top asks for an older page. Then the
+    // page would push the reader down to its own top.
+    function _restoreAnchor(anchor) {
+        const r = root._rowIds.indexOf(anchor.id);
+        if (r < 0)
+            return;
+        messageList.forceLayout();
+        let item = messageList.itemAtIndex(r);
+        if (!item) {
+            messageList.positionViewAtIndex(r, ListView.Beginning);
+            item = messageList.itemAtIndex(r);
+            if (!item)
+                return;
+        }
+        const drift = (item.y - messageList.contentY) - anchor.offset;
+        if (Math.abs(drift) < 1)
+            return;
+        const lowest = messageList.originY;
+        const highest = Math.max(lowest, messageList.originY + messageList.contentHeight - messageList.height);
+        messageList.contentY = Math.max(lowest, Math.min(highest, messageList.contentY + drift));
+    }
+
     // ----------------------------------------------------------- the view
 
     // pinView parks the view on a message -- or on the newest, with -1 -- and
@@ -311,10 +462,10 @@ FocusScope {
 
     // applyPin puts the view where it belongs, and keeps saying so for a moment.
     //
-    // Once is not enough: the messages and the layout they produce do not
-    // arrive together, the list restores its own scroll position when its model
-    // is replaced, and a position set before either has settled is quietly
-    // dropped -- which is what made opening at the unread divider a coin toss.
+    // Once is not always enough: the rows a page brings are laid out over the
+    // next frame or two, and a position set before they settle can be off by
+    // their difference. The repeats stop the moment the user moves the view
+    // themselves, so they never fight a scroll.
     function applyPin() {
         if (!root.viewPinned)
             return;
@@ -353,12 +504,28 @@ FocusScope {
 
     // ------------------------------------------------------------- selection
 
-    function select(index) {
+    // select puts the selection on a message and keeps it in view: just on
+    // screen by default, which is all stepping through messages needs, or
+    // where mode says -- the middle, for a message searched for.
+    function select(index, mode) {
         const msg = root.chatCore.messages[index];
         if (!msg)
             return;
         root.selectedId = msg.id;
-        root.pinView(index, ListView.Contain);
+        root.pinView(index, mode === undefined ? ListView.Contain : mode);
+    }
+
+    // toggleSelect is a click on a message: it takes the selection, or lets
+    // it go when it already had it -- the mouse's Ctrl+K/J, and its Escape.
+    function toggleSelect(index) {
+        const msg = root.chatCore.messages[index];
+        if (!msg)
+            return;
+        if (root.selectedId === msg.id) {
+            root.clearSelection();
+            return;
+        }
+        root.select(index);
     }
 
     function selectPrevious() {
@@ -528,6 +695,53 @@ FocusScope {
             root.select(at);
     }
 
+    // ---------------------------------------------------------------- search
+
+    function openSearch() {
+        root.searching = true;
+        Qt.callLater(findBar.focusField);
+    }
+
+    // closeSearch puts the bar away. The message found stays selected, so
+    // Ctrl+R answers it and Escape again lets it go.
+    function closeSearch() {
+        root.searching = false;
+    }
+
+    // jumpToHit takes the conversation to a search result and selects it:
+    // straight there when it is loaded, after paging back to it when it is
+    // further up, and on a page of its own when it is further back than
+    // paging goes (see ChatCore.loadBackTo).
+    function jumpToHit(hit) {
+        if (!hit)
+            return;
+        const at = root.chatCore.indexOfMessage(hit.id);
+        if (at >= 0) {
+            root.select(at, ListView.Center);
+            return;
+        }
+
+        const provider = root.chatCore.activeProvider;
+        const chatId = root.chatCore.activeChatId;
+        root.chatCore.loadBackTo(hit.ts || 0, reached => {
+            if (provider !== root.chatCore.activeProvider || chatId !== root.chatCore.activeChatId)
+                return;
+            const found = root.chatCore.indexOfMessage(hit.id);
+            if (found >= 0) {
+                root.select(found, ListView.Center);
+                return;
+            }
+            // Its moment is on screen and it is not: deleted since.
+            if (reached)
+                return;
+            root._selectOnLoad = {
+                "key": provider + " " + chatId,
+                "id": hit.id
+            };
+            root.chatCore.openChatAt(provider, chatId, hit.ts || 0);
+        });
+    }
+
     // pageIfShort asks for older messages when the conversation does not fill
     // the view: with nothing to scroll, reaching the top is never something
     // the reader can do. A provider that fetches history on request makes this
@@ -553,6 +767,17 @@ FocusScope {
             root.selectedId = "";
             root.pendingDelete = null;
 
+            // A search belongs to the conversation it was typed in. Opening
+            // the same one again -- a result too far back, on its own page --
+            // keeps it, and what it is waiting to select.
+            const key = provider + " " + chatId;
+            if (root._selectOnLoad && root._selectOnLoad.key !== key)
+                root._selectOnLoad = null;
+            if (findBar.chatKey !== key) {
+                root.searching = false;
+                findBar.reset();
+            }
+
             // Where it lands is decided by the page that is still on its way:
             // the read position comes back with it. Until then, the newest
             // message, so an opening conversation is never blank.
@@ -568,6 +793,10 @@ FocusScope {
             root.reactTarget = null;
             root.selectedId = "";
             root.pendingDelete = null;
+            if (findBar.chatKey !== root.chatCore.activeProvider + " " + root.chatCore.activeChatId) {
+                root.searching = false;
+                findBar.reset();
+            }
         }
 
         // A page in: if it still does not fill the view, the next is asked for
@@ -577,23 +806,31 @@ FocusScope {
             Qt.callLater(root.pageIfShort);
         }
 
-        // An older page arrived above. Loading it was asked for by reaching
-        // the top of what was there, so the reader stays on the message that
-        // was at the top, with the new page above it to scroll up into --
-        // rather than being moved to the start of what just arrived.
-        //
-        // Not when the view is following the newest message: a short
-        // conversation pages older ones in on its own, and that is no reason
-        // to stop following it.
-        function onOlderLoaded(count) {
-            if (root.viewPinned && root.viewPinId === "")
-                return;
-            root.pinView(count, ListView.Beginning);
-        }
+        // An older page arriving above what was on screen needs nothing here:
+        // the rows grow upwards and the reader stays on the message they were
+        // reading (see _syncRows and _restoreAnchor). It used to be handled by
+        // pinning the view to the old top message, which then held it there --
+        // and snapped it back while a scroll was still carrying on upwards.
 
         function onMessagesChanged() {
+            // Where the reader is, taken before the rows change under them.
+            // Not while the view is pinned: then it goes where the pin says.
+            const anchor = root.viewPinned ? null : root._anchor();
+            root._syncRows();
+
             if (root._awaitingUnread && root.chatCore.messages.length > 0) {
                 root._awaitingUnread = false;
+
+                // A search result that had to be opened on a page of its own.
+                const pending = root._selectOnLoad;
+                root._selectOnLoad = null;
+                const key = root.chatCore.activeProvider + " " + root.chatCore.activeChatId;
+                const found = pending && pending.key === key ? root.chatCore.indexOfMessage(pending.id) : -1;
+                if (found >= 0) {
+                    root.select(found, ListView.Center);
+                    return;
+                }
+
                 // Beginning, so the divider is the first thing on screen and
                 // the unread messages read downwards from it. Nothing unread
                 // means the newest message, as ever.
@@ -601,11 +838,15 @@ FocusScope {
                 return;
             }
 
-            // A changed conversation replaces the list, and the list puts
-            // itself back where it was rather than where it was told to be.
-            // By name rather than as a closure, so a burst of pushes queues
-            // one of these and not one per push.
-            Qt.callLater(root.applyPin);
+            // Following the newest message, or held on one: put it back there
+            // once the burst is over. By name rather than as a closure, so a
+            // burst of pushes queues one of these and not one per push.
+            if (root.viewPinned) {
+                Qt.callLater(root.applyPin);
+                return;
+            }
+            if (anchor)
+                root._restoreAnchor(anchor);
         }
     }
 
@@ -639,6 +880,15 @@ FocusScope {
     Shortcut {
         sequences: ["Ctrl+F"]
         onActivated: root.forwardSelected()
+    }
+
+    // Finding a message in this conversation. Ctrl+Shift+F because Ctrl+F was
+    // forward long before there was a search to give it to. Pressed again
+    // while the bar is open, it goes back to the search field.
+    Shortcut {
+        sequences: ["Ctrl+Shift+F"]
+        enabled: !root.hasOverlay || root.searching
+        onActivated: root.openSearch()
     }
 
     // E for edit: the selected message, or the last one we sent.
@@ -738,6 +988,13 @@ FocusScope {
             }
             if (root.showingHelp) {
                 root.showingHelp = false;
+                event.accepted = true;
+                return;
+            }
+            // The search field answers Escape itself; this is for when the
+            // keyboard has gone elsewhere with the bar still open.
+            if (root.searching) {
+                root.closeSearch();
                 event.accepted = true;
                 return;
             }
@@ -966,13 +1223,31 @@ FocusScope {
                 anchors.fill: parent
                 anchors.margins: Theme.spacingS
                 clip: true
-                model: root.chatCore.messages
+                // Rows by id, kept in step with the messages rather than
+                // replaced by them -- see _syncRows.
+                model: messageRows
                 spacing: Theme.spacingXS
+
+                // No animations as rows come and go. A row slid into place
+                // moves everything after it for the length of the slide, which
+                // is a conversation jiggling every time a message arrives or a
+                // page loads.
+                add: null
+                remove: null
+                displaced: null
+                move: null
 
                 // Chronological, top to bottom, parked at the end. An inverted
                 // list renders a chronological model newest-first and makes
                 // "scroll to the bottom" mean the wrong end of the history.
                 verticalLayoutDirection: ListView.TopToBottom
+
+                // The user moving the view, however they do it: dragging,
+                // flicking, the wheel and the glide it leaves behind on a
+                // touchpad, or the scrollbar. DankListView reports the wheel
+                // only while it turns, and the scrollbar not at all, so a
+                // message arriving mid-glide used to pull the view back.
+                readonly property bool userMoving: messageList.isUserScrolling || messageList.isMomentumActive || messageList.moving || (messageList.ScrollBar.vertical?.pressed ?? false)
 
                 // A column rather than the bubble alone, so the unread mark
                 // can sit above the message it belongs to without the bubble
@@ -980,8 +1255,17 @@ FocusScope {
                 delegate: Column {
                     id: messageRow
 
-                    required property var modelData
+                    required property string mid
+                    // Unused here, but what DankListView's sweep for stale
+                    // rows goes by.
                     required property int index
+
+                    // The message, found by its id rather than by the row's
+                    // place, so a row and what it shows never disagree --
+                    // even for the moment between the messages changing and
+                    // the rows following them.
+                    readonly property int at: root.chatCore.indexOfMessage(messageRow.mid)
+                    readonly property var modelData: messageRow.at >= 0 ? root.chatCore.messages[messageRow.at] : null
 
                     width: messageList.width
                     spacing: 0
@@ -991,15 +1275,15 @@ FocusScope {
                     // spring.
                     ChatDayDivider {
                         width: parent.width
-                        visible: root.startsDay(messageRow.index)
-                        text: visible ? root.dayLabel(messageRow.modelData.ts) : ""
+                        visible: root.startsDay(messageRow.at)
+                        text: visible ? root.dayLabel(messageRow.modelData?.ts ?? 0) : ""
                     }
 
                     ChatUnreadDivider {
                         width: parent.width
                         // Never at the very top: with nothing above it, the
                         // line says only that the conversation starts here.
-                        visible: messageRow.index > 0 && messageRow.index === root.chatCore.firstUnreadIndex
+                        visible: messageRow.at > 0 && messageRow.at === root.chatCore.firstUnreadIndex
                     }
 
                     MessageBubble {
@@ -1007,9 +1291,13 @@ FocusScope {
 
                         width: parent.width
                         message: messageRow.modelData
-                        selected: root.selectedId !== "" && root.selectedId === messageRow.modelData.id
-                        previousMessage: messageRow.index > 0 ? root.chatCore.messages[messageRow.index - 1] : null
+                        selected: root.selectedId !== "" && root.selectedId === messageRow.mid
+                        // Below the "New messages" line: what had not been
+                        // read when the conversation was opened.
+                        unread: root.chatCore.firstUnreadIndex >= 0 && messageRow.at >= root.chatCore.firstUnreadIndex
+                        previousMessage: messageRow.at > 0 ? root.chatCore.messages[messageRow.at - 1] : null
 
+                        onSelectRequested: root.toggleSelect(messageRow.at)
                         onReplyRequested: {
                             root.editTarget = null;
                             root.replyTarget = messageRow.modelData;
@@ -1023,7 +1311,7 @@ FocusScope {
                         // only on your own message. Asking for everyone on
                         // somebody else's put up a confirmation for a delete
                         // the provider then refused.
-                        onDeleteRequested: root.requestDelete(messageRow.modelData, messageRow.modelData.fromMe && root.chatCore.activeSupports("revoke"))
+                        onDeleteRequested: root.requestDelete(messageRow.modelData, (messageRow.modelData?.fromMe ?? false) && root.chatCore.activeSupports("revoke"))
                     }
                 }
 
@@ -1036,18 +1324,25 @@ FocusScope {
 
                 // The user taking the view somewhere is the end of our claim on
                 // it: a message arriving must not drag them back down from what
-                // they are reading.
-                onIsUserScrollingChanged: {
-                    if (messageList.isUserScrolling)
+                // they are reading. And stopping at the bottom is the user
+                // having caught up, so the view follows the newest message
+                // again.
+                onUserMovingChanged: {
+                    if (messageList.userMoving) {
                         root.viewPinned = false;
+                        return;
+                    }
+                    if (messageList.atYEnd && messageList.count > 0) {
+                        root.viewPinId = "";
+                        root.viewPinned = true;
+                    }
                 }
 
-                // Scrolling back to the bottom is the user having caught up, so
-                // the view follows the newest message again. Only when they did
-                // the scrolling: a list momentarily reports itself at the end
-                // while its model is being replaced.
+                // Reaching the bottom while still moving there counts as well.
+                // Only when the user did the moving: placing the view is not
+                // them catching up.
                 onAtYEndChanged: {
-                    if (messageList.atYEnd && messageList.isUserScrolling) {
+                    if (messageList.atYEnd && messageList.userMoving) {
                         root.viewPinId = "";
                         root.viewPinned = true;
                     }
@@ -1069,6 +1364,18 @@ FocusScope {
                 text: I18n.tr("No messages yet")
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
+            }
+
+            // Over the top of the messages, so opening it moves nothing.
+            ChatFindBar {
+                id: findBar
+                anchors.fill: parent
+                z: 5
+                visible: root.searching
+                chatCore: root.chatCore
+
+                onHitChosen: hit => root.jumpToHit(hit)
+                onClosed: root.closeSearch()
             }
         }
 

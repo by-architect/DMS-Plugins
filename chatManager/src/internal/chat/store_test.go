@@ -347,6 +347,35 @@ func TestSearchMessages(t *testing.T) {
 	assert.Equal(t, "Work", hits[0].ChatName, "hits carry chat context for the result row")
 }
 
+// Searching inside a conversation finds only its own messages, newest first,
+// however many other conversations say the same thing.
+func TestSearchChatMessages(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.TouchChat(ctx, prov, "c1", "Work", "", 300, false, false))
+	require.NoError(t, store.TouchChat(ctx, prov, "c2", "Home", "", 400, false, false))
+	require.NoError(t, store.PutMessages(ctx, []Message{
+		{Provider: prov, ID: "m1", ChatID: "c1", TS: 100, Kind: KindText, Text: "the invoice is attached"},
+		{Provider: prov, ID: "m2", ChatID: "c1", TS: 300, Kind: KindText, Text: "second invoice, sorry"},
+		{Provider: prov, ID: "m3", ChatID: "c2", TS: 400, Kind: KindText, Text: "did the invoice come?"},
+	}))
+
+	hits, err := store.SearchChatMessages(ctx, "c1", "invoice", 10)
+	require.NoError(t, err)
+	require.Len(t, hits, 2)
+	assert.Equal(t, "m2", hits[0].ID, "newest first")
+	assert.Equal(t, "m1", hits[1].ID)
+
+	none, err := store.SearchChatMessages(ctx, "", "invoice", 10)
+	require.NoError(t, err)
+	assert.Empty(t, none, "no conversation is not every conversation")
+
+	all, err := store.SearchMessages(ctx, "invoice", 10)
+	require.NoError(t, err)
+	assert.Len(t, all, 3, "the search across conversations is unchanged")
+}
+
 // A search for a literal wildcard must not match everything.
 func TestSearchChatsEscapesWildcards(t *testing.T) {
 	store := newStore(t)

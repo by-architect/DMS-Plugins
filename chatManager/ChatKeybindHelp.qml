@@ -41,6 +41,10 @@ StyledRect {
                     "text": I18n.tr("Select the next message")
                 },
                 {
+                    "keys": I18n.tr("Click"),
+                    "text": I18n.tr("Select the message clicked, or click it again to let it go. A picture or file opens on a click, a link too")
+                },
+                {
                     "keys": "Ctrl + Enter",
                     "text": I18n.tr("Open the selected message's attachment or link")
                 },
@@ -121,6 +125,10 @@ StyledRect {
                     "text": I18n.tr("Attach an image or file from the clipboard")
                 },
                 {
+                    "keys": "@",
+                    "text": I18n.tr("Mention someone: pick who from the list with ↑ / ↓ and Enter or Tab, or click them; Esc to keep typing. On Matrix it is sent as a mention that notifies them")
+                },
+                {
                     "keys": "↑",
                     "text": I18n.tr("With nothing typed: edit your last message. Enter saves the edit, Esc leaves it")
                 },
@@ -133,6 +141,10 @@ StyledRect {
         {
             "title": I18n.tr("Finding"),
             "binds": [
+                {
+                    "keys": "Ctrl + Shift + F",
+                    "text": I18n.tr("Find a message in this conversation. Enter or a click goes to the match, ↑ and ↓ (or the arrows on the bar) to older and newer ones, Esc closes and leaves it selected")
+                },
                 {
                     "keys": I18n.tr("Type in the search box"),
                     "text": I18n.tr("Filters conversations, and searches message text after two characters")

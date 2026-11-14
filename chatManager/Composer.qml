@@ -4,6 +4,7 @@ import qs.Common
 import qs.Services
 import qs.Widgets
 import "emoji.js" as Emoji
+import "mentions.js" as Mentions
 
 // The message input.
 //
@@ -69,6 +70,7 @@ Item {
             input.text = root.editTarget.text || "";
             input.cursorPosition = input.text.length;
             root._restoringDraft = false;
+            root._setAsideMention();
             root.staged = [];
             root.takeFocus();
             return;
@@ -78,6 +80,7 @@ Item {
             input.text = root._stash.text;
             input.cursorPosition = input.text.length;
             root._restoringDraft = false;
+            root._setAsideMention();
             root.staged = root._stash.staged;
             root._stash = null;
         }
@@ -151,6 +154,7 @@ Item {
         input.text = draft ? draft.text : "";
         input.cursorPosition = input.text.length;
         root._restoringDraft = false;
+        root._setAsideMention();
         root.staged = draft ? draft.staged.slice() : [];
     }
 
@@ -166,6 +170,7 @@ Item {
             input.text = text;
             input.cursorPosition = text.length;
             root._restoringDraft = false;
+            root._setAsideMention();
             root.staged = files;
             return;
         }
@@ -190,6 +195,99 @@ Item {
     property bool pasting: false
 
     readonly property bool hasStaged: staged.length > 0
+
+    // ------------------------------------------------------------ mentions
+    //
+    // "@" at the start of a word offers the people in the conversation, in a
+    // list over the field; the arrows move through it, Enter or Tab picks, and
+    // Escape puts it away. Picking writes "@Name" into the field, and the
+    // message goes out with the name as a mention its service knows -- see
+    // mentions.js and ChatCore.withMentions.
+
+    // The mention being typed at the cursor: { start, query }, or null.
+    property var _mention: null
+
+    // The "@" whose picker was answered -- by a pick, or by Escape -- so it
+    // does not open again while the rest of the sentence is typed after it.
+    property int _mentionSetAside: -1
+
+    property int mentionIndex: 0
+
+    readonly property var mentionCandidates: root._mention ? Mentions.candidates(root.chatCore.mentionPool(), root._mention.query, 6) : []
+
+    // Whether the picker is open, which is when the field's keys are its.
+    readonly property bool completing: root.mentionCandidates.length > 0
+
+    onMentionCandidatesChanged: {
+        if (root.mentionIndex >= root.mentionCandidates.length)
+            root.mentionIndex = 0;
+    }
+
+    function _updateMention() {
+        const found = Mentions.queryAt(input.text, input.cursorPosition);
+        if (!found) {
+            root._mention = null;
+            root._mentionSetAside = -1;
+            return;
+        }
+        if (found.start === root._mentionSetAside) {
+            root._mention = null;
+            return;
+        }
+        // A new "@": who is in the conversation is asked again, so the list
+        // is current; until it answers, what is already known is offered.
+        if (!root._mention || root._mention.start !== found.start) {
+            root.mentionIndex = 0;
+            root.chatCore.loadMembers(root.chatCore.activeProvider, root.chatCore.activeChatId);
+        }
+        root._mention = found;
+    }
+
+    // chooseMention puts the person picked in place of what was typed after
+    // the "@", with a space after them to carry on writing.
+    function chooseMention(index) {
+        const mention = root._mention;
+        const person = root.mentionCandidates[index];
+        if (!mention || !person)
+            return;
+        const inserted = Mentions.insertion(person, root.chatCore.mentionPool()) + " ";
+        const before = input.text.slice(0, mention.start);
+        const after = input.text.slice(input.cursorPosition).replace(/^ /, "");
+        root._mentionSetAside = mention.start;
+        root._mention = null;
+        input.text = before + inserted + after;
+        input.cursorPosition = before.length + inserted.length;
+    }
+
+    // _setAsideMention keeps the picker shut over text that was put back
+    // rather than typed -- a draft, a message to edit -- even when it ends in
+    // a name after "@".
+    function _setAsideMention() {
+        const found = Mentions.queryAt(input.text, input.cursorPosition);
+        root._mentionSetAside = found ? found.start : -1;
+        root._mention = null;
+    }
+
+    function _onMentionKey(key) {
+        const count = root.mentionCandidates.length;
+        switch (key) {
+        case Qt.Key_Up:
+            root.mentionIndex = (root.mentionIndex - 1 + count) % count;
+            break;
+        case Qt.Key_Down:
+            root.mentionIndex = (root.mentionIndex + 1) % count;
+            break;
+        case Qt.Key_Tab:
+        case Qt.Key_Return:
+            root.chooseMention(root.mentionIndex);
+            break;
+        case Qt.Key_Escape:
+            if (root._mention)
+                root._mentionSetAside = root._mention.start;
+            root._mention = null;
+            break;
+        }
+    }
 
     height: editBar.height + replyBar.height + stagedStrip.height + inputRow.height + Theme.spacingS * 2 + (editBar.visible ? Theme.spacingXS : 0) + (replyBar.visible ? Theme.spacingXS : 0) + (stagedStrip.visible ? Theme.spacingXS : 0)
 
@@ -428,6 +526,22 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
         }
     }
 
+    // Over the messages, just above the field, rather than inside the
+    // composer: it would push the field up as it opened.
+    ChatMentionPicker {
+        anchors.bottom: parent.top
+        anchors.bottomMargin: Theme.spacingXS
+        x: Theme.spacingS
+        width: Math.min(380, input.width)
+        z: 10
+        visible: root.completing
+        people: root.mentionCandidates
+        highlighted: root.mentionIndex
+
+        onPicked: index => root.chooseMention(index)
+        onPointed: index => root.mentionIndex = index
+    }
+
     Column {
         anchors.fill: parent
         anchors.margins: Theme.spacingS
@@ -618,8 +732,15 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 width: parent.width - 36 * 2 - Theme.spacingS * 2
                 enabled: root.canSend
                 keyForwardTargets: [pasteKeys]
+                completing: root.completing
                 onSubmitted: root.send()
                 onUpOnEmpty: root.editLastRequested()
+                onCompletionKey: key => root._onMentionKey(key)
+
+                // Where the cursor is decides whether a mention is being
+                // typed; once a turn, after the text and the cursor have both
+                // moved.
+                onCursorPositionChanged: Qt.callLater(root._updateMention)
 
                 onFocusStateChanged: hasFocus => root.fieldFocused = hasFocus
 
@@ -636,6 +757,8 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 // Typing or pasting a path and pressing space attaches it,
                 // which is how a file manager's "copy path" ends up here.
                 onTextChanged: {
+                    Qt.callLater(root._updateMention);
+
                     // A :shortcode: just finished becomes its emoji, the way
                     // Element, Slack and GitHub do it. Not in a draft put
                     // back, which is text as it was left.

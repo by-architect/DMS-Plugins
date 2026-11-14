@@ -124,6 +124,7 @@ Unencrypted rooms are readable immediately either way.
 | Message edits | yes, both ways — `Ctrl+E`, or `↑` in an empty box, edits your last message; edited messages say so |
 | Reactions | yes, both ways — `Ctrl+T`, or press one under a message; encrypted in encrypted rooms |
 | Typing | yes, both ways — "Ada is typing…" under the room's name |
+| Mentions | yes — type `@` in the message box and pick someone; it is sent as a pill in `m.mentions`, so it notifies them — see "Mentions" below |
 | Images, video, audio, files | yes, including encrypted attachments |
 | Formatted messages | yes — Markdown both ways, see "Formatting" below |
 | Read receipts | yes, both ways — what you read elsewhere counts as read here |
@@ -137,7 +138,7 @@ Unencrypted rooms are readable immediately either way.
 | Messages missed while the shell was off | fetched when it comes back, even past the 50 a sync carries |
 | Notification settings (All / Mentions / Mute) | followed — see "Notifications" below |
 | Signing out | on this plugin's settings page |
-| Search | local only — the DMS store indexes what it has received |
+| Search | local only — the DMS store indexes what it has received; `Ctrl+Shift+F` finds a message in the open room |
 | Threads, calls, spaces as hierarchy | not modelled by the contract yet — a thread reply shows as a reply |
 
 ## Formatting
@@ -166,6 +167,31 @@ message's plain body, because the converter cannot write tables. For a table
 sent from DMS, that body is the pipe table as you typed it. A numbered list
 starting at an absurd number (ten digits or more) also arrives as the plain
 body. Converting it would crash the bridge, so the HTML is not converted.
+
+## Mentions
+
+The bridge declares the `members` capability and answers who is in a room from
+the members it has seen -- everyone joined or invited, by the name they have in
+that room, and never yourself. Typing `@` in the message box lists them; a
+large room is synced with its members lazily, so somebody who has never spoken
+may be missing, and whoever has written in the room is offered too.
+
+A member comes with their mention: a Markdown link to their matrix.to address,
+`[Ada](https://matrix.to/#/@ada:example.org)`, the way Element writes one.
+Picking them puts `@Ada` in the message box, and the link goes out in its place.
+On the way out (`members.go`):
+
+- the HTML has the `<a href="https://matrix.to/#/@ada:example.org">Ada</a>`
+  pill every Matrix client shows as a mention;
+- the user is listed in `m.mentions`, which is what notifies them on a current
+  homeserver;
+- the plain body says `Ada`, not the link, since the body is what a phone's
+  notification shows.
+
+A message mentioning nobody carries no `m.mentions` at all, so a display name
+typed out by hand still notifies the way it always did, and a matrix.to link
+to a room or a message stays a link. Mentions arriving from others read as
+`@Ada`, as before.
 
 ## Older history
 

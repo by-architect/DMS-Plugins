@@ -64,6 +64,10 @@ const (
 	// other client of theirs is silenced too (chatId, muted). The mute
 	// capability.
 	MethodSetMuted = "setMuted"
+
+	// MethodMembers lists who is in a conversation (chatId), for the picker
+	// that typing "@" opens in the composer. The members capability.
+	MethodMembers = "members"
 )
 
 // Events a bridge pushes to the host.
@@ -137,6 +141,10 @@ const (
 	CapTyping    = "typing"
 	CapStartChat = "startChat"
 	CapMute      = "mute"
+
+	// CapMembers is a provider that answers MethodMembers: who can be
+	// mentioned in a conversation, and how a mention of them is written.
+	CapMembers = "members"
 )
 
 // bridgeCall is what the host writes to a bridge's stdin.
@@ -345,6 +353,24 @@ type reactReply struct {
 type startChatReply struct {
 	ChatID string `json:"chatId"`
 	Name   string `json:"name"`
+}
+
+// Member is one person in a conversation, as a bridge answers MethodMembers.
+//
+// Mention is how a mention of them is written into a message, in the
+// provider's own markup -- for Matrix a Markdown link to their matrix.to
+// address, which the bridge sends as a pill that notifies them. Empty is a
+// provider whose mentions are only ever the name, as text.
+type Member struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Mention    string `json:"mention,omitempty"`
+	AvatarPath string `json:"avatarPath,omitempty"`
+}
+
+// membersReply is what a bridge returns from a members call.
+type membersReply struct {
+	Members []Member `json:"members"`
 }
 
 // fetchMediaResult is what a bridge returns from a successful fetchMedia.
