@@ -103,7 +103,9 @@ StyledRect {
                     text: root.displayName
                     font.pixelSize: Theme.fontSizeMedium
                     font.weight: root.hasUnread ? Font.DemiBold : Font.Normal
-                    color: Theme.surfaceText
+                    // In the accent while something is waiting, like the
+                    // badge beside it -- unless muted, which asked for quiet.
+                    color: root.hasUnread && !root.muted ? Theme.primary : Theme.surfaceText
                     elide: Text.ElideRight
                 }
 

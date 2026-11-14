@@ -19,6 +19,9 @@ import qs.Widgets
 //   Ctrl+Return   not ours: the conversation opens the selected message with it
 //   Up            upOnEmpty() when there is nothing typed -- the composer edits
 //                 the last message sent; with text, the cursor moves as ever
+//
+// While completing -- the "@" picker is open over the field -- Up, Down, Tab,
+// Return and Escape are the picker's: completionKey(key), and nothing else.
 StyledRect {
     id: root
 
@@ -28,11 +31,16 @@ StyledRect {
     property var keyForwardTargets: []
     property int maxLines: 8
 
+    // Whether a list of completions is open over the field, which then gets
+    // the keys that choose from it.
+    property bool completing: false
+
     readonly property bool placeholderVisible: edit.text.length === 0 && !edit.inputMethodComposing && !edit.activeFocus
 
     signal focusStateChanged(bool hasFocus)
     signal submitted
     signal upOnEmpty
+    signal completionKey(int key)
 
     function forceActiveFocus() {
         edit.forceActiveFocus();
@@ -42,7 +50,19 @@ StyledRect {
         return edit.activeFocus;
     }
 
+    // _complete hands a key to the open list of completions, when there is
+    // one and the key is plain.
+    function _complete(event) {
+        if (!root.completing || (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)))
+            return false;
+        root.completionKey(event.key === Qt.Key_Enter ? Qt.Key_Return : event.key);
+        event.accepted = true;
+        return true;
+    }
+
     function _onReturn(event) {
+        if (root._complete(event))
+            return;
         if (event.modifiers & Qt.ShiftModifier) {
             if (edit.selectedText !== "")
                 edit.remove(edit.selectionStart, edit.selectionEnd);
@@ -132,7 +152,18 @@ StyledRect {
             Keys.forwardTo: root.keyForwardTargets
             Keys.onReturnPressed: event => root._onReturn(event)
             Keys.onEnterPressed: event => root._onReturn(event)
+            Keys.onDownPressed: event => {
+                event.accepted = root._complete(event);
+            }
+            Keys.onTabPressed: event => {
+                event.accepted = root._complete(event);
+            }
+            Keys.onEscapePressed: event => {
+                event.accepted = root._complete(event);
+            }
             Keys.onUpPressed: event => {
+                if (root._complete(event))
+                    return;
                 if (edit.text === "" && !(event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
                     root.upOnEmpty();
                     event.accepted = true;

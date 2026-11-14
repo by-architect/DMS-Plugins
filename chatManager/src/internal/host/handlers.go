@@ -87,6 +87,8 @@ func HandleRequest(conn *models.Conn, req models.Request, manager *Manager) {
 		handleTyping(conn, req, manager)
 	case "chat.startChat":
 		handleStartChat(ctx, conn, req, manager)
+	case "chat.members":
+		handleMembers(ctx, conn, req, manager)
 	case "chat.deleteLocal":
 		handleDeleteLocal(ctx, conn, req, manager)
 	case "chat.purge":
@@ -465,6 +467,24 @@ func handleSearch(ctx context.Context, conn *models.Conn, req models.Request, m 
 		return
 	}
 	limit := models.GetOr(req, "limit", 50)
+
+	// Inside one conversation: the search bar of an open conversation. Only
+	// its own messages, from the store, and no conversations -- the provider
+	// is not asked either, since a provider's search spans the whole account.
+	provider := models.GetOr(req, "provider", "")
+	chatID := models.GetOr(req, "chatId", "")
+	if provider != "" && chatID != "" {
+		msgs, err := m.Store().SearchChatMessages(ctx, provider, chatID, query, limit)
+		if err != nil {
+			models.RespondError(conn, req.ID, err.Error())
+			return
+		}
+		if msgs == nil {
+			msgs = []chat.SearchHit{}
+		}
+		models.Respond(conn, req.ID, searchResult{Messages: msgs, Chats: []chat.Chat{}})
+		return
+	}
 
 	visible := m.EnabledProviders()
 	msgs, err := m.Store().SearchMessagesIn(ctx, visible, query, limit)
@@ -1040,6 +1060,54 @@ func handleStartChat(ctx context.Context, conn *models.Conn, req models.Request,
 	}
 	m.markDirty()
 	models.Respond(conn, req.ID, startChatResponse{ChatID: reply.ChatID, Name: reply.Name})
+}
+
+type membersResponse struct {
+	Members []Member `json:"members"`
+}
+
+// handleMembers lists who is in a conversation, for the composer's "@" picker.
+//
+// A provider without the members capability answers with nobody rather than
+// an error: the picker then offers whoever has written in the conversation,
+// which the shell knows from the messages themselves.
+func handleMembers(ctx context.Context, conn *models.Conn, req models.Request, m *Manager) {
+	provider, chatID, ok := chatTarget(conn, req)
+	if !ok {
+		return
+	}
+
+	b, err := m.bridgeFor(provider)
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	if !b.HasCapability(CapMembers) {
+		models.Respond(conn, req.ID, membersResponse{Members: []Member{}})
+		return
+	}
+
+	frame, err := b.call(ctx, MethodMembers, map[string]any{"chatId": chatID})
+	if err != nil {
+		models.RespondError(conn, req.ID, err.Error())
+		return
+	}
+	var reply membersReply
+	if len(frame.Result) > 0 {
+		_ = json.Unmarshal(frame.Result, &reply)
+	}
+	members := make([]Member, 0, len(reply.Members))
+	for _, member := range reply.Members {
+		// A member nobody can be told apart by is no use in a picker.
+		if member.ID == "" {
+			continue
+		}
+		if member.Name == "" {
+			member.Name = member.ID
+		}
+		members = append(members, member)
+	}
+	models.Respond(conn, req.ID, membersResponse{Members: members})
 }
 
 type fetchMediaResponse struct {

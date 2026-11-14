@@ -102,6 +102,46 @@ person to another. A message that fails to send is put back in the field, or
 into its conversation's draft if you have moved on. Drafts live in memory: they
 survive closing the window, not restarting the shell.
 
+## Finding a message in a conversation
+
+**Ctrl+Shift+F** opens a search bar over the open conversation. It searches
+everything this device has kept of that conversation -- not only what is loaded
+on screen -- and lists the matches newest first, the matching words in the
+accent colour.
+
+**Enter** (or a click) takes the conversation to a match and selects it; the
+bar stays, and **↑** / **↓** go to the older and newer matches from there
+(**Enter** and **Shift+Enter** too). **Esc** closes the bar and leaves the
+message found selected, so Ctrl+R answers it.
+
+A match further up than what is loaded is reached by paging older messages in
+above, so the conversation stays one piece from the match down to the newest
+message. Past five thousand messages back it opens on a page of its own.
+
+The search is the ordinary `chat.search`, kept to one conversation by naming
+it; the provider's own server-side search is not asked, since it spans the
+whole account:
+
+```json
+{"id":31,"method":"chat.search","params":{"query":"invoice","provider":"matrixChat","chatId":"!room:example.org","limit":200}}
+```
+
+## Mentions
+
+Typing **@** at the start of a word opens a list of the people in the
+conversation over the message box: **↑** / **↓** move through it, **Enter** or
+**Tab** picks, **Esc** puts it away and leaves what was typed. Picking writes
+`@Name` into the field -- or `@id`, when two people share the name -- so the
+draft stays readable.
+
+Who is offered comes from the provider, when it lists members (below), and
+from whoever has written in what is loaded, on any service. On the way out a
+name picked from the members becomes the mention the provider writes: for
+Matrix a link to the person's matrix.to address, which the bridge sends as a
+pill that notifies them. A name with no such markup -- a sender on a service
+without members -- goes as the text it is. `mentions.js` holds the rules, and
+`tests/tst_mentions.qml` pins them down.
+
 ## Formatting
 
 Messages are rendered with their formatting: **bold**, *italic*,
@@ -338,6 +378,22 @@ window offers it when the search box holds something that looks like an
 address -- starting with `@`, `#` or `!` -- and `dms ipc call chats start
 <provider> <handle>` does it from a keybind.
 
+### Members, for mentions
+
+`members` is a provider that can say who is in a conversation, for the "@"
+picker, and how a mention of each is written:
+
+```json
+{"id":27,"method":"members","params":{"chatId":"!room:example.org"}}
+→ {"id":27,"ok":true,"result":{"members":[{"id":"@ada:example.org","name":"Ada","mention":"[Ada](https://matrix.to/#/@ada:example.org)","avatarPath":"/…/ada.jpg"}]}}
+```
+
+`mention` is the provider's own markup and goes into the message in place of
+`@Name`; without it the name stays text. The shell asks with `chat.members`
+(provider, chatId) when a conversation opens and again when a mention is
+started. A provider without the capability answers with nobody, and the picker
+offers whoever has written instead.
+
 ### Notification settings the service keeps
 
 Some services keep notification settings of their own, shared by every client
@@ -412,6 +468,12 @@ dms ipc call chats unreadStatus  # how much is waiting, without opening anything
 backlog is worked from the bottom. The conversation opens at the first message
 you had not seen, under a divider.
 
+What had not been read when the conversation was opened is drawn in the
+accent: a tint and a thin border on each message below the divider, kept for
+as long as the conversation stays open, the way the divider is. In the
+conversation list an unread conversation's name is in the accent too, unless
+it is muted.
+
 ## Building
 
 ```sh
@@ -464,6 +526,18 @@ A conversation that is open is refreshed on every push, and the refresh is
 merged into what is on screen rather than replacing it: older pages you scrolled
 back to stay, the selection follows its message, and a push that changed nothing
 in this conversation changes nothing on screen.
+
+The message list follows the same rule. Its rows are kept by message id and
+changed one at a time -- a row added where a message arrived, one removed where
+one went -- rather than the whole list being handed a new array on every push.
+A list given a new array throws every row away and lays them out again from
+wherever it last thought it was, which is what made the view jump up and down
+after opening at the unread divider and whenever something arrived while
+reading. Now the view stays put: a page of older messages grows the list
+upwards without moving what is on screen, and the view follows the newest
+message only while it is at the bottom. Scrolling in any way -- wheel,
+touchpad glide, dragging, the scrollbar -- ends any claim on where the view
+belongs until you come back down to the end.
 
 ## Requests that wait on a provider
 

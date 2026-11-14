@@ -97,6 +97,62 @@ Item {
     // use for a stream of state, and both lists below are fetched fresh when it
     // is, which is also how they stay honest about what is unread.
 
+    // ------------------------------------------------------------- icons
+
+    // The launcher draws every row's text in the same colours and gives a
+    // plugin no say in them, so a conversation with something unread stands
+    // out by its icon instead: the person, or the group, on a disc of the
+    // theme's accent colour, where every other row has the plain outline.
+    //
+    // Drawn here as a small SVG in the theme's own colours -- the launcher
+    // shows an "svg:" icon as it is, where a material one is always drawn in
+    // the text colour -- and handed over inline, so nothing is written to disk.
+    function _icon(chat) {
+        const glyph = chat.isGroup ? "group" : "person";
+        if ((chat.unread || 0) <= 0)
+            return "material:" + glyph;
+        return "svg:" + root._unreadIcon(glyph);
+    }
+
+    // Material Icons' person and group (Apache 2.0), on a 24-unit grid.
+    readonly property var _glyphs: ({
+            "person": "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+            "group": "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"
+        })
+
+    // Made once per glyph and colour: the launcher asks for the list on every
+    // key, and the theme changes far less often than that.
+    property var _iconCache: ({})
+
+    function _unreadIcon(glyph) {
+        const disc = root._hex(Theme.primary);
+        const ink = root._hex(Theme.primaryText);
+        const key = glyph + disc + ink;
+        const cached = root._iconCache[key];
+        if (cached)
+            return cached;
+
+        // A 36-unit box like the launcher's icon cell, with the disc a little
+        // inside it so it sits as large as the outlines on the other rows.
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">' + '<circle cx="18" cy="18" r="15" fill="' + disc + '"/>' + '<path transform="translate(8 8) scale(0.8333)" fill="' + ink + '" d="' + root._glyphs[glyph] + '"/>' + '</svg>';
+        const url = "data:image/svg+xml;base64," + Qt.btoa(svg);
+        root._iconCache[key] = url;
+        return url;
+    }
+
+    // _hex is a colour as SVG reads it: #rrggbb, without the alpha a QML
+    // colour's own string carries when it is not opaque.
+    function _hex(value) {
+        // Tinting with nothing turns a colour name into a colour, and leaves
+        // a colour as it was.
+        const color = Qt.tint(value, "transparent");
+        const part = v => {
+            const n = Math.max(0, Math.min(255, Math.round(v * 255)));
+            return (n < 16 ? "0" : "") + n.toString(16);
+        };
+        return "#" + part(color.r) + part(color.g) + part(color.b);
+    }
+
     function _statusItem(icon, name, comment) {
         return [
             {
@@ -260,7 +316,7 @@ Item {
             items.push({
                 "id": "chatRunner:unread:" + chat.provider + ":" + chat.id,
                 "name": chat.name || chat.id,
-                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                "icon": root._icon(chat),
                 "comment": root._unreadComment(chat, shown),
                 "categories": ["Chats"],
                 "keywords": chat.handles || [],
@@ -407,7 +463,8 @@ Item {
             items.push({
                 "id": "chatRunner:" + chat.provider + ":" + chat.id,
                 "name": chat.name || chat.id,
-                "icon": "material:" + (chat.isGroup ? "group" : "person"),
+                // Coloured when something is waiting: see _icon.
+                "icon": root._icon(chat),
                 // The service is part of the row, not a tooltip: it is the only
                 // thing distinguishing two rows with the same name.
                 "comment": root._comment(chat, providerName),

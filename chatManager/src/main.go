@@ -317,6 +317,10 @@ func laneFor(req models.Request) string {
 		}
 	case "chat.startChat":
 		return "provider\x00" + provider
+	case "chat.members":
+		// Waits on the provider's answer, though it is quick; a lane of its
+		// own so a sign-in in progress does not hold up the "@" picker.
+		return "members\x00" + provider
 	case "chat.setEnabled", "chat.setProviderSettings", "chat.login", "chat.logout",
 		"chat.authSubmit", "chat.purge":
 		return "provider\x00" + provider

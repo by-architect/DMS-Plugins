@@ -856,6 +856,21 @@ func (s *HistoryStore) SetMediaPath(ctx context.Context, provider, chatID, id, p
 // Uses FTS5 where available and falls back to LIKE otherwise, so search still
 // works on a database created before the index existed.
 func (s *HistoryStore) SearchMessages(ctx context.Context, query string, limit int) ([]SearchHit, error) {
+	return s.searchMessages(ctx, "", query, limit)
+}
+
+// SearchChatMessages is SearchMessages within one conversation: what the
+// search bar inside an open conversation looks through.
+func (s *HistoryStore) SearchChatMessages(ctx context.Context, chatID, query string, limit int) ([]SearchHit, error) {
+	if chatID == "" {
+		return nil, nil
+	}
+	return s.searchMessages(ctx, chatID, query, limit)
+}
+
+// searchMessages searches every conversation in this store, or only chatID's
+// when it is given.
+func (s *HistoryStore) searchMessages(ctx context.Context, chatID, query string, limit int) ([]SearchHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -863,6 +878,9 @@ func (s *HistoryStore) SearchMessages(ctx context.Context, query string, limit i
 	if limit <= 0 {
 		limit = 50
 	}
+
+	// Every conversation, or one: "" matches them all.
+	const inChat = ` AND (? = '' OR m.chat_id = ?)`
 
 	var rows *sql.Rows
 	var err error
@@ -876,17 +894,17 @@ SELECT `+hitColumns+`
   FROM messages_fts f
   JOIN messages m ON m.rowid = f.rowid
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
- WHERE messages_fts MATCH ?
+ WHERE messages_fts MATCH ?`+inChat+`
  ORDER BY m.ts DESC
- LIMIT ?`, phrase, limit)
+ LIMIT ?`, phrase, chatID, chatID, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 SELECT `+hitColumns+`
   FROM messages m
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
- WHERE m.text LIKE '%' || ? || '%' ESCAPE '\'
+ WHERE m.text LIKE '%' || ? || '%' ESCAPE '\'`+inChat+`
  ORDER BY m.ts DESC
- LIMIT ?`, escapeLike(query), limit)
+ LIMIT ?`, escapeLike(query), chatID, chatID, limit)
 	}
 	if err != nil {
 		return nil, err

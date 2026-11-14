@@ -80,6 +80,10 @@ func laneFor(c call) string {
 		return fmt.Sprintf("fetch\x00%d", c.ID)
 	case "startChat":
 		return "start"
+	case "members":
+		// Read from what the bridge already holds: quick, and never behind a
+		// send to the same room.
+		return "members"
 	}
 	// Unknown methods are answered at once, and in order with each other.
 	return "other"

@@ -297,6 +297,8 @@ Type `c unread` and the list becomes what you have not got to yet, searched by
 the text of the waiting messages themselves. Type `c share` and the same
 conversations are listed to **send** the clipboard into rather than to open —
 which is also where the clipboard runner's *Share to a chat…* lands you.
+A conversation with something unread shows its icon in your theme's accent
+colour.
 
 Needs the chat manager and at least one chat provider enabled under
 **Settings → Plugins** — see the chat section below. With none, the runner says
@@ -762,6 +764,13 @@ built for the machine it runs on, so build again after every update; a plugin
 whose program is not built refuses to enable and says so. You also want
 **wl-clipboard** (`wl-copy`, `wl-paste`) for pasting attachments into the
 composer and copying them out.
+
+Inside a conversation, **Ctrl+Shift+F** finds a message in it — everything
+stored, not only what is on screen — and **@** in the message box picks
+someone to mention (on Matrix, a real mention that notifies them). What had
+not been read when a conversation was opened is drawn in the accent colour
+below the "New messages" line, and the view stays where it is while messages
+arrive or older ones load.
 
 ## whatsappChat
 

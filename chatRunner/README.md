@@ -12,6 +12,13 @@ unread messages first, the one somebody wrote in last at the top. Typing puts
 the match first again — a name you asked for outranks a name that happens to
 have written — and what is unread only breaks the ties.
 
+A conversation with something unread has a coloured icon: the person, or the
+group, on a disc of your theme's accent colour, where every other row has the
+plain outline. The launcher draws every row's text in the same colours and
+gives a runner no say in them, so the icon is where the colour goes. It is a
+small SVG made in the theme's own colours each time they change, handed to the
+launcher inline -- nothing is written to disk.
+
 ## Why the provider is written on every row
 
 Two people can share a name. The same person can be on two services. A group

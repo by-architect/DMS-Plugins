@@ -121,6 +121,10 @@ StyledRect {
                     "text": I18n.tr("Attach an image or file from the clipboard")
                 },
                 {
+                    "keys": "@",
+                    "text": I18n.tr("Mention someone: pick who from the list with ↑ / ↓ and Enter or Tab, Esc to keep typing. On Matrix it is sent as a mention that notifies them")
+                },
+                {
                     "keys": "↑",
                     "text": I18n.tr("With nothing typed: edit your last message. Enter saves the edit, Esc leaves it")
                 },
@@ -133,6 +137,10 @@ StyledRect {
         {
             "title": I18n.tr("Finding"),
             "binds": [
+                {
+                    "keys": "Ctrl + Shift + F",
+                    "text": I18n.tr("Find a message in this conversation. Enter goes to the match, ↑ and ↓ to older and newer ones, Esc closes and leaves it selected")
+                },
                 {
                     "keys": I18n.tr("Type in the search box"),
                     "text": I18n.tr("Filters conversations, and searches message text after two characters")

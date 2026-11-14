@@ -487,6 +487,18 @@ func (m *MultiStore) SearchMessagesIn(ctx context.Context, providers []string, q
 	return all, err
 }
 
+// SearchChatMessages searches one conversation: the provider's store, and in
+// it only chatID's messages. A provider with no database yet has none to find.
+func (m *MultiStore) SearchChatMessages(ctx context.Context, provider, chatID, query string, limit int) ([]SearchHit, error) {
+	var hits []SearchHit
+	err := m.eachIn([]string{provider}, func(_ string, s *HistoryStore) error {
+		var err error
+		hits, err = s.SearchChatMessages(ctx, chatID, query, limit)
+		return err
+	})
+	return hits, err
+}
+
 func (m *MultiStore) Chats(ctx context.Context, limit int) ([]Chat, error) {
 	var all []Chat
 	err := m.each(func(_ string, s *HistoryStore) error {

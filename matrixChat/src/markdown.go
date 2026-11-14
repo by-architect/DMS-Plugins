@@ -23,12 +23,17 @@ import (
 // setText puts text from the composer into a message: the Markdown as typed is
 // the body, and the HTML it renders to goes beside it when it formats anything.
 // Plain text goes as plain text, which is what Element does.
+//
+// A mention picked in the composer is a link to the user's matrix.to address;
+// it renders to the pill Element sends, and withMentions (members.go) lists
+// the user in m.mentions and puts the name alone in the body.
 func setText(content *event.MessageEventContent, text string) {
 	content.Body = text
 	if formatted := renderMarkdown(text); formatted != "" {
 		content.Format = event.FormatHTML
 		content.FormattedBody = formatted
 	}
+	withMentions(content, text)
 }
 
 // renderMarkdown is the Matrix HTML that text renders to, or "" when it formats
