@@ -343,7 +343,7 @@ Item {
                 width: ListView.view.width
                 height: hitColumn.implicitHeight + Theme.spacingS * 2
                 radius: Theme.cornerRadius / 2
-                color: hitArea.containsMouse || hitRow.isHighlighted ? Theme.surfaceHover : "transparent"
+                color: hitRow.isHighlighted ? Theme.surfaceHover : "transparent"
                 border.color: hitRow.isHighlighted ? Theme.primary : "transparent"
                 border.width: hitRow.isHighlighted ? 1 : 0
 
@@ -352,6 +352,10 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
+                    // The pointer and the arrows move one highlight, so Enter
+                    // always means the row that is lit. On movement, so the
+                    // list opening under a still pointer leaves it alone.
+                    onPositionChanged: root.highlighted = hitRow.index
                     onClicked: root.choose(hitRow.index)
                 }
 

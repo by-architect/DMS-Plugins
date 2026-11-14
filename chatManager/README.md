@@ -111,7 +111,17 @@ accent colour.
 
 **Enter** (or a click) takes the conversation to a match and selects it; the
 bar stays, and **↑** / **↓** go to the older and newer matches from there
-(**Enter** and **Shift+Enter** too). **Esc** closes the bar and leaves the
+(**Enter** and **Shift+Enter** too, or the arrows on the bar). Moving the
+pointer over the list lights the row under it, the one Enter would take.
+
+## Selecting a message with the mouse
+
+Clicking a message selects it, the same selection **Ctrl+K** / **Ctrl+J** move,
+so **Ctrl+R**, **Ctrl+Shift+C**, **Ctrl+E**, **Ctrl+T** and **Ctrl+Delete** act
+on the message clicked. Clicking it again, or **Esc**, lets it go. What is
+clickable inside a message keeps its own click: a picture or file opens, a
+link opens, a quote goes to what it answers, and a reaction is added or taken
+back. **Esc** closes the bar and leaves the
 message found selected, so Ctrl+R answers it.
 
 A match further up than what is loaded is reached by paging older messages in
@@ -130,7 +140,9 @@ whole account:
 
 Typing **@** at the start of a word opens a list of the people in the
 conversation over the message box: **↑** / **↓** move through it, **Enter** or
-**Tab** picks, **Esc** puts it away and leaves what was typed. Picking writes
+**Tab** picks, **Esc** puts it away and leaves what was typed. The mouse works
+too: moving over a row lights it, the same highlight the arrows move, and a
+click picks it. Picking writes
 `@Name` into the field -- or `@id`, when two people share the name -- so the
 draft stays readable.
 

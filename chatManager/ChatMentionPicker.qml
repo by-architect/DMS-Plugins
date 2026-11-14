@@ -6,8 +6,9 @@ import qs.Widgets
 
 // Who can be mentioned, for "@" typed in the composer: a short list over the
 // field, best match first. The composer owns the keys -- the field keeps the
-// keyboard, so typing goes on narrowing the list -- and this only draws it and
-// takes a click.
+// keyboard, so typing goes on narrowing the list -- and this draws it and
+// answers the mouse: moving over a row puts the highlight there, the same one
+// the arrows move, and a click picks it.
 StyledRect {
     id: root
 
@@ -17,6 +18,8 @@ StyledRect {
     property int highlighted: 0
 
     signal picked(int index)
+    // The pointer moved onto a row.
+    signal pointed(int index)
 
     readonly property int rowHeight: 40
 
@@ -50,13 +53,17 @@ StyledRect {
             width: ListView.view.width
             height: root.rowHeight
             radius: Theme.cornerRadius / 2
-            color: row.isHighlighted ? Theme.primarySelected : (rowArea.containsMouse ? Theme.surfaceHover : "transparent")
+            color: row.isHighlighted ? Theme.primarySelected : "transparent"
 
             MouseArea {
                 id: rowArea
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
+                // On movement rather than on entering, so a list opening under
+                // a pointer that is standing still does not move the highlight
+                // away from the best match.
+                onPositionChanged: root.pointed(row.index)
                 onClicked: root.picked(row.index)
             }
 

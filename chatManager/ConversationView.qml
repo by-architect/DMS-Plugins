@@ -515,6 +515,19 @@ FocusScope {
         root.pinView(index, mode === undefined ? ListView.Contain : mode);
     }
 
+    // toggleSelect is a click on a message: it takes the selection, or lets
+    // it go when it already had it -- the mouse's Ctrl+K/J, and its Escape.
+    function toggleSelect(index) {
+        const msg = root.chatCore.messages[index];
+        if (!msg)
+            return;
+        if (root.selectedId === msg.id) {
+            root.clearSelection();
+            return;
+        }
+        root.select(index);
+    }
+
     function selectPrevious() {
         const count = root.chatCore.messages.length;
         if (count === 0)
@@ -1284,6 +1297,7 @@ FocusScope {
                         unread: root.chatCore.firstUnreadIndex >= 0 && messageRow.at >= root.chatCore.firstUnreadIndex
                         previousMessage: messageRow.at > 0 ? root.chatCore.messages[messageRow.at - 1] : null
 
+                        onSelectRequested: root.toggleSelect(messageRow.at)
                         onReplyRequested: {
                             root.editTarget = null;
                             root.replyTarget = messageRow.modelData;

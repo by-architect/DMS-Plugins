@@ -37,6 +37,8 @@ Item {
     property bool unread: false
     readonly property bool showUnread: unread && !fromMe && !isSystem && !isDeleted
 
+    // The bubble was clicked: the conversation selects it, as Ctrl+K/J would.
+    signal selectRequested
     signal replyRequested
     signal forwardRequested
     signal copyRequested
@@ -97,6 +99,22 @@ Item {
         "fontSize": Theme.fontSizeMedium
     })
     readonly property bool hasLink: linkUrl !== ""
+
+    // openMedia opens the attachment in whatever the desktop opens it with.
+    function openMedia() {
+        if (!root.hasMedia)
+            return;
+        if (root.mediaPath !== "") {
+            Quickshell.execDetached(["xdg-open", root.mediaPath]);
+            return;
+        }
+        // Not cached yet: media is fetched only when actually opened, so the
+        // first click is what downloads it.
+        root.chatCore.fetchMedia(root.chatCore.activeProvider, root.chatCore.activeChatId, root.message.id, path => {
+            if (path)
+                Quickshell.execDetached(["xdg-open", path]);
+        });
+    }
 
     // Hover is kept alive briefly after the pointer leaves. The action row sits
     // beside the bubble, so reaching for a button crosses a gap that belongs to
@@ -271,26 +289,17 @@ Item {
             onHoveredChanged: root.setHovered(hovered)
         }
 
+        // A click anywhere on the bubble selects it -- the mouse's way to
+        // what Ctrl+K/J reach, so Ctrl+R, Ctrl+Shift+C and the rest act on the
+        // message clicked. What is clickable inside it -- the picture, a link,
+        // a quote, a reaction -- sits above this and keeps its own click.
         MouseArea {
             id: bubbleArea
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton
 
-            onClicked: {
-                if (!root.hasMedia)
-                    return;
-                if (root.mediaPath !== "") {
-                    Quickshell.execDetached(["xdg-open", root.mediaPath]);
-                    return;
-                }
-                // Not cached yet: media is fetched only when actually opened,
-                // so the first click is what downloads it.
-                root.chatCore.fetchMedia(root.chatCore.activeProvider, root.chatCore.activeChatId, root.message.id, path => {
-                    if (path)
-                        Quickshell.execDetached(["xdg-open", path]);
-                });
-            }
+            onClicked: root.selectRequested()
         }
 
         Column {
@@ -413,6 +422,14 @@ Item {
                         size: Theme.iconSizeLarge
                         color: Theme.surfaceVariantText
                     }
+                }
+
+                // The attachment opens on a click, as it always has; the rest
+                // of the bubble selects the message.
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openMedia()
                 }
             }
 

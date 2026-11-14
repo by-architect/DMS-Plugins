@@ -539,6 +539,7 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
         highlighted: root.mentionIndex
 
         onPicked: index => root.chooseMention(index)
+        onPointed: index => root.mentionIndex = index
     }
 
     Column {
