@@ -1,0 +1,19 @@
+{
+    "id": "callRunner",
+    "name": "Call Runner",
+    "description": "Call people from the launcher, on your phone. Type 'call ' then a name or a number: the phone's contacts and newest calls are listed, and the one you pick is rung from the phone itself, over ssh (or adb).",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "launcher",
+    "capabilities": ["launcher", "command-execution"],
+    "component": "./CallRunnerLauncher.qml",
+    "settings": "./CallRunnerSettings.qml",
+    "trigger": "call ",
+    "icon": "call",
+    "dependencies": ["ssh"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}

@@ -20,9 +20,9 @@ import "bar.js" as Bar
 //   switches           a phone only: Wi-Fi, mobile data, hotspot -- click to
 //                      switch them
 //   ssh                connections to it now
-//   Syncthing          working, idle or paused
-//   rsync              sync pairs running now
-//   backups            backups running now
+//   Syncthing          working, idle or paused (also on mobile data)
+//   rsync              sync pairs running now, or paused
+//   backups            backups running now, or paused
 //
 // Hovering anything says what it is and more; a click on the name folds the
 // machine away, a right click anywhere connects to it again.
@@ -580,18 +580,20 @@ Item {
                 JobRing {
                     anchors.horizontalCenter: parent.horizontalCenter
                     job: root.s ? root.s.rsync : null
+                    paused: MatrixBarService.pausedJobs(root.host.name, "rsync")
                     diameter: root.ringD
                     textSize: root.labelSize
-                    tip: Bar.jobTip(root.s ? root.s.rsync : null, "rsync", "pair")
+                    tip: Bar.jobTip(job, "rsync", "pair", paused, root.host.name)
                     tipHost: root.tipHost
                 }
 
                 JobRing {
                     anchors.horizontalCenter: parent.horizontalCenter
                     job: root.s ? root.s.backup : null
+                    paused: MatrixBarService.pausedJobs(root.host.name, "backup")
                     diameter: root.ringD
                     textSize: root.labelSize
-                    tip: Bar.jobTip(root.s ? root.s.backup : null, "Backups", "backup")
+                    tip: Bar.jobTip(job, "Backups", "backup", paused, root.host.name)
                     tipHost: root.tipHost
                 }
             }

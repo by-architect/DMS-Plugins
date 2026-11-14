@@ -148,6 +148,8 @@ function emptySnapshot() {
         storage: null,
         sync: null,
         jobs: null,
+        skips: null,
+        metered: null,
         props: {},
         settings: {},
         tel: [],
@@ -336,6 +338,15 @@ function parseSnapshot(text) {
                 paused: f[1] === "1"
             };
             break;
+        case "stlimit":
+            // "<relays 0|1> <networks, comma separated, or ->"
+            st = st || emptySyncRaw();
+            f = rest.trim().split(/\s+/);
+            st.limit = {
+                relays: f[0] !== "0",
+                nets: !f[1] || f[1] === "-" ? [] : f[1].split(",")
+            };
+            break;
         case "ststatus":
             // "<folder> <state> <files to fetch> <bytes to fetch> <failed>"
             st = st || emptySyncRaw();
@@ -383,6 +394,24 @@ function parseSnapshot(text) {
             var job = parseJobLine(rest);
             if (job)
                 s.jobs.running.push(job);
+            break;
+        case "skips":
+            s.skips = [];
+            break;
+        case "skip":
+            // "<rsync|backup> <mobile|pause> <machine> <name>"
+            f = rest.trim().split(/\s+/);
+            s.skips = s.skips || [];
+            if (f.length >= 4)
+                s.skips.push({
+                    kind: f[0],
+                    why: f[1],
+                    host: f[2],
+                    name: f[3]
+                });
+            break;
+        case "metered":
+            s.metered = rest.trim() === "yes" ? true : (rest.trim() === "no" ? false : null);
             break;
         case "uplink":
             s.uplink = rest.trim();
@@ -604,6 +633,7 @@ function emptySyncRaw() {
         error: "",
         folders: null,
         connections: null,
+        limit: null,
         status: {}
     };
 }
@@ -613,8 +643,8 @@ var BUSY_FOLDER_STATES = ["scanning", "scan-waiting", "syncing", "sync-preparing
 
 // What Syncthing is doing, from its own answers (see probe.sh):
 //   paused   `matrix sync pause` left its file, or every folder or every
-//            other device is paused -- syncthing-guard pauses them all on
-//            mobile data
+//            other device is paused, or the machine is on mobile data and
+//            reaches none of them (why: pause, mobile, folders, devices)
 //   working  a folder is scanning or syncing
 //   error    a folder has stopped on an error (a missing path, say)
 //   idle     otherwise: up to date, or waiting for a device that is away
@@ -622,9 +652,19 @@ var BUSY_FOLDER_STATES = ["scanning", "scan-waiting", "syncing", "sync-preparing
 //   unknown  it runs, but its API did not answer
 // Files that failed to sync leave a folder idle; they are counted
 // (failedItems) rather than turned into a state.
+//
+// On mobile data syncthing-guard turns the relays off and lets each device
+// in only from the machine's own local networks (nets) -- a laptop on the
+// phone's hotspot still syncs -- and with no local network it pauses every
+// device. Either way nothing else is reached: that is paused, unless a
+// device on one of those networks is connected.
 function syncState(raw) {
     var out = {
         state: "unknown",
+        why: "",
+        pauseFile: !!raw.pauseFile,
+        mobile: false,
+        nets: [],
         folders: 0,
         pausedFolders: 0,
         busy: [],
@@ -639,6 +679,7 @@ function syncState(raw) {
     };
     if (!raw.running) {
         out.state = raw.pauseFile ? "paused" : "off";
+        out.why = raw.pauseFile ? "pause" : "";
         return out;
     }
     var folders = raw.folders || [];
@@ -669,9 +710,19 @@ function syncState(raw) {
         else if (conns[id].connected)
             out.connected++;
     }
-    if (raw.pauseFile || (out.folders > 0 && out.pausedFolders === out.folders) || (out.devices > 0 && out.pausedDevices === out.devices))
+    var allFolders = out.folders > 0 && out.pausedFolders === out.folders;
+    var allDevices = out.devices > 0 && out.pausedDevices === out.devices;
+    if (raw.limit && !raw.limit.relays && (raw.limit.nets.length > 0 || allDevices)) {
+        out.mobile = true;
+        out.nets = raw.limit.nets;
+    }
+    if (raw.pauseFile) {
         out.state = "paused";
-    else if (out.busy.length > 0)
+        out.why = "pause";
+    } else if (allFolders || allDevices || (out.mobile && out.connected === 0)) {
+        out.state = "paused";
+        out.why = out.mobile ? "mobile" : (allFolders ? "folders" : "devices");
+    } else if (out.busy.length > 0)
         out.state = "working";
     else if (out.stopped.length > 0)
         out.state = "error";
@@ -707,7 +758,11 @@ var UNIT_PREFIX = "matrix-sync-backup-manager-";
 // that no running unit accounts for -- one started by hand, or the far end
 // of another machine's sync. Progress is what fct knows of the hand-run
 // ones.
-function jobSummary(jobs, kind) {
+//
+// skips (probe.sh's mx:skip) are the ones whose last run was skipped for a
+// pause or mobile data: paused, [{ name, why, host }], while they do not
+// run.
+function jobSummary(jobs, kind, skips) {
     var prefix = UNIT_PREFIX + (kind === "rsync" ? "sync" : "backup") + "-";
     var units = (jobs && jobs.units || []).filter(function (u) {
         return u.unit.indexOf(prefix) === 0;
@@ -744,6 +799,22 @@ function jobSummary(jobs, kind) {
             others.push(j);
         }
     }
+    var paused = [];
+    var mine = skips || [];
+    for (var s = 0; s < mine.length; s++) {
+        var sk = mine[s];
+        if (sk.kind !== kind || running.indexOf(sk.name) >= 0)
+            continue;
+        var configured = units.some(function (u) {
+            return pairName(u.unit) === sk.name;
+        });
+        if (configured)
+            paused.push({
+                name: sk.name,
+                why: sk.why,
+                host: sk.host
+            });
+    }
     var known = others.filter(function (o) {
         return o.percent >= 0;
     });
@@ -762,8 +833,60 @@ function jobSummary(jobs, kind) {
             return o.name;
         })),
         retrying: retrying,
-        failed: failed
+        failed: failed,
+        paused: paused
     };
+}
+
+// Whether each machine is paused or on mobile data now, as far as its last
+// snapshot says (null: not known) -- from MatrixBarService's results.
+function hostConditions(results) {
+    var out = {};
+    for (var name in results) {
+        var r = results[name];
+        var st = r && r.state === "online" ? r.stats : null;
+        if (!st)
+            continue;
+        out[name] = {
+            pause: st.sync ? st.sync.pauseFile : null,
+            mobile: st.android ? (st.net ? st.net === "mobile" : null) : st.metered
+        };
+    }
+    return out;
+}
+
+// A run skipped for a pause or mobile data is paused until the next one --
+// an hour away, for a pair on a timer -- so it is shown only while that
+// machine is still paused or on mobile data, or while the bar cannot tell.
+function stillPaused(p, conditions) {
+    var c = conditions ? conditions[p.host] : null;
+    if (!c)
+        return true;
+    return p.why === "pause" ? c.pause !== false : c.mobile !== false;
+}
+
+// What is paused on one machine's ring: its own pairs (or backups) that
+// skipped their last run, and those of other machines that skipped it
+// because of this one -- the phone runs no pairs itself, but a pair that
+// waits for it to leave mobile data is its sync too. Each { name, why, host,
+// on }: on is the machine whose pair it is.
+function pausedJobs(name, kind, results, conditions) {
+    var out = [];
+    for (var other in results) {
+        var st = results[other] ? results[other].stats : null;
+        var list = st && st[kind] ? st[kind].paused || [] : [];
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            if ((other === name || p.host === name) && stillPaused(p, conditions))
+                out.push({
+                    name: p.name,
+                    why: p.why,
+                    host: p.host,
+                    on: other
+                });
+        }
+    }
+    return out;
 }
 
 // --------------------------------------------------------------- the phone
@@ -1095,6 +1218,8 @@ function emptyState() {
         sync: null,
         rsync: null,
         backup: null,
+        // a computer on a metered network (true/false, null unknown)
+        metered: null,
         cell: null,
         wifi: null,
         airplane: false,
@@ -1113,6 +1238,7 @@ function emptyState() {
         _gpu: {},
         _drm: null,
         _units: [],
+        _skips: [],
         _props: {},
         _policy: null,
         _dataRows: null
@@ -1256,6 +1382,10 @@ function advance(prev, snap, nowMs, opts) {
     }
     if (snap.sync)
         st.sync = snap.sync;
+    if (snap.metered !== null)
+        st.metered = snap.metered;
+    if (snap.skips !== null)
+        st._skips = snap.skips;
     if (snap.jobs) {
         var jobs = snap.jobs;
         if (jobs.unitsSame)
@@ -1264,8 +1394,8 @@ function advance(prev, snap, nowMs, opts) {
                 running: jobs.running
             };
         st._units = jobs.units;
-        st.rsync = jobSummary(jobs, "rsync");
-        st.backup = jobSummary(jobs, "backup");
+        st.rsync = jobSummary(jobs, "rsync", st._skips);
+        st.backup = jobSummary(jobs, "backup", st._skips);
     }
 
     // The phone
@@ -1594,7 +1724,15 @@ function syncTip(st) {
     var s = st ? st.sync : null;
     if (!s)
         return "Syncthing: unknown";
-    var lines = ["Syncthing " + (SYNC_WORDS[s.state] || s.state)];
+    var lines = ["Syncthing " + (SYNC_WORDS[s.state] || s.state) + (s.state === "paused" && s.why === "mobile" ? " on mobile data" : "")];
+    if (s.why === "pause")
+        lines.push("matrix sync pause -- until matrix sync resume");
+    else if (s.mobile)
+        lines.push((s.state === "paused" ? "" : "On mobile data: ") + (s.nets.length ? "syncs only with machines within " + _list(s.nets) : "no local network to sync on"));
+    else if (s.why === "folders")
+        lines.push("every folder is paused");
+    else if (s.why === "devices")
+        lines.push("every device is paused");
     if (s.state === "working" && s.busy.length)
         lines.push(_list(s.busy));
     if (s.state === "error" && s.stopped.length)
@@ -1610,7 +1748,8 @@ function syncTip(st) {
     return _join(lines);
 }
 
-function jobTip(j, what, unitWord) {
+// paused: pausedJobs() for this machine's ring.
+function jobTip(j, what, unitWord, paused, self) {
     if (!j)
         return what + ": unknown";
     var lines = [what + ": " + (j.count > 0 ? j.count + " running" : "nothing running") + (j.configured > 0 ? " · " + j.configured + " " + unitWord + (j.configured === 1 ? "" : "s") : "")];
@@ -1620,6 +1759,21 @@ function jobTip(j, what, unitWord) {
         lines.push("failed last time: " + _list(j.failed));
     if (j.retrying.length)
         lines.push("waiting to retry: " + _list(j.retrying));
+    var groups = {};
+    var order = [];
+    for (var i = 0; i < (paused || []).length; i++) {
+        var p = paused[i];
+        var key = p.why + " " + p.host;
+        if (!groups[key]) {
+            groups[key] = [];
+            order.push(key);
+        }
+        groups[key].push(p.name + (self && p.on !== self ? " (on " + p.on + ")" : ""));
+    }
+    for (var g = 0; g < order.length; g++) {
+        var w = order[g].split(" ");
+        lines.push((w[0] === "mobile" ? "paused while " + w[1] + " is on mobile data: " : "paused by matrix sync pause on " + w[1] + ": ") + _list(groups[order[g]]));
+    }
     return _join(lines);
 }
 

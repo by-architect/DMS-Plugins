@@ -20,6 +20,7 @@ it, and an **overlay** that replaces a piece of shell chrome.
 | [nixSearch](nixSearch/) | launcher | `nix <query>` | `nix` (flakes) |
 | [processRunner](processRunner/) | launcher | `kill <name>` | `ps`, a standalone `kill` |
 | [chatRunner](chatRunner/) | launcher | `c <name/number>` | chatManager and a chat provider |
+| [callRunner](callRunner/) | launcher | `call <name/number>` | sshManager, `ssh`; root on the phone; `adb` as a fallback |
 | [screenCatcher](screenCatcher/) | panel + bar widget | keybind / IPC | `grim`, `slurp`, `wf-recorder` |
 | [systemPanel](systemPanel/) | panel + bar widget | keybind / IPC | `matrix`, for the all-machines page |
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
@@ -303,6 +304,22 @@ Needs the chat manager and at least one chat provider enabled under
 so rather than showing an empty list.
 
 → [chatRunner/README.md](chatRunner/README.md)
+
+## callRunner — `call <name or number>`
+
+Your phone's contacts and newest calls in the launcher; the one you pick is
+rung from the phone itself. With nothing typed, the people called last come
+first (missed, incoming or outgoing, and when), then the starred, then
+everybody. A name matches without its accents (`sukru` finds Şükrü), a typed
+number can be called as it is, and `call hang up` ends the call the phone is
+in.
+
+It reaches the phone the way Phone Status does — an SSH Hosts host, as root
+through `su` — and falls back to adb over USB, only to the phone's own serial.
+The contacts are kept, so the list is there at once and is read again in the
+background every 15 minutes.
+
+→ [callRunner/README.md](callRunner/README.md)
 
 ## clipboardRunner — `clip <name>`
 
@@ -706,7 +723,8 @@ by side:
   (with missed calls) next to the mobile data used this cycle, as a ring;
 - then, in circles: ssh connections to it now, Syncthing working, idle or
   paused, and the rsync pairs and backups running now — red when one failed
-  last time.
+  last time, a pause sign while one is held back by `matrix sync pause` or by
+  a machine on mobile data. Syncthing shows paused on mobile data too.
 
 Hovering anything says more. The machines are the ones the installed
 `matrix` fans out to, each read over one ssh that stays open (riding
@@ -935,7 +953,7 @@ every bridge's own output there as well.
 ## A note on trust
 
 These plugins run as your user, with your permissions. So do all DMS plugins —
-there is no sandbox. Five are worth naming specifically:
+there is no sandbox. Six are worth naming specifically:
 
 - **commandRunner** runs what you configure, verbatim and unsanitized. That's
   the point of a command launcher, and anyone who can write its settings could
@@ -945,6 +963,9 @@ there is no sandbox. Five are worth naming specifically:
   machine. Its all-machines page runs `matrix log`, which ssh-es into every
   host matrix knows with your keys and shows the same about each of them.
   Treat the panel as you'd treat that output.
+- **callRunner** reads your phone's contacts and call log as root, keeps the
+  contacts in its plugin state on this machine, and starts calls on the
+  phone. A number reaches the phone only as digits, `+`, `*` and `#`.
 - **matrixBar** keeps an ssh connection open to every machine matrix knows,
   with your keys, and runs a probe there every few seconds — on a phone as
   root, through `su`, since signal, calls and the data counter are root's to

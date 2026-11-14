@@ -91,8 +91,18 @@ Singleton {
     // it was not.
     property var switches: ({})
 
+    // name -> { pause, mobile }: whether each machine is paused or on mobile
+    // data now. A pair skipped for either is shown paused only while it holds.
+    readonly property var conditions: Bar.hostConditions(results)
+
     function resultFor(name) {
         return results[name] ?? null;
+    }
+
+    // The pairs (kind "rsync") or backups ("backup") paused on one machine's
+    // ring: its own, and other machines' that wait for this one.
+    function pausedJobs(name, kind) {
+        return Bar.pausedJobs(name, kind, results, conditions);
     }
 
     function isCollapsed(name) {
@@ -677,11 +687,12 @@ Singleton {
                     if (s.ssh)
                         cols.push("ssh " + s.ssh.total);
                     if (s.sync)
-                        cols.push("syncthing " + s.sync.state);
-                    if (s.rsync)
-                        cols.push("rsync " + s.rsync.count + "/" + s.rsync.configured);
-                    if (s.backup)
-                        cols.push("backup " + s.backup.count + "/" + s.backup.configured);
+                        cols.push("syncthing " + s.sync.state + (s.sync.why === "mobile" ? " (mobile data)" : (s.sync.why === "pause" ? " (matrix sync pause)" : "")));
+                    for (const kind of ["rsync", "backup"]) {
+                        const paused = root.pausedJobs(h.name, kind);
+                        if (s[kind])
+                            cols.push(kind + " " + s[kind].count + "/" + s[kind].configured + (paused.length ? " paused " + paused.length : ""));
+                    }
                     if (s.android) {
                         if (s.cell)
                             cols.push("signal " + s.cell.level + "/4 " + s.cell.rat);

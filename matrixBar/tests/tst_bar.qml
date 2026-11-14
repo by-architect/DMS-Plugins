@@ -162,6 +162,91 @@ TestCase {
         compare(Bar.syncState(Bar.emptySyncRaw()).state, "unknown");
     }
 
+    // syncthing-guard on mobile data: the relays off, each device let in
+    // only from the machine's own networks. The phone's real answer, on
+    // mobile data with Wi-Fi off: nothing connected, so paused.
+    function test_syncthing_on_mobile_data() {
+        const mobile = Bar.parseSnapshot(lines(["mx:begin 0 1", "mx:stfolders", "mx:stfolder music 0 music", "mx:stfolder obsidian 0 obsidian", "mx:stdevs", "mx:stdev 0 0", "mx:stdev 0 0", "mx:stdev 0 0", "mx:stlimit 0 169.254.52.55/30", "mx:ststatus music idle 0 0 0", "mx:ststatus obsidian idle 6 2126 6", "mx:end"]));
+        compare(mobile.sync.state, "paused");
+        compare(mobile.sync.why, "mobile");
+        verify(mobile.sync.mobile);
+        compare(Bar.syncIcon(mobile.sync), "pause");
+        const tip = Bar.syncTip({
+            "sync": mobile.sync
+        }).split("\n");
+        compare(tip[0], "Syncthing paused on mobile data");
+        compare(tip[1], "syncs only with machines within 169.254.52.55/30");
+
+        // a laptop on its hotspot is connected: that syncs, so not paused
+        const local = Bar.parseSnapshot(lines(["mx:begin 0 1", "mx:stfolders", "mx:stfolder music 0 music", "mx:stdevs", "mx:stdev 1 0", "mx:stdev 0 0", "mx:stlimit 0 192.168.43.1/24", "mx:ststatus music syncing 3 100 0", "mx:end"]));
+        compare(local.sync.state, "working");
+        verify(local.sync.mobile);
+        compare(Bar.syncTip({
+            "sync": local.sync
+        }).split("\n")[1], "On mobile data: syncs only with machines within 192.168.43.1/24");
+
+        // no local network at all: every device paused
+        const none = Bar.parseSnapshot(lines(["mx:begin 0 1", "mx:stfolders", "mx:stfolder music 0 music", "mx:stdevs", "mx:stdev 0 1", "mx:stdev 0 1", "mx:stlimit 0 -", "mx:ststatus music idle 0 0 0", "mx:end"]));
+        compare(none.sync.why, "mobile");
+        compare(Bar.syncTip({
+            "sync": none.sync
+        }).split("\n")[1], "no local network to sync on");
+
+        // off mobile data: the relays on, every network allowed
+        const home = Bar.parseSnapshot(lines(["mx:begin 0 1", "mx:stfolders", "mx:stfolder music 0 music", "mx:stdevs", "mx:stdev 0 0", "mx:stlimit 1 -", "mx:ststatus music idle 0 0 0", "mx:end"]));
+        compare(home.sync.state, "idle");
+        verify(!home.sync.mobile);
+    }
+
+    // A pair whose last run was skipped for a pause or mobile data is paused
+    // -- on its own machine, and on the machine it waits for -- while that
+    // machine is still paused or on mobile data.
+    function test_paused_pairs() {
+        const laptopSnap = Bar.parseSnapshot(lines(["mx:begin 0 1", "mx:jobs", "mx:units", "mx:unit matrix-sync-backup-manager-sync-laptop-music-to-desktop.service inactive dead", "mx:unit matrix-sync-backup-manager-sync-phone-sd-to-laptop.service inactive dead", "mx:unit matrix-sync-backup-manager-backup-docs.service inactive dead", "mx:skips", "mx:skip rsync pause laptop laptop-music-to-desktop", "mx:skip rsync mobile phone phone-sd-to-laptop", "mx:skip rsync mobile phone phone-gone-to-laptop", "mx:skip backup pause laptop docs", "mx:metered no", "mx:end"]));
+        const lap = Bar.advance(null, laptopSnap, nov11, {});
+        verify(lap.metered === false);
+        // a skip of a pair no longer configured is left out
+        compare(lap.rsync.paused.map(p => p.name).join(), "laptop-music-to-desktop,phone-sd-to-laptop");
+        compare(lap.backup.paused.length, 1);
+
+        // the next snapshot carries no skips: kept
+        const lap2 = Bar.advance(lap, Bar.parseSnapshot(lines(["mx:begin 1 0", "mx:jobs", "mx:units same", "mx:end"])), nov11, {});
+        compare(lap2.rsync.paused.length, 2);
+        // one of them runs now: not paused
+        const lap3 = Bar.advance(lap2, Bar.parseSnapshot(lines(["mx:begin 2 0", "mx:jobs", "mx:units same", "mx:job rsync - matrix-sync-backup-manager-sync-phone-sd-to-laptop", "mx:end"])), nov11, {});
+        compare(lap3.rsync.paused.map(p => p.name).join(), "laptop-music-to-desktop");
+
+        const phoneSt = Bar.advance(null, Bar.parseSnapshot(phone), nov11, {});
+        const results = {
+            "laptop": {
+                "state": "online",
+                "stats": lap
+            },
+            "phone": {
+                "state": "online",
+                "stats": phoneSt
+            }
+        };
+        // the laptop is not on mobile data, but its pause file is not known
+        // (no Syncthing answer in this snapshot); the phone is on mobile data
+        const conds = Bar.hostConditions(results);
+        verify(conds.laptop.mobile === false);
+        verify(conds.phone.mobile === true);
+        compare(Bar.pausedJobs("laptop", "rsync", results, conds).length, 2);
+        const onPhone = Bar.pausedJobs("phone", "rsync", results, conds);
+        compare(onPhone.length, 1);
+        compare(onPhone[0].on, "laptop");
+        compare(Bar.jobTip(phoneSt.rsync, "rsync", "pair", onPhone, "phone").split("\n")[2], "paused while phone is on mobile data: phone-sd-to-laptop (on laptop)");
+        compare(Bar.jobTip(lap.rsync, "rsync", "pair", Bar.pausedJobs("laptop", "rsync", results, conds), "laptop").split("\n")[1], "paused by matrix sync pause on laptop: laptop-music-to-desktop");
+
+        // the phone back on Wi-Fi: its pair is not shown paused any more
+        conds.phone.mobile = false;
+        compare(Bar.pausedJobs("phone", "rsync", results, conds).length, 0);
+        // the laptop resumed
+        conds.laptop.pause = false;
+        compare(Bar.pausedJobs("laptop", "rsync", results, conds).length, 0);
+    }
+
     function test_rsync_and_backups() {
         const st = Bar.advance(null, Bar.parseSnapshot(laptop), Date.now(), {});
         // the running unit and its own rsync are one job; the rsync run by

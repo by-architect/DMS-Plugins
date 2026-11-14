@@ -30,9 +30,9 @@ One block per machine, this one first:
    │ ✆ (8)│   a phone: calls | data used data kind (LTE, 5G…), or crossed out
    │ ≋ ⇅ ⊚│   a phone: Wi-Fi, mobile data, hotspot — click to switch them
    │ (4)  │   ssh connections to it now
-   │ (✓)  │   Syncthing: ✓ idle, ⟳ working, ‖ paused
-   │ (0)  │   rsync pairs running now
-   │ (0)  │   backups running now
+   │ (✓)  │   Syncthing: ✓ idle, ⟳ working, ‖ paused (also on mobile data)
+   │ (0)  │   rsync pairs running now, ‖ when one is paused
+   │ (0)  │   backups running now, ‖ when one is paused
    ╰──────╯
 ```
 
@@ -74,9 +74,30 @@ instead of over ssh, put first, and underlined.
 | Removable | filesystems on a disk that can be pulled out: the kernel's removable flag, or a USB or SD card bus — never the disk `/` is on. A phone's SD card or USB drive |
 | Battery | the machine's own battery (a mouse's is left out); amber at 30%, red at 15% |
 | ssh | logged-in ssh connections to the machine now — sshd's `user@pts` and `user@notty` sessions — less the bar's own. ssh-link's standing connections from the other machines count: they are connections. The tooltip says from which machine |
-| Syncthing | `working` while a folder scans or syncs, `paused` when `matrix sync pause` left its file or every folder or device is paused (syncthing-guard pauses them all on mobile data), `idle` otherwise, `stopped` on a folder error, a crossed circle when it does not run. Files that failed to sync turn the tick amber |
-| rsync | sync-backup-manager's sync pairs running now (a oneshot unit while it is `activating`), plus any other rsync: one run by hand (its progress from fct, as a filling ring), or the far end of another machine's pair. Red when a pair failed last time, amber while one waits to retry |
+| Syncthing | `working` while a folder scans or syncs, `paused` when `matrix sync pause` left its file, every folder or device is paused, or the machine is on mobile data and reaches no other machine (below), `idle` otherwise, `stopped` on a folder error, a crossed circle when it does not run. Files that failed to sync turn the tick amber |
+| rsync | sync-backup-manager's sync pairs running now (a oneshot unit while it is `activating`), plus any other rsync: one run by hand (its progress from fct, as a filling ring), or the far end of another machine's pair. Red when a pair failed last time, a pause sign while one is paused (below), amber while one waits to retry |
 | Backups | sync-backup-manager's borg backups, and restic, the same way |
+
+### Paused on mobile data, or by `matrix sync pause`
+
+A machine that may not sync over mobile data (`consumableNetwork`, and
+`sync.continueOnMobileData` false, in its host file) holds its syncs back
+while it is on it, and so does every machine `matrix sync pause` holds. The
+bar shows both as paused:
+
+| | |
+|---|---|
+| Syncthing | on mobile data syncthing-guard turns the relays off and lets each device in only from the machine's own local networks — a laptop on the phone's hotspot still syncs — or pauses every device when there is none. Seen in Syncthing's own settings: with the relays off and devices limited to some networks, Syncthing is `paused` unless a device on one of those networks is connected; the tooltip names the networks |
+| rsync, backups | a pair or backup skips its run while a machine it touches is paused or on mobile data, and only sync-backup-manager's log says so (`~/.local/share/matrix/<host>-sync_backup_logs.json`): the newest record of each that says "Skipped: logos is on a mobile/metered connection" or "syncing is paused on …" makes it paused. A run started or finished since clears it |
+
+A skipped pair waits for its timer, an hour away for some, so the bar shows
+it paused only while that machine is still paused or on mobile data, as far
+as the bar knows: a phone by where its traffic leaves, a computer by
+NetworkManager calling its network metered (the test the guard and the pairs
+make), and `matrix sync pause` by its file. The pause sign is also on the
+ring of the machine a pair waits for, so the phone shows the pairs waiting
+for it to leave mobile data, though they run on a computer; the tooltip says
+which machine runs each.
 
 Bars turn amber and red at 60% / 80% for CPU and GPU, 75% / 90% for memory
 and disks, 50% / 80% for swap.
@@ -123,7 +144,8 @@ then under `$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, `~/Android/Sdk` and
 this one locally, the others over one ssh that stays open — and sends a
 snapshot every 5 seconds (a phone every 15). The slow parts come every
 30 seconds on a computer and every minute on a phone: storage, Syncthing,
-missed calls; the phone's data counter every five minutes. Nothing has to be
+missed calls, why the pairs last skipped and whether the network is metered;
+the phone's data counter every five minutes. Nothing has to be
 installed on the machines: the probe is ssh's stdin, run by `sh -s`.
 
 **Light on mobile data.** A phone, and a laptop on its hotspot, pay for every
@@ -187,6 +209,10 @@ machine is read at all.
 - On the phone, Syncthing runs in a mount namespace of its own with its API
   on a unix socket only root can open; the probe reaches both through
   `/proc/<syncthing pid>/root`.
+- The missed calls come from `content`, a Java program that needs Android's
+  own environment (`ANDROID_I18N_ROOT` for ICU above all). The phone's sshd
+  starts without it, and `content` then prints nothing, so the count read 0;
+  the probe takes the environment from zygote's.
 
 ## Tests
 

@@ -62,6 +62,19 @@ mode=$1 interval=$2 slow=$3 self=$4 android=$5 root=$6 uhome=$7 port=$8 sshconn=
 [ -n "${XDG_RUNTIME_DIR:-}" ] || export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 rundir=$XDG_RUNTIME_DIR
 
+# `content` (the call log) is a Java program, which needs Android's own
+# environment -- ANDROID_I18N_ROOT for ICU above all, without which it prints
+# nothing and the missed calls read 0. An sshd starts without it; zygote,
+# which starts every app, has it.
+if [ "$android" = 1 ] && [ -z "${ANDROID_I18N_ROOT:-}" ]; then
+    for z in $(pidof zygote64 zygote 2>/dev/null); do
+        [ -r "/proc/$z/environ" ] || continue
+        eval "$(tr '\0' '\n' < "/proc/$z/environ" | grep -E '^(ANDROID_[A-Z0-9_]+|BOOTCLASSPATH|DEX2OATBOOTCLASSPATH|SYSTEMSERVERCLASSPATH)=' |
+            sed "s/'/'\\\\''/g; s/^\([A-Z0-9_]*\)=\(.*\)$/export \1='\2'/")"
+        break
+    done
+fi
+
 # df is told to leave network mounts alone (-l): a dead sshfs makes it hang.
 # It also gets five seconds, when there is a timeout(1) that takes this
 # syntax (old busybox does not).
@@ -522,6 +535,61 @@ jobs_now() {
     done
 }
 
+# Why a sync pair or backup did not run last time, when that was a pause or
+# mobile data. sync-backup-manager skips a run while a machine it touches is
+# paused (`matrix sync pause`) or on mobile data it may not use, and only its
+# log says so: "Skipped: logos is on a mobile/metered connection ...",
+# "Skipped: syncing is paused on nebuchadnezzar ...". The newest record of
+# each counts; a run started or finished since clears it.
+#   mx:skips, then mx:skip <rsync|backup> <mobile|pause> <machine> <name>
+skips() {
+    log=""
+    for f in "$uhome/.local/share/matrix/$(uname -n)-sync_backup_logs.json" "$uhome"/.local/share/matrix/*-sync_backup_logs.json; do
+        [ -r "$f" ] && { log=$f; break; }
+    done
+    [ -n "$log" ] || return 0
+    echo "mx:skips"
+    tail -n 2000 "$log" 2>/dev/null | awk '
+        function val(k) {
+            if (!match($0, "\"" k "\": *\"[^\"]*\"")) return ""
+            v = substr($0, RSTART, RLENGTH)
+            sub(/^"[a-z]+": *"/, "", v)
+            return substr(v, 1, length(v) - 1)
+        }
+        {
+            cmd = val("command"); status = val("status"); name = val("name"); msg = val("log")
+            if (cmd == "rsync") kind = "rsync"
+            else if (cmd == "borg" || cmd == "restic") kind = "backup"
+            else next
+            if (name == "" || name ~ / /) next
+            k = kind " " name
+            if (status == "warn" && match(msg, /[^ ]+ is on a mobile\/metered connection/)) {
+                m = substr(msg, RSTART, RLENGTH); sub(/ .*/, "", m)
+                why[k] = "mobile"; host[k] = m
+            } else if (status == "warn" && match(msg, /syncing is paused on [^ (]+/)) {
+                m = substr(msg, RSTART, RLENGTH); sub(/.* /, "", m)
+                why[k] = "pause"; host[k] = m
+            } else if (status == "success" || status == "fail" || (status == "started" && msg == "") || (status == "warn" && msg ~ /^Skipped: /)) {
+                delete why[k]
+            }
+        }
+        END { for (k in why) { split(k, p, " "); print "mx:skip " p[1] " " why[k] " " host[k] " " p[2] } }'
+}
+
+# A computer on mobile data: NetworkManager calls a connected card metered,
+# set by hand or told so by the network (every phone's hotspot says so) --
+# the test syncthing-guard and the sync pairs make. Nothing when it does not
+# answer. A phone tells by its uplink instead.
+metered() {
+    command -v nmcli >/dev/null 2>&1 || return 0
+    m=$(nmcli -t -f GENERAL.TYPE,GENERAL.STATE,GENERAL.METERED device show 2>/dev/null | awk -F: '
+        $1 == "GENERAL.TYPE" { type = $2 }
+        $1 == "GENERAL.STATE" { state = $2 }
+        $1 == "GENERAL.METERED" && state ~ /connected/ && state !~ /disconnected/ && type !~ /^(loopback|tun|wireguard|bridge|veth|dummy)$/ { connected = 1; if ($2 ~ /^yes/) metered = 1 }
+        END { if (connected) print (metered ? "yes" : "no") }')
+    [ -n "$m" ] && echo "mx:metered $m"
+}
+
 # ------------------------------------------------------------- Syncthing
 # Raw answers from Syncthing's REST API; bar.js decides what they add up to.
 # The API is wherever syncthing was told to listen: its --gui-address, else
@@ -599,6 +667,18 @@ syncthing_state() {
     st "$url/rest/system/connections" | tr -d '\n' | grep -o -E '"(connected|paused)": *(true|false)' | awk '
         { k = $0; sub(/^"/, "", k); sub(/".*/, "", k); v[k] = ($0 ~ /true$/) }
         ("connected" in v) && ("paused" in v) { printf "mx:stdev %d %d\n", v["connected"], v["paused"]; delete v }'
+    # syncthing-guard on mobile data turns the relays off and lets each
+    # device in only from the machine's own local networks:
+    #   mx:stlimit <relays 0|1> <those networks, comma separated, or ->
+    opts=$(st "$url/rest/config/options" | tr -d '\n')
+    if [ -n "$opts" ]; then
+        relays=1
+        printf '%s' "$opts" | grep -q -E '"relaysEnabled": *false' && relays=0
+        nets=$(st "$url/rest/config/devices" | tr -d '\n' | grep -o -E '"allowedNetworks": *\[[^]]*\]' |
+            sed 's/^"allowedNetworks"//' | grep -o -E '"[^"]+"' | tr -d '"' | sort -u | tr '\n' ',')
+        nets=${nets%,}
+        echo "mx:stlimit $relays ${nets:--}"
+    fi
     printf '%s\n' "$flines" | awk '$3 == 0 { print $2 }' | while read -r id; do
         [ -n "$id" ] || continue
         st --data-urlencode "folder=$id" "$url/rest/db/status" | tr -d '\n' | awk -v id="$id" '
@@ -642,6 +722,10 @@ snapshot() {
     if [ "$full" = 1 ]; then
         storage
         syncthing_state
+        if [ "$android" = 0 ]; then
+            skips
+            metered
+        fi
     fi
     [ "$android" = 1 ] && phone "$full" "$data"
     echo "mx:end"
