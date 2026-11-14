@@ -1,0 +1,15 @@
+{
+    "id": "quickNotes",
+    "name": "Quick Notes",
+    "description": "A keybind away: a field at the bottom for jotting a task and the tasks as lines above it, kept in step with a Nextcloud task list in the background — nothing waits on the network to open or to add",
+    "version": "1.0.0",
+    "author": "neo",
+    "type": "composite",
+    "capabilities": ["daemon", "network"],
+    "icon": "edit_note",
+    "settings": "./QuickNotesSettings.qml",
+    "components": {
+        "daemon": "./QuickNotesDaemon.qml"
+    },
+    "permissions": ["settings_read", "settings_write", "network", "process"]
+}

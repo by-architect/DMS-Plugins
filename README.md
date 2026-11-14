@@ -2,7 +2,7 @@
 
 Plugins for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell).
 
-Twenty-five plugins in seven shapes: **launcher** plugins that answer a trigger word
+Twenty-seven plugins in seven shapes: **launcher** plugins that answer a trigger word
 you type into the launcher, **panels** that open fullscreen over the shell on a
 keybind, **bar widgets** that live in the bar and open a popout under themselves,
 a **bar** of its own on the left edge, the **chat manager** that is the chat
@@ -26,6 +26,7 @@ it, and an **overlay** that replaces a piece of shell chrome.
 | [notificationPanel](notificationPanel/) | panel + bar widget | keybind / IPC | — |
 | [controlPanel](controlPanel/) | panel + bar widget | keybind / IPC | — |
 | [wallpaperSearch](wallpaperSearch/) | panel + bar widget | keybind / IPC | `curl` |
+| [quickNotes](quickNotes/) | panel | keybind / IPC | a Nextcloud (or any CalDAV) account |
 | [notificationLine](notificationLine/) | overlay | every notification | — |
 | [fileActions](fileActions/) | bar widget | the pill, and its popout | `fct`, or any writer of per-action status files |
 | [mountManager](mountManager/) | bar widget | the pill, and its popout | `lsblk`, `udisksctl` |
@@ -393,8 +394,8 @@ hidden files are settings.
 
 # Panels
 
-Fullscreen overlays rather than bar dropdowns. Each ships an optional bar
-widget, but the panel is the plugin — bind its IPC call to a key under
+Overlays opened on a keybind rather than bar dropdowns. Most ship an optional
+bar widget, but the panel is the plugin — bind its IPC call to a key under
 **Settings → Keybinds → Add → Spawn** and the widget becomes optional.
 
 ```sh
@@ -528,6 +529,34 @@ from the keyboard. A download lands complete or not at all, and the local tab
 rescans each time the panel opens.
 
 → [wallpaperSearch/README.md](wallpaperSearch/README.md)
+
+## quickNotes
+
+Jot a task down without waiting for anything: a keybind opens a card with a
+field at the bottom and your tasks as lines above it, newest nearest to the
+field. They are a Nextcloud Tasks list — `main` unless you pick another.
+
+| | |
+|---|---|
+| `Enter` / `Shift+Enter` | save the task / a new line (the first line is its title, the rest its notes) |
+| `Ctrl+K` / `Ctrl+J` | move up / down through the tasks |
+| `Ctrl+Enter` | done, or not done again |
+| `Ctrl+Delete` | delete it (`Ctrl+Z` brings it back for 8 seconds) |
+| `/` | search every task, done ones too; `Enter` lands on what was found |
+
+Nothing waits on the network. Opening shows the list as it was last read; the
+list is read again in the background every few minutes, never because the
+window opened. A task you add, mark or delete is in the list at once and sent
+a moment later, and offline it waits in a queue that survives a restart. A
+task edited elsewhere in the meantime is read again and marked on top, so
+neither change is lost.
+
+It talks CalDAV through Qt's own XMLHttpRequest inside the shell, so nothing
+needs installing. The app password is kept apart from the plugin settings, in
+a file of its own created mode 0600 — or read from an agenix/sops secret.
+`dms ipc call quickNotes add "buy milk"` adds one without opening anything.
+
+→ [quickNotes/README.md](quickNotes/README.md)
 
 ## notificationLine
 
