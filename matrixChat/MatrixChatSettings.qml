@@ -447,4 +447,8 @@ PluginSettings {
         color: root.verifyFailed ? Theme.error : Theme.surfaceVariantText
         wrapMode: Text.WordWrap
     }
+
+    // Ctrl+W deletes a word and Ctrl+U clears, in every field on this page --
+    // the shell's own included.
+    EditKeys {}
 }

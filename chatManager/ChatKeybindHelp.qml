@@ -133,6 +133,18 @@ StyledRect {
                     "text": I18n.tr("With nothing typed: edit your last message. Enter saves the edit, Esc leaves it")
                 },
                 {
+                    "keys": "Ctrl + W",
+                    "text": I18n.tr("Delete the word before the cursor -- in this and every other text field")
+                },
+                {
+                    "keys": "Ctrl + U",
+                    "text": I18n.tr("Clear everything typed. Ctrl+Z puts either back")
+                },
+                {
+                    "keys": "Tab",
+                    "text": I18n.tr("Back to where the conversation was picked: Chat Runner, on the list it was opened from, or the search box in the window -- where Tab comes back")
+                },
+                {
                     "keys": "**bold**  *italic*  `code`",
                     "text": I18n.tr("Formatting: also ~~strike~~, ``` blocks, > quotes, - lists, # headings, [links](url). WhatsApp uses its own: *bold* _italic_ ~strike~")
                 }
@@ -143,7 +155,7 @@ StyledRect {
             "binds": [
                 {
                     "keys": "Ctrl + Shift + F",
-                    "text": I18n.tr("Find a message in this conversation. Enter or a click goes to the match, ↑ and ↓ (or the arrows on the bar) to older and newer ones, Esc closes and leaves it selected")
+                    "text": I18n.tr("Find a message in this conversation: the words in any order, part of a word, capitals and accents ignored; \"a phrase\" in quotes; from:name or from:me for one person. Nothing as typed: what is a typo away. Enter or a click goes to the match, ↑ and ↓ (or the arrows on the bar) to older and newer ones, Esc closes and leaves it selected")
                 },
                 {
                     "keys": I18n.tr("Type in the search box"),

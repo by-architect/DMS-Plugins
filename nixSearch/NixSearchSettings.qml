@@ -103,4 +103,8 @@ PluginSettings {
         description: "Adds 'Install to user profile' (nix profile add) to the right-click menu. Off by default because it changes your profile."
         defaultValue: false
     }
+
+    // Ctrl+W deletes a word and Ctrl+U clears, in every field on this page --
+    // the shell's own included.
+    EditKeys {}
 }

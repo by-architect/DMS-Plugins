@@ -19,6 +19,10 @@ import qs.Widgets
 //   Ctrl+Return   not ours: the conversation opens the selected message with it
 //   Up            upOnEmpty() when there is nothing typed -- the composer edits
 //                 the last message sent; with text, the cursor moves as ever
+//   Tab           tabbed() -- the conversation goes back to where conversations
+//                 are picked; a tab character is never what a chat message wants
+//   Ctrl+W        delete the word before the cursor, and Ctrl+U everything
+//                 (EditKeys.qml, as in every text field)
 //
 // While completing -- the "@" picker is open over the field -- Up, Down, Tab,
 // Return and Escape are the picker's: completionKey(key), and nothing else.
@@ -40,6 +44,7 @@ StyledRect {
     signal focusStateChanged(bool hasFocus)
     signal submitted
     signal upOnEmpty
+    signal tabbed
     signal completionKey(int key)
 
     function forceActiveFocus() {
@@ -93,6 +98,10 @@ StyledRect {
     FontMetrics {
         id: metrics
         font: edit.font
+    }
+
+    EditKeys {
+        id: editKeys
     }
 
     DankFlickable {
@@ -149,14 +158,27 @@ StyledRect {
                 onEditTextChanged: resetBlink()
             }
 
-            Keys.forwardTo: root.keyForwardTargets
+            // Ctrl+W and Ctrl+U first, and claimed before any shortcut of the
+            // window's is asked about them.
+            Keys.forwardTo: [editKeys].concat(root.keyForwardTargets)
+            Keys.onShortcutOverride: event => {
+                if (editKeys.claims(event))
+                    event.accepted = true;
+            }
             Keys.onReturnPressed: event => root._onReturn(event)
             Keys.onEnterPressed: event => root._onReturn(event)
             Keys.onDownPressed: event => {
                 event.accepted = root._complete(event);
             }
             Keys.onTabPressed: event => {
-                event.accepted = root._complete(event);
+                if (root._complete(event))
+                    return;
+                if (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
+                    event.accepted = false;
+                    return;
+                }
+                root.tabbed();
+                event.accepted = true;
             }
             Keys.onEscapePressed: event => {
                 event.accepted = root._complete(event);

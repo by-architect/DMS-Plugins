@@ -4,6 +4,7 @@ import QtQuick
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "search.js" as Search
 
 // Finding a message in the open conversation: Ctrl+Shift+F.
 //
@@ -17,6 +18,14 @@ import qs.Widgets
 // What is searched is everything this device has kept of the conversation,
 // not only what is loaded on screen; a match further back is paged in on the
 // way to it.
+//
+// The words can come in any order and be part of a word; case, accents and the
+// Turkish letters make no difference ("istanbul" finds "İstanbul"); "quoted
+// words" are a phrase, and from:name (or from:me) keeps to what one person
+// sent. When nothing has the words as typed, the messages a typo away are
+// found instead, and the bar says they are only similar. The search is the
+// chat manager's -- src/internal/chat/search.go -- and each match says what
+// in it matched, which is what is lit up here.
 Item {
     id: root
 
@@ -47,6 +56,9 @@ Item {
     readonly property int maxHits: 200
 
     readonly property string query: field.text.trim()
+
+    // Nothing had the words as typed: these are a typo away.
+    readonly property bool approx: root.hits.length > 0 && root.hits[0].approx === true
 
     function focusField() {
         root.chatKey = root.chatCore.activeProvider + " " + root.chatCore.activeChatId;
@@ -147,6 +159,8 @@ Item {
         if (root.hits.length === 0)
             return I18n.tr("No matches");
         const total = root.hits.length >= root.maxHits ? root.maxHits + "+" : String(root.hits.length);
+        if (root.approx)
+            return root.current >= 0 ? I18n.tr("%1 of %2 similar").arg(root.current + 1).arg(total) : I18n.tr("No exact match · %1 similar").arg(total);
         if (root.current >= 0)
             return I18n.tr("%1 of %2").arg(root.current + 1).arg(total);
         return I18n.tr("%1 found").arg(total);
@@ -165,22 +179,21 @@ Item {
         return date.toLocaleDateString(Qt.locale(), "d MMM yyyy");
     }
 
-    function _escape(value) {
-        return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    }
-
     // snippet is a match's text without its formatting, around the first
-    // place it matches, with the match drawn in the accent. Every character of
-    // it escaped first: it is somebody else's message.
+    // place it matches, with what matched drawn in the accent: the message,
+    // or the name of the file it carries, or its link's title -- whichever
+    // the match is in. A manager from before matches were marked lights the
+    // query up as typed.
     function snippet(hit) {
-        const plain = root.chatCore.previewText(hit.text || "", hit.provider || "") || hit.fileName || "";
-        const lower = plain.toLowerCase();
-        const at = lower.indexOf(root._asked.toLowerCase());
-        if (at < 0 || root._asked === "")
-            return root._escape(plain.length > 160 ? plain.slice(0, 160) + "…" : plain);
-        const from = Math.max(0, at - 50);
-        const to = Math.min(plain.length, at + root._asked.length + 110);
-        return (from > 0 ? "…" : "") + root._escape(plain.slice(from, at)) + "<b><font color=\"" + Theme.primary + "\">" + root._escape(plain.slice(at, at + root._asked.length)) + "</font></b>" + root._escape(plain.slice(at + root._asked.length, to)) + (to < plain.length ? "…" : "");
+        const marks = hit.marks && hit.marks.length > 0 ? hit.marks : [root._asked];
+        const plain = root.chatCore.previewText(hit.text || "", hit.provider || "");
+        const shown = [plain, hit.fileName || "", hit.linkTitle || ""];
+        for (let i = 0; i < shown.length; i++) {
+            const spans = shown[i] !== "" ? Search.ranges(shown[i], marks) : [];
+            if (spans.length > 0)
+                return Search.snippet(shown[i], spans, Theme.primary, 50, 170);
+        }
+        return Search.snippet(plain || hit.fileName || "", [], Theme.primary, 50, 160);
     }
 
     Timer {
@@ -221,7 +234,7 @@ Item {
                 id: field
                 anchors.verticalCenter: parent.verticalCenter
                 width: parent.width - countLabel.width - spinner.width - 28 * 3 - parent.spacing * 5
-                placeholderText: I18n.tr("Find in this conversation")
+                placeholderText: I18n.tr("Find: any words, \"a phrase\", from:name")
                 leftIconName: "search"
                 showClearButton: true
 

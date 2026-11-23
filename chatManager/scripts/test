@@ -4,6 +4,7 @@
 #   - the manager's Go tests
 #   - every QML file parses
 #   - the QtTest suites in tests/
+#   - the node checks in tests/ (every plugin's EditKeys.qml is this one's)
 #
 # The QML in here cannot be loaded outside DMS -- it imports qs.Common and the
 # rest of the shell -- so what is tested is what stands on its own: the link
@@ -107,6 +108,20 @@ if [ -n "$qmltestrunner" ]; then
     done
 else
     echo "skipped: no qmltestrunner found"
+fi
+
+step "node"
+if command -v node >/dev/null 2>&1; then
+    for check in tests/*.test.js; do
+        if node "$check" | grep -E '^(FAIL|     )'; then
+            echo "FAIL: $check"
+            failures=$((failures + 1))
+        else
+            echo "ok: $check"
+        fi
+    done
+else
+    echo "skipped: no node in PATH"
 fi
 
 printf '\n'

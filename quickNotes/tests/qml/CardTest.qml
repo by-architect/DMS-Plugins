@@ -253,6 +253,112 @@ Item {
             compare(field.text, "");
         }
 
+        function test_ctrl_e_edits_the_selected_task_and_enter_saves() {
+            field.text = "half typed";
+            ctrl(Qt.Key_K);
+            ctrl(Qt.Key_K);
+            const beta = uidOf("beta");
+            ctrl(Qt.Key_E);
+            verify(card.editing);
+            compare(field.text, "beta", "its text, to change");
+            compare(field.cursorPosition, 4, "the cursor at the end");
+            keyClick(Qt.Key_Exclam, Qt.ShiftModifier);
+            keyClick(Qt.Key_Return, Qt.ShiftModifier);
+            keyClick(Qt.Key_N);
+            keyClick(Qt.Key_Return);
+            verify(!card.editing);
+            compare(task("beta!") ? task("beta!").uid : "", beta, "renamed, the same task");
+            compare(task("beta!").description, "n", "the lines after the first are its notes");
+            verify(task("beta!").pending, "waiting to be sent");
+            compare(field.text, "half typed", "what was typed is back");
+            compare(card.selectedUid, beta, "still selected");
+            compare(svc.tasks.length, 4, "nothing added");
+        }
+
+        function test_ctrl_e_with_nothing_selected_is_the_newest_and_esc_leaves_it() {
+            field.text = "draft";
+            ctrl(Qt.Key_E);
+            verify(card.editing);
+            compare(field.text, "gamma\ng notes", "title and notes");
+            compare(card.selectedUid, uidOf("gamma"));
+            keyClick(Qt.Key_X);
+            keyClick(Qt.Key_Escape);
+            verify(!card.editing);
+            compare(field.text, "draft");
+            verify(task("gamma"), "left as it was");
+            compare(svc.status.waiting, 0);
+            compare(root.closes, 0, "Esc left the edit, not the window");
+        }
+
+        function test_an_edit_left_blank_or_unchanged_changes_nothing() {
+            ctrl(Qt.Key_K);
+            ctrl(Qt.Key_E);
+            keyClick(Qt.Key_Return);
+            compare(svc.status.waiting, 0, "unchanged");
+            ctrl(Qt.Key_E);
+            ctrl(Qt.Key_U);
+            compare(field.text, "", "Ctrl+U clears the field");
+            keyClick(Qt.Key_Return);
+            verify(!card.editing);
+            verify(task("gamma"), "a blank title is no title: left as it was");
+            compare(svc.status.waiting, 0);
+        }
+
+        function test_slash_is_not_a_search_while_editing() {
+            ctrl(Qt.Key_E);
+            ctrl(Qt.Key_U);
+            keyClick(Qt.Key_Slash);
+            keyClick(Qt.Key_A);
+            verify(!card.searching);
+            compare(card.rows.length, 3, "the list stays whole");
+            keyClick(Qt.Key_Return);
+            verify(task("/a"), "a title like any other");
+        }
+
+        function test_reopening_leaves_an_edit() {
+            field.text = "draft";
+            ctrl(Qt.Key_E);
+            keyClick(Qt.Key_X);
+            card.opened();
+            verify(!card.editing);
+            compare(field.text, "draft");
+            verify(task("gamma"));
+        }
+
+        function test_deleting_the_task_being_edited_ends_the_edit() {
+            field.text = "draft";
+            ctrl(Qt.Key_K);
+            ctrl(Qt.Key_E);
+            keyClick(Qt.Key_Delete, Qt.ControlModifier);
+            verify(!card.editing);
+            verify(!task("gamma"), "deleted");
+            compare(field.text, "draft");
+            compare(card.selectedUid, uidOf("beta"), "on the row that took its place");
+        }
+
+        function test_ctrl_shift_c_copies_the_selected_task() {
+            keyClick(Qt.Key_C, Qt.ControlModifier | Qt.ShiftModifier);
+            compare(svc.copies, 0, "nothing selected, nothing copied");
+            ctrl(Qt.Key_K);
+            keyClick(Qt.Key_C, Qt.ControlModifier | Qt.ShiftModifier);
+            compare(svc.copied, "gamma\ng notes", "the title and its notes");
+            verify(card.noteText.indexOf("Copied") === 0, "and says so");
+            compare(field.text, "", "the field is not touched");
+        }
+
+        function test_ctrl_w_and_ctrl_u_in_the_field() {
+            field.text = "one two three";
+            field.cursorPosition = field.text.length;
+            ctrl(Qt.Key_W);
+            compare(field.text, "one two ");
+            ctrl(Qt.Key_W);
+            compare(field.text, "one ");
+            field.text = "a\nb c";
+            field.cursorPosition = 2;
+            ctrl(Qt.Key_U);
+            compare(field.text, "", "everything, not only up to the cursor");
+        }
+
         function test_done_in_this_sitting_stays_until_it_ends() {
             svc.keepDoneHours = 0;
             ctrl(Qt.Key_K);

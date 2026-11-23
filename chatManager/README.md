@@ -93,6 +93,29 @@ each one is about, then listens on the session bus for the notification server
 answering. A click is told to every connected shell as a `chat.open` event,
 since it arrives from the notification server rather than through any request.
 
+## Back to the list: Tab
+
+**Tab** in a conversation goes back to where it was picked, to pick the next
+one. In the popout, which is what Chat Runner opens, that is the launcher
+again, on the list it was opened from -- `c ada` comes back as `c ada`, `c
+unread` as everything still waiting. A popout something else opened (a
+notification, `dms ipc call chats popout`) goes to Chat Runner's whole list,
+and without Chat Runner installed, to the window. In the window, Tab goes to
+the search box with what was typed there selected, so the next name typed
+replaces it, and Tab there goes back into the conversation.
+
+Not in the middle of an edit, which Tab would lose, nor while the "@" list is
+open, where Tab picks. A half-written message stays as its conversation's
+draft. Tab never types a tab character into a message.
+
+## Editing keys
+
+In the message box and every other field here, **Ctrl+W** deletes the word
+before the cursor -- back to the space before it, so a link goes in one -- and
+**Ctrl+U** clears everything typed. **Ctrl+Z** puts either back, and the
+clipboard is left alone. `EditKeys.qml` does it, the same file in every plugin
+with a text field.
+
 ## Drafts
 
 What is typed into a conversation stays with that conversation. Switching to
@@ -106,8 +129,34 @@ survive closing the window, not restarting the shell.
 
 **Ctrl+Shift+F** opens a search bar over the open conversation. It searches
 everything this device has kept of that conversation -- not only what is loaded
-on screen -- and lists the matches newest first, the matching words in the
-accent colour.
+on screen -- and lists the matches newest first, what matched in the accent
+colour. It looks the way people remember a message, not for the words exactly
+as typed:
+
+| You type | It finds |
+|---|---|
+| `istanbul yarın` | both words, in any order: "Yarın İstanbul'a gidiyoruz" |
+| `toplan` | part of a word: "Toplantıda görüşürüz" |
+| `cay`, `kirmizi`, `ISTANBUL` | whatever the capitals, accents and Turkish letters: "çay", "kırmızı", "İstanbul" |
+| `"big world"` | a phrase: those words together, in that order |
+| `from:ada`, `from:"Ada Lovelace"`, `from:me` | only what one person sent, or you; with words, those words from them |
+| `report` | the name of a file sent, and the title of a link, too |
+| `gnderdim` | a typo away, when nothing has it as typed: "gönderdim" -- the counter then says the matches are only *similar* |
+
+A word of four letters or more may be one letter off -- missed, doubled, wrong,
+or swapped with the next -- and one of eight or more two; numbers, short words
+and phrases are always matched as typed. Typos are only looked for when no
+message has every word as typed, so a word spelt right is never buried under
+ones that merely look like it.
+
+The search is the manager's (`src/internal/chat/search.go`): SQLite's
+full-text index matches whole words only and knows nothing of Turkish, so the
+conversation is read through instead, with the index it is opened with --
+about 65 ms for twenty thousand messages, and nothing more than that when it
+finds what it was asked for sooner. Each match comes back with what matched in
+it, as the message writes it, which is what the bar lights up. A manager built
+before this matches the words as typed, as one phrase; build it again for the
+rest.
 
 **Enter** (or a click) takes the conversation to a match and selects it; the
 bar stays, and **↑** / **↓** go to the older and newer matches from there
@@ -508,8 +557,11 @@ failed paste tests that pass in the shell. The QML here cannot be loaded outside
 is what stands on its own and has been wrong before: the rules a message's links
 go through (`links.js`), and the key behaviour the whole keymap rests on — which
 chords a focused text field takes for itself, checked against every state a
-half-written message can be in. Each part is skipped with a note if its tool is
-missing.
+half-written message can be in — Ctrl+W and Ctrl+U in a field shaped like the
+shell's own (`tst_editkeys.qml`), and how a search result is lit up
+(`search.js`). Each part is skipped with a note if its tool is missing.
+`node tests/editkeys.test.js` checks that every plugin with a text field
+carries the same `EditKeys.qml` as this one.
 
 ## Where the messages live
 

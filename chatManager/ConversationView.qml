@@ -59,6 +59,12 @@ FocusScope {
     // to know when it stops being the one being typed into.
     property bool onScreen: true
 
+    // Tab: back to where conversations are picked, to pick the next one --
+    // Chat Runner, for the popout a runner opened this in; the search box,
+    // in the window. Not in the middle of an edit, which Tab would lose, nor
+    // over an overlay, whose keys are its own.
+    signal backRequested
+
     // A pending destructive action, held until confirmed. Deleting a message is
     // not undoable, and a mistyped key should not be enough to do it.
     property var pendingDelete: null
@@ -973,6 +979,13 @@ FocusScope {
     }
 
     Keys.onPressed: event => {
+        // The composer has its own Tab; this is for an invitation, which has
+        // no composer and leaves the keyboard here.
+        if (event.key === Qt.Key_Tab && event.modifiers === Qt.NoModifier && !root.hasOverlay && !root.editTarget) {
+            root.backRequested();
+            event.accepted = true;
+            return;
+        }
         if (event.key === Qt.Key_Escape) {
             // Leaving an edit is the first thing Escape does: it is a mode the
             // composer is in, with somebody's draft set aside for it.
@@ -1405,6 +1418,10 @@ FocusScope {
 
             onEditCleared: root.editTarget = null
             onEmojiRequested: root.pickingEmoji = true
+            onTabbed: {
+                if (!root.editTarget && !root.hasOverlay)
+                    root.backRequested();
+            }
             onEditLastRequested: root.startEdit(root.chatCore.lastEditable())
 
             // Anything in here that takes the keyboard gives it straight back.

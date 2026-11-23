@@ -493,7 +493,7 @@ func (m *MultiStore) SearchChatMessages(ctx context.Context, provider, chatID, q
 	var hits []SearchHit
 	err := m.eachIn([]string{provider}, func(_ string, s *HistoryStore) error {
 		var err error
-		hits, err = s.SearchChatMessages(ctx, chatID, query, limit)
+		hits, err = s.SearchChatMessages(ctx, provider, chatID, query, limit)
 		return err
 	})
 	return hits, err

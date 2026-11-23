@@ -41,6 +41,14 @@ DankModal {
     // closes the window.
     closeOnEscapeKey: !(contentLoader.item?.holdsEscape ?? false)
 
+    // The launcher query this was opened from, when Chat Runner opened it
+    // ("c ada"), for Tab to go back to; "" when something else did.
+    property string returnQuery: ""
+
+    // Tab: back to where the conversation was picked. The daemon knows where
+    // that is -- see backToRunner there.
+    signal backRequested
+
     // Candidates when a query was ambiguous. Empty once one is chosen.
     property var candidates: []
     property string pendingQuery: ""

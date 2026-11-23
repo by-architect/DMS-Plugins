@@ -19,6 +19,13 @@ gives a runner no say in them, so the icon is where the colour goes. It is a
 small SVG made in the theme's own colours each time they change, handed to the
 launcher inline -- nothing is written to disk.
 
+## Back to the list
+
+Picking a row opens the conversation in the chat popout, and **Tab** there
+comes back here: the launcher opens again on the same list, with what you had
+typed -- `c ada` as `c ada`, `c unread` as whatever is still waiting, now that
+one has been read. Delete the name (Ctrl+Backspace) to look for someone else.
+
 ## Why the provider is written on every row
 
 Two people can share a name. The same person can be on two services. A group

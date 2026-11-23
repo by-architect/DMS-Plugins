@@ -72,6 +72,11 @@ Item {
     // wrong thing to a real person, so it is read as absent instead.
     readonly property int shareExpiresMs: 120000
 
+    // What was typed after the trigger for the list on screen, so a
+    // conversation opened from it knows the way back: Tab there reopens the
+    // launcher on this same list (ChatManagerDaemon.backToRunner).
+    property string _lastQuery: ""
+
     readonly property int maxResults: pluginService ? pluginService.loadPluginData("chatRunner", "maxResults", 40) : 40
     readonly property bool includeUnknown: pluginService ? pluginService.loadPluginData("chatRunner", "includeUnknown", true) : true
 
@@ -168,6 +173,7 @@ Item {
 
     function getItems(query) {
         const q = (query || "").trim();
+        root._lastQuery = query || "";
 
         if (!root.chat)
             return root._statusItem("chat_bubble", "Chat is unavailable", "Enable the Chat Manager plugin to search your conversations");
@@ -661,6 +667,14 @@ Item {
 
         // The popout, not the full window: picking a row here means "read this
         // conversation", and the sidebar would just be the list you came from.
-        root.chatDaemon?.openChatPopout(item.chatProvider, item.chatId);
+        // Told the query, so Tab there comes back to this list.
+        root.chatDaemon?.openChatPopout(item.chatProvider, item.chatId, root._returnQuery());
+    }
+
+    // The launcher text that brings back the list on screen: the trigger, and
+    // what was typed after it.
+    function _returnQuery() {
+        const trigger = root.pluginService && typeof root.pluginService.getPluginTrigger === "function" ? root.pluginService.getPluginTrigger("chatRunner") : null;
+        return (trigger === null || trigger === undefined ? "c " : trigger) + root._lastQuery;
     }
 }

@@ -42,27 +42,6 @@ PanelWindow {
             searchField.field.forceActiveFocus();
     }
 
-    function clearSearch() {
-        win.searchQuery = "";
-        searchField.text = "";
-    }
-
-    function deleteSearchWord() {
-        const text = searchField.text;
-        const pos = searchField.field.cursorPosition;
-        if (pos === 0)
-            return;
-        let i = pos;
-        while (i > 0 && /\s/.test(text[i - 1]))
-            i--;
-        while (i > 0 && !/\s/.test(text[i - 1]))
-            i--;
-        const next = text.slice(0, i) + text.slice(pos);
-        win.searchQuery = next;
-        searchField.text = next;
-        searchField.field.cursorPosition = i;
-    }
-
     readonly property var searchTokens: Filters.parseFilter(searchQuery)
     readonly property var sortedItems: {
         const arr = NotificationService.historyList.slice();
@@ -155,21 +134,14 @@ PanelWindow {
             anchors.fill: parent
             focus: true
 
+            // Ctrl+W deletes a word and Ctrl+U clears, in the search field
+            // and in every filter's text, before the field acts on them.
+            EditKeys {}
+
             Keys.onEscapePressed: win.closeRequested()
             Keys.onPressed: event => {
                 const searchFocused = searchField.hasFocus;
-                const ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
                 const alt = (event.modifiers & Qt.AltModifier) !== 0;
-                if (searchFocused && ctrl && event.key === Qt.Key_U) {
-                    win.clearSearch();
-                    event.accepted = true;
-                    return;
-                }
-                if (searchFocused && ctrl && event.key === Qt.Key_W) {
-                    win.deleteSearchWord();
-                    event.accepted = true;
-                    return;
-                }
                 // Alt+j/k never types a character, so this stays live
                 // regardless of search focus, same as the other panels'
                 // modifier combos — moves one shared row index that every

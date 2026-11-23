@@ -45,7 +45,7 @@ two never collide.
 | `Esc` (search focused) | unfocus the search bar, back to panel mode |
 | `Esc` (panel mode) | close the panel |
 | `Enter` (search focused) | connect to the top result, then hand focus back to panel mode |
-| `Ctrl+w` / `Ctrl+u` (search focused) | delete word before cursor / clear field |
+| `Ctrl+w` / `Ctrl+u` (search focused) | delete word before cursor / clear the whole field (`Ctrl+z` puts it back) |
 
 The six single-letter toggles only fire in panel mode — the moment the
 search field has focus, every keystroke goes to it as text, so typing

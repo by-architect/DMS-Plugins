@@ -44,22 +44,6 @@ PanelWindow {
         searchBar.text = "";
     }
 
-    function deleteSearchWord() {
-        const text = searchBar.text;
-        const pos = searchBar.field.cursorPosition;
-        if (pos === 0)
-            return;
-        let i = pos;
-        while (i > 0 && /\s/.test(text[i - 1]))
-            i--;
-        while (i > 0 && !/\s/.test(text[i - 1]))
-            i--;
-        const next = text.slice(0, i) + text.slice(pos);
-        win.searchQuery = next;
-        searchBar.text = next;
-        searchBar.field.cursorPosition = i;
-    }
-
     // ------------------------------------------------------------ wifi data
     readonly property var wifiFiltered: {
         const q = queryFor("wifi");
@@ -359,6 +343,11 @@ PanelWindow {
                 focus: true
             }
 
+            // Ctrl+W deletes a word and Ctrl+U clears, in the search field and
+            // any other field here -- before the field acts on them, so they
+            // never reach the toggles below.
+            EditKeys {}
+
             Keys.onEscapePressed: {
                 if (win.searchFocused)
                     focusAnchor.forceActiveFocus();
@@ -367,18 +356,6 @@ PanelWindow {
             }
 
             Keys.onPressed: event => {
-                const ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
-
-                if (win.searchFocused && ctrl && event.key === Qt.Key_U) {
-                    win.clearSearch();
-                    event.accepted = true;
-                    return;
-                }
-                if (win.searchFocused && ctrl && event.key === Qt.Key_W) {
-                    win.deleteSearchWord();
-                    event.accepted = true;
-                    return;
-                }
                 if (win.searchFocused)
                     return;
 

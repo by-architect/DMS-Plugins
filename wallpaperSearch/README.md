@@ -22,7 +22,7 @@ collide.
 | `Alt+Enter` | apply the selected **Local** image directly (no download) |
 | `Alt+j` / `Alt+k` | next / previous tab |
 | `Space` (panel mode) | fetch the next page of Wallhaven results and append them |
-| `Ctrl+w` / `Ctrl+u` (search focused) | delete word before cursor / clear field |
+| `Ctrl+w` / `Ctrl+u` (search focused) | delete word before cursor / clear the whole field (`Ctrl+z` puts it back) |
 
 `Ctrl`/`Alt`+`Enter` and `Alt+j/k` are live regardless of whether the search
 field has focus, since those combos never type a character. Everything else

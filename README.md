@@ -43,6 +43,12 @@ it, and an **overlay** that replaces a piece of shell chrome.
 Every plugin has its own README with the full detail — the sections below are
 summaries of what each one is for and what it needs.
 
+In every text field a plugin draws — the chat window, Quick Notes, the panels'
+search bars, the settings pages — **Ctrl+W** deletes the word before the cursor
+and **Ctrl+U** clears the whole field, as in a terminal; **Ctrl+Z** puts either
+back, and the clipboard is left alone. The launcher's own search box is the
+shell's, not a plugin's, and keeps the shell's keys.
+
 | | |
 |---|---|
 | [![System Panel](systemPanel/docs/panel.png)](systemPanel/) | [![Notification Panel](notificationPanel/docs/panel.png)](notificationPanel/) |
@@ -275,7 +281,8 @@ on — and killing the quickshell running the launcher is always refused.
 ## chatRunner — `c <name, number or address>`
 
 Every conversation, from every installed chat provider, in one list. Selecting
-a row opens that conversation on its own.
+a row opens that conversation on its own, and **Tab** there comes back to this
+list, with what you had typed, to pick the next one.
 
 ```
 Ada Lovelace     WhatsApp  ·  2 unread  ·  +905551234567
@@ -541,15 +548,17 @@ field. They are a Nextcloud Tasks list — `main` unless you pick another.
 | `Enter` / `Shift+Enter` | save the task / a new line (the first line is its title, the rest its notes) |
 | `Ctrl+K` / `Ctrl+J` | move up / down through the tasks |
 | `Ctrl+Enter` | done, or not done again |
+| `Ctrl+E` | edit it — its text goes into the field; `Enter` saves, `Esc` leaves it as it was |
+| `Ctrl+Shift+C` | copy it: the title, and the notes on the lines after |
 | `Ctrl+Delete` | delete it (`Ctrl+Z` brings it back for 8 seconds) |
 | `/` | search every task, done ones too; `Enter` lands on what was found |
 
 Nothing waits on the network. Opening shows the list as it was last read; the
 list is read again in the background every few minutes, never because the
-window opened. A task you add, mark or delete is in the list at once and sent
-a moment later, and offline it waits in a queue that survives a restart. A
-task edited elsewhere in the meantime is read again and marked on top, so
-neither change is lost.
+window opened. A task you add, edit, mark or delete is in the list at once and
+sent a moment later, and offline it waits in a queue that survives a restart.
+A task changed elsewhere in the meantime is read again and your change made on
+top, so neither is lost.
 
 It talks CalDAV through Qt's own XMLHttpRequest inside the shell, so nothing
 needs installing. The app password is kept apart from the plugin settings, in
@@ -813,7 +822,11 @@ whose program is not built refuses to enable and says so. You also want
 composer and copying them out.
 
 Inside a conversation, **Ctrl+Shift+F** finds a message in it — everything
-stored, not only what is on screen — and **@** in the message box picks
+stored, not only what is on screen: the words in any order, part of a word as
+good as the whole, capitals, accents and the Turkish letters ignored, a
+`"phrase"` in quotes, `from:name` for one person, and a typo forgiven when
+nothing matches as typed. **Tab** goes back to where the conversation was
+picked — Chat Runner, or the window's search box — and **@** in the message box picks
 someone to mention (on Matrix, a real mention that notifies them). What had
 not been read when a conversation was opened is drawn in the accent colour
 below the "New messages" line, and the view stays where it is while messages
@@ -904,6 +917,9 @@ remember.
 | `Ctrl+Delete` / `Ctrl+Shift+Delete` | Delete for you / for everyone, after confirming |
 | `Ctrl+V` | Attach an image or file from the clipboard |
 | `Ctrl+Y` / `Ctrl+N` | Join / decline an invitation |
+| `Ctrl+W` / `Ctrl+U` | Delete the word before the cursor / everything typed |
+| `Ctrl+Shift+F` | Find a message in the conversation |
+| `Tab` | Back to where the conversation was picked: Chat Runner, on the list you came from, or the window's search box (and `Tab` there comes back) |
 | `Esc` | Leave an edit, clear the selection, then close |
 
 Emoji are found by name — "laugh", "heart", "thumbs up" — in the emoji picker

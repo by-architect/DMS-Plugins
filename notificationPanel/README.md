@@ -138,10 +138,11 @@ when debugging compositor focus behaviour.
 The search bar takes keyboard focus automatically on open, so typing starts
 filtering immediately. **Esc** closes from anywhere, including while typing;
 **q** also closes, but only when the search field isn't focused (otherwise
-it'd just be typed as a search character). While the search field is
-focused, **Ctrl+W** deletes the word before the cursor and **Ctrl+U** clears
-the field — standard readline/shell editing shortcuts that Qt's `TextInput`
-doesn't bind by default. **Alt+j** / **Alt+k** move the shared row highlight
+it'd just be typed as a search character). In the search field and in a
+category's filter text, **Ctrl+W** deletes the word before the cursor and
+**Ctrl+U** clears the whole field — the shell's editing keys, which Qt's
+`TextInput` does not bind that way (its own Ctrl+U also copies what it
+deletes); **Ctrl+Z** puts either back. **Alt+j** / **Alt+k** move the shared row highlight
 down/up across every container at once, live regardless of search focus
 since the combo never types a character.
 

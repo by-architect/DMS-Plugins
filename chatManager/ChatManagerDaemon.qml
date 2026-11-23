@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Common
+import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
 
@@ -88,12 +89,60 @@ PluginComponent {
     // pluginService.pluginDaemonInstances["chatManager"]. The shell used to
     // offer this on PopoutService; stock DMS has no such function, and a plugin
     // cannot add one to a shell singleton.
-    function openChatPopout(provider, chatId) {
+    //
+    // returnQuery is the launcher query Chat Runner opened it from ("c ada"),
+    // which Tab goes back to; anything else opening it leaves it out.
+    function openChatPopout(provider, chatId, returnQuery) {
+        popout.returnQuery = returnQuery || "";
         popout.openResolved(provider, chatId);
     }
 
     function openChatQuery(query) {
+        popout.returnQuery = "";
         popout.openQuery(query);
+    }
+
+    // Tab in the popout: back to Chat Runner, on the list the conversation was
+    // picked from, to pick the next one -- or its whole list when something
+    // else opened the popout. Without Chat Runner, the window, whose list is
+    // the other place a conversation is picked.
+    function backToRunner() {
+        const trigger = root.pluginService && typeof root.pluginService.getPluginTrigger === "function" ? root.pluginService.getPluginTrigger("chatRunner") : null;
+        const query = popout.returnQuery;
+        popout.hidePopout();
+        if (trigger === null || trigger === undefined) {
+            openVar.set(true);
+            return;
+        }
+        reopenRunner.query = query !== "" ? query : trigger;
+        reopenRunner.restart();
+    }
+
+    // The launcher opens once the popout has let go of the keyboard: asked in
+    // the same moment, the two would fight over it.
+    Timer {
+        id: reopenRunner
+
+        property string query: ""
+
+        interval: 120
+        onTriggered: {
+            if (typeof PopoutService !== "undefined" && typeof PopoutService.openDankLauncherV2WithQuery === "function") {
+                PopoutService.openDankLauncherV2WithQuery(reopenRunner.query);
+                return;
+            }
+            // Proc.dmsBin: the shell's children do not always have dms on
+            // PATH.
+            Quickshell.execDetached([Proc.dmsBin, "ipc", "call", "spotlight", "openQuery", reopenRunner.query]);
+        }
+    }
+
+    Connections {
+        target: popout
+
+        function onBackRequested() {
+            root.backToRunner();
+        }
     }
 
     // The window and the global var track each other: the var is what the bar

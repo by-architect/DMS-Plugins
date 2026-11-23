@@ -89,6 +89,33 @@ Item {
             pushSoon.restart();
     }
 
+    // New text for a task, read as add() reads it: the first line its title,
+    // the rest its notes. Nothing else about the task changes.
+    function edit(uid, text) {
+        if (!engine || !engine.edit(uid, text))
+            return false;
+        pushSoon.restart();
+        return true;
+    }
+
+    // Text onto the clipboard, through the shell's own clipboard -- or, with
+    // its backend not there, Qt's.
+    function copy(text) {
+        const value = String(text || "");
+        if (value === "")
+            return;
+        if (!DMSService.isConnected) {
+            Quickshell.clipboardText = value;
+            return;
+        }
+        DMSService.sendRequest("clipboard.copy", {
+            "text": value
+        }, response => {
+            if (response && response.error)
+                Quickshell.clipboardText = value;
+        });
+    }
+
     // Gone from the list now, from the server Sync.UNDO_MS later.
     function remove(uid) {
         return engine ? engine.remove(uid) : false;

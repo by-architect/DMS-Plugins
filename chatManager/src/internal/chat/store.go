@@ -851,26 +851,14 @@ func (s *HistoryStore) SetMediaPath(ctx context.Context, provider, chatID, id, p
 
 // ---------------------------------------------------------------- search
 
-// SearchMessages finds messages by body text, newest first.
+// SearchMessages finds messages by body text in every conversation, newest
+// first: the search box of the chat window.
 //
 // Uses FTS5 where available and falls back to LIKE otherwise, so search still
-// works on a database created before the index existed.
+// works on a database created before the index existed. Inside one
+// conversation the search is a cleverer one of its own: see
+// SearchChatMessages in search.go.
 func (s *HistoryStore) SearchMessages(ctx context.Context, query string, limit int) ([]SearchHit, error) {
-	return s.searchMessages(ctx, "", query, limit)
-}
-
-// SearchChatMessages is SearchMessages within one conversation: what the
-// search bar inside an open conversation looks through.
-func (s *HistoryStore) SearchChatMessages(ctx context.Context, chatID, query string, limit int) ([]SearchHit, error) {
-	if chatID == "" {
-		return nil, nil
-	}
-	return s.searchMessages(ctx, chatID, query, limit)
-}
-
-// searchMessages searches every conversation in this store, or only chatID's
-// when it is given.
-func (s *HistoryStore) searchMessages(ctx context.Context, chatID, query string, limit int) ([]SearchHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -878,9 +866,6 @@ func (s *HistoryStore) searchMessages(ctx context.Context, chatID, query string,
 	if limit <= 0 {
 		limit = 50
 	}
-
-	// Every conversation, or one: "" matches them all.
-	const inChat = ` AND (? = '' OR m.chat_id = ?)`
 
 	var rows *sql.Rows
 	var err error
@@ -894,17 +879,17 @@ SELECT `+hitColumns+`
   FROM messages_fts f
   JOIN messages m ON m.rowid = f.rowid
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
- WHERE messages_fts MATCH ?`+inChat+`
+ WHERE messages_fts MATCH ?
  ORDER BY m.ts DESC
- LIMIT ?`, phrase, chatID, chatID, limit)
+ LIMIT ?`, phrase, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 SELECT `+hitColumns+`
   FROM messages m
   LEFT JOIN chats c ON c.provider = m.provider AND c.id = m.chat_id
- WHERE m.text LIKE '%' || ? || '%' ESCAPE '\'`+inChat+`
+ WHERE m.text LIKE '%' || ? || '%' ESCAPE '\'
  ORDER BY m.ts DESC
- LIMIT ?`, escapeLike(query), chatID, chatID, limit)
+ LIMIT ?`, escapeLike(query), limit)
 	}
 	if err != nil {
 		return nil, err
@@ -923,16 +908,32 @@ const hitColumns = `m.provider, m.chat_id, m.id, m.ts, m.from_me, m.sender_id, m
        COALESCE(c.name, '')`
 
 func scanHits(rows *sql.Rows) ([]SearchHit, error) {
+	hits, _, err := scanHitRows(rows, false)
+	return hits, err
+}
+
+// scanHitsWithRowID reads rows that select m.rowid ahead of hitColumns.
+func scanHitsWithRowID(rows *sql.Rows) ([]SearchHit, []int64, error) {
+	return scanHitRows(rows, true)
+}
+
+func scanHitRows(rows *sql.Rows, withRowID bool) ([]SearchHit, []int64, error) {
 	var out []SearchHit
+	var rowids []int64
 	for rows.Next() {
 		var h SearchHit
 		var cc, bcc string
-		if err := rows.Scan(&h.Provider, &h.ChatID, &h.ID, &h.TS, &h.FromMe, &h.SenderID,
+		var rowid int64
+		dest := []any{&h.Provider, &h.ChatID, &h.ID, &h.TS, &h.FromMe, &h.SenderID,
 			&h.SenderName, &h.SenderAvatarPath, &h.Kind, &h.Text, &h.BodyHTML, &h.Status, &h.ReplyTo, &cc, &bcc,
 			&h.MediaPath, &h.MediaRef, &h.MediaMime, &h.MediaW, &h.MediaH,
 			&h.FileName, &h.FileSize, &h.Duration,
-			&h.LinkURL, &h.LinkTitle, &h.LinkDesc, &h.LinkImage, &h.EditedTS, &h.ChatName); err != nil {
-			return nil, err
+			&h.LinkURL, &h.LinkTitle, &h.LinkDesc, &h.LinkImage, &h.EditedTS, &h.ChatName}
+		if withRowID {
+			dest = append([]any{&rowid}, dest...)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, nil, err
 		}
 		if cc != "" {
 			_ = json.Unmarshal([]byte(cc), &h.CC)
@@ -941,8 +942,9 @@ func scanHits(rows *sql.Rows) ([]SearchHit, error) {
 			_ = json.Unmarshal([]byte(bcc), &h.BCC)
 		}
 		out = append(out, h)
+		rowids = append(rowids, rowid)
 	}
-	return out, rows.Err()
+	return out, rowids, rows.Err()
 }
 
 // UnreadMessages returns what has arrived in each conversation since it was

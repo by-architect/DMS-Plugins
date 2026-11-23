@@ -148,6 +148,28 @@ test("ical: marking done changes three properties and the stamps, nothing else",
     assert.strictEqual(u.summary, ICal.readTask(NC_TODO).summary);
 });
 
+test("ical: editing changes the title and the notes, nothing else", () => {
+    const now = Date.UTC(2026, 10, 15, 8, 0, 0);
+    const edited = ICal.withText(NC_TODO, "Kargo, Perşembe", "Kapı kodu: 4411\nyeni not; virgüllü", now);
+    const t = ICal.readTask(edited);
+    assert.strictEqual(t.summary, "Kargo, Perşembe");
+    assert.strictEqual(t.description, "Kapı kodu: 4411\nyeni not; virgüllü");
+    assert.strictEqual(t.completed, false);
+    for (const keep of ["DUE;TZID=Europe/Istanbul:20261120T180000", "CATEGORIES:Errands,Work", "X-APPLE-SORT-ORDER:123456", "RELATED-TO;RELTYPE=PARENT:", "CREATED:20261110T081500Z", "BEGIN:VALARM", "DESCRIPTION:Reminder", "BEGIN:VTIMEZONE"])
+        assert.ok(edited.includes(keep), keep + " kept");
+    assert.ok(edited.includes("LAST-MODIFIED:20261115T080000Z") && !edited.includes("LAST-MODIFIED:20261112T101010Z"));
+    // No notes: the property goes, the alarm's own stays.
+    const bare = ICal.withText(NC_TODO, "just a title", "", now);
+    assert.strictEqual(ICal.readTask(bare).description, "");
+    assert.ok(!/^DESCRIPTION:Kap/m.test(bare) && bare.includes("DESCRIPTION:Reminder"));
+    // A title kept keeps its parameters; notes changed lose their HTML copy.
+    const withLang = NC_TODO.replace(/SUMMARY:[^]*?\r\nDESCRIPTION/, "SUMMARY;LANGUAGE=tr:Başlık\r\nX-ALT-DESC;FMTTYPE=text/html:<b>old</b>\r\nDESCRIPTION");
+    const kept = ICal.withText(withLang, "Başlık", "new notes", now);
+    assert.ok(kept.includes("SUMMARY;LANGUAGE=tr:Başlık"), "unchanged title untouched");
+    assert.ok(!kept.includes("X-ALT-DESC"), "stale HTML notes gone");
+    assert.strictEqual(ICal.withText("not a calendar", "x", "", now), "not a calendar");
+});
+
 test("ical: every written line is CRLF-ended and at most 75 octets", () => {
     const text = "Ünlü bir başlık 😀 ".repeat(12) + "\nikinci satır, noktalı; virgüllü \\ ters bölü";
     const ics = ICal.newTodo("abc", text, Date.UTC(2026, 0, 2, 3, 4, 5));
@@ -739,6 +761,124 @@ test("engine: a delete waits out its undo time, and Ctrl+Z takes it back", async
     await h.run("push");
     assert.deepStrictEqual(srv.log, ["DELETE /remote.php/dav/calendars/neo/main/b.ics"]);
     assert.ok(!srv.lists.main.objects["b.ics"]);
+});
+
+test("engine: editing is a PUT on the ETag it read, keeping the rest", async () => {
+    const srv = fakeServer();
+    srv.put("main", "nc.ics", NC_TODO);
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    const uid = "7c6a9f22-1d1b-4c21-9c11-2f3d1c0d9e01";
+    assert.ok(h.engine.edit(uid, "kargoyu al\nkapı kodu 4411"));
+    let t = h.tasks()[0];
+    assert.deepStrictEqual([t.summary, t.description, t.pending], ["kargoyu al", "kapı kodu 4411", true], "shown at once");
+    srv.log = [];
+    await h.run("push");
+    assert.deepStrictEqual(srv.log, ["PUT /remote.php/dav/calendars/neo/main/nc.ics"], "no GET: the ETag was known");
+    const ics = srv.lists.main.objects["nc.ics"].ics;
+    const onServer = ICal.readTask(ics);
+    assert.deepStrictEqual([onServer.summary, onServer.description], ["kargoyu al", "kapı kodu 4411"]);
+    assert.ok(ics.includes("CATEGORIES:Errands,Work") && ics.includes("BEGIN:VALARM") && ics.includes("DUE;TZID=Europe/Istanbul:20261120T180000"), "everything else as it came");
+    assert.strictEqual(h.tasks()[0].pending, false);
+    // Edited and edited back before sending: nothing to send.
+    h.engine.edit(uid, "something else");
+    h.engine.edit(uid, "kargoyu al  \nkapı kodu 4411");
+    assert.strictEqual(plain(h.engine.status()).waiting, 0, "spaces at the end of a line are no change");
+    assert.strictEqual(h.engine.edit(uid, " \n "), false, "no title, no edit");
+    assert.strictEqual(h.engine.edit("no-such-task", "x"), false);
+});
+
+test("engine: an edit and a mark before sending go as one update", async () => {
+    const srv = fakeServer();
+    srv.put("main", "x.ics", ICal.newTodo("x", "original", Date.UTC(2026, 10, 1)));
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    h.engine.edit("x", "renamed");
+    h.engine.setDone("x", true);
+    assert.strictEqual(plain(h.engine.status()).waiting, 1, "one update carries both");
+    assert.deepStrictEqual(h.tasks().map(t => [t.summary, t.completed]), [["renamed", true]]);
+    // Not done after all: the edit still goes.
+    h.engine.setDone("x", false);
+    assert.strictEqual(plain(h.engine.status()).waiting, 1);
+    srv.log = [];
+    await h.run("push");
+    assert.deepStrictEqual(srv.log, ["PUT /remote.php/dav/calendars/neo/main/x.ics"]);
+    const t = ICal.readTask(srv.lists.main.objects["x.ics"].ics);
+    assert.deepStrictEqual([t.summary, t.completed], ["renamed", false]);
+    // And the other way round: marked, then edited, then the edit undone.
+    h.engine.setDone("x", true);
+    h.engine.edit("x", "again");
+    h.engine.edit("x", "renamed");
+    await h.run("push");
+    const u = ICal.readTask(srv.lists.main.objects["x.ics"].ics);
+    assert.deepStrictEqual([u.summary, u.completed], ["renamed", true], "the mark went alone");
+});
+
+test("engine: editing a task not sent yet changes what is sent", async () => {
+    const srv = fakeServer();
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    const uid = h.engine.add("typo here");
+    h.engine.edit(uid, "no typo\nand notes");
+    assert.strictEqual(plain(h.engine.status()).waiting, 1, "still one create");
+    srv.log = [];
+    await h.run("push");
+    assert.deepStrictEqual(srv.log, ["PUT /remote.php/dav/calendars/neo/main/" + uid + ".ics"]);
+    const t = ICal.readTask(srv.lists.main.objects[uid + ".ics"].ics);
+    assert.deepStrictEqual([t.summary, t.description], ["no typo", "and notes"]);
+});
+
+test("engine: edited after a create whose answer was lost -- the edit is not", async () => {
+    const srv = fakeServer();
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    const uid = h.engine.add("first words");
+    srv.dropAnswers = 1;
+    assert.strictEqual((await h.run("push")).err.kind, "retry");
+    // It arrived as typed; corrected here before the retry, which gets a 412.
+    h.engine.edit(uid, "better words");
+    srv.log = [];
+    assert.strictEqual((await h.run("push")).err, null);
+    assert.deepStrictEqual(srv.log, ["PUT /remote.php/dav/calendars/neo/main/" + uid + ".ics", "GET /remote.php/dav/calendars/neo/main/" + uid + ".ics", "PUT /remote.php/dav/calendars/neo/main/" + uid + ".ics"]);
+    assert.strictEqual(ICal.readTask(srv.lists.main.objects[uid + ".ics"].ics).summary, "better words");
+    assert.strictEqual(plain(h.engine.status()).waiting, 0);
+});
+
+test("engine: renamed on the phone meanwhile -- read again, then edit on top", async () => {
+    const srv = fakeServer();
+    srv.put("main", "x.ics", ICal.withCompleted(ICal.newTodo("x", "original", Date.UTC(2026, 10, 1)), true, Date.UTC(2026, 10, 2)));
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    // Opened again on the phone; this side still holds the old ETag.
+    srv.put("main", "x.ics", ICal.newTodo("x", "original", Date.UTC(2026, 10, 1)));
+    h.engine.edit("x", "edited here");
+    await h.run("push");
+    const t = ICal.readTask(srv.lists.main.objects["x.ics"].ics);
+    assert.strictEqual(t.summary, "edited here", "ours applied");
+    assert.strictEqual(t.completed, false, "their change kept");
+});
+
+test("engine: an edit waiting to be sent survives a restart", async () => {
+    const srv = fakeServer();
+    srv.put("main", "a.ics", ICal.newTodo("a", "alpha", 1));
+    const h = harness(srv);
+    h.engine.configure(account());
+    await h.run("sync");
+    srv.offline = true;
+    h.engine.edit("a", "alpha, edited offline");
+    await h.run("push");
+    const h2 = harness(srv);
+    h2.engine.restore(JSON.parse(JSON.stringify(h.engine.snapshot())));
+    h2.engine.configure(account());
+    assert.deepStrictEqual(h2.tasks().map(t => [t.summary, t.pending]), [["alpha, edited offline", true]]);
+    srv.offline = false;
+    await h2.run("sync");
+    assert.strictEqual(ICal.readTask(srv.lists.main.objects["a.ics"].ics).summary, "alpha, edited offline");
 });
 
 test("engine: changes made before anything was sent are merged first", async () => {

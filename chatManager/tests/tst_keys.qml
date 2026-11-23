@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import ".."
 
 // Why the chat window's keys are the keys they are.
 //
@@ -23,6 +24,7 @@ Item {
     property string lastFired: ""
     property int sends: 0
     property int editLasts: 0
+    property int tabs: 0
 
     // Everything the conversation binds while a message can be written. All of
     // these must arrive, in every state, without touching what is being typed.
@@ -40,7 +42,10 @@ Item {
     // What the field keeps for itself, whatever the window would like. Bound
     // here so the test shows it rather than assuming it: this is the reason
     // paste is forwarded to the composer and deleting a message is Ctrl+Delete.
-    readonly property var fieldKeeps: ["Ctrl+V", "Delete"]
+    // Ctrl+W and Ctrl+U are the field's because ComposerField claims them
+    // (EditKeys.claims), in every state -- a word is deleted, not a shortcut
+    // fired, however much has been typed.
+    readonly property var fieldKeeps: ["Ctrl+V", "Delete", "Ctrl+W", "Ctrl+U"]
 
     readonly property var chords: ({
             "Ctrl+K": [Qt.Key_K, Qt.ControlModifier],
@@ -58,7 +63,9 @@ Item {
             "Ctrl+Delete": [Qt.Key_Delete, Qt.ControlModifier],
             "Ctrl+Shift+Delete": [Qt.Key_Delete, Qt.ControlModifier | Qt.ShiftModifier],
             "Ctrl+V": [Qt.Key_V, Qt.ControlModifier],
-            "Delete": [Qt.Key_Delete, Qt.NoModifier]
+            "Delete": [Qt.Key_Delete, Qt.NoModifier],
+            "Ctrl+W": [Qt.Key_W, Qt.ControlModifier],
+            "Ctrl+U": [Qt.Key_U, Qt.ControlModifier]
         })
 
     Repeater {
@@ -128,15 +135,35 @@ Item {
             event.accepted = false;
         }
 
+        // ComposerField's Tab, with no mention being picked: back to where
+        // conversations are picked, and never a tab character.
+        function onTab(event) {
+            if (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
+                event.accepted = false;
+                return;
+            }
+            window.tabs++;
+            event.accepted = true;
+        }
+
+        EditKeys {
+            id: editKeys
+        }
+
         TextEdit {
             id: field
 
             anchors.fill: parent
             textFormat: TextEdit.PlainText
-            Keys.forwardTo: [pasteKeys]
+            Keys.forwardTo: [editKeys, pasteKeys]
+            Keys.onShortcutOverride: event => {
+                if (editKeys.claims(event))
+                    event.accepted = true;
+            }
             Keys.onReturnPressed: event => composer.onReturn(event)
             Keys.onEnterPressed: event => composer.onReturn(event)
             Keys.onUpPressed: event => composer.onUp(event)
+            Keys.onTabPressed: event => composer.onTab(event)
         }
     }
 
@@ -305,6 +332,29 @@ Item {
             compare(window.editLasts, 1, "Up with text typed must not start an edit");
             verify(field.cursorPosition <= "first line".length, "Up with text typed should move the cursor to the line above");
             compare(field.text, "first line\nsecond", "and change nothing that was typed");
+        }
+
+        // Ctrl+W takes the word before the cursor and Ctrl+U everything, in a
+        // half-written message as in any field.
+        function test_ctrl_w_and_ctrl_u_edit_the_message() {
+            field.text = "hello big\nworld";
+            field.cursorPosition = field.text.length;
+            keyClick(Qt.Key_W, Qt.ControlModifier);
+            compare(field.text, "hello big\n");
+            keyClick(Qt.Key_W, Qt.ControlModifier);
+            compare(field.text, "hello ");
+            keyClick(Qt.Key_U, Qt.ControlModifier);
+            compare(field.text, "");
+        }
+
+        // Tab goes back to the conversations, and types nothing.
+        function test_tab_leaves_without_typing() {
+            field.text = "hello";
+            field.cursorPosition = 5;
+            window.tabs = 0;
+            keyClick(Qt.Key_Tab);
+            compare(window.tabs, 1);
+            compare(field.text, "hello", "no tab character");
         }
 
         // What Markdown needs: a code block pasted or typed keeps its lines.

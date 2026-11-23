@@ -52,6 +52,9 @@ Item {
     // Up was pressed with nothing typed: go back and edit the last message.
     signal editLastRequested
 
+    // Tab in the field, with no mention being picked.
+    signal tabbed
+
     // The emoji button was pressed.
     signal emojiRequested
 
@@ -735,6 +738,7 @@ printf 'TEXT:%s' "$(wl-paste --no-newline 2>/dev/null)"
                 completing: root.completing
                 onSubmitted: root.send()
                 onUpOnEmpty: root.editLastRequested()
+                onTabbed: root.tabbed()
                 onCompletionKey: key => root._onMentionKey(key)
 
                 // Where the cursor is decides whether a mention is being

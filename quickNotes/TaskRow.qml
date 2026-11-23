@@ -12,6 +12,8 @@ Rectangle {
     // A row from view.js rows(); null for a moment while the list catches up.
     property var task: null
     property bool selected: false
+    // Its text is in the field, being changed (Ctrl+E).
+    property bool editing: false
     property real nowMs: 0
 
     signal selectRequested
@@ -24,8 +26,8 @@ Rectangle {
     height: Math.max(36, body.implicitHeight + Theme.spacingS * 2)
     radius: Theme.cornerRadius
     color: selected ? Theme.withAlpha(Theme.primary, 0.14) : hover.hovered ? Theme.surfaceHover : "transparent"
-    border.color: selected ? Theme.primary : "transparent"
-    border.width: selected ? 1 : 0
+    border.color: selected || editing ? Theme.primary : "transparent"
+    border.width: selected || editing ? 1 : 0
 
     HoverHandler {
         id: hover
@@ -108,6 +110,14 @@ Rectangle {
         anchors.top: parent.top
         anchors.topMargin: (36 - height) / 2
         spacing: Theme.spacingXS
+
+        DankIcon {
+            visible: row.editing
+            name: "edit"
+            size: 14
+            color: Theme.primary
+            anchors.verticalCenter: parent.verticalCenter
+        }
 
         DankIcon {
             visible: !!row.task && row.task.pending && row.failed === ""

@@ -6,8 +6,9 @@
 //
 // What the server had at the last sync is kept as it came (each task's
 // calendar object and ETag, by href). What was done here and not sent yet is
-// a queue of operations on top of it -- create, mark done or not done, delete
-// -- and the tasks shown are always the first with the second applied. So
+// a queue of operations on top of it -- create, update (mark done or not
+// done, change the title and notes), delete -- and the tasks shown are always
+// the first with the second applied. So
 // nothing waits for the network: a change is in the list at once, and is sent
 // in the background, again and again if need be, until the server has it.
 //
@@ -43,6 +44,13 @@ function _emptyState() {
         lastError: "",
         lastErrorKind: ""
     };
+}
+
+// Whether a task already reads as { summary, description }, compared the way
+// typed text is read, so spaces at the ends of a line are no change.
+function sameText(task, t) {
+    const now = ICal.splitText(task.summary + "\n" + (task.description || ""));
+    return now.summary === t.summary && now.description === t.description;
 }
 
 function accountKey(a) {
@@ -277,10 +285,17 @@ function createEngine(env) {
                     t.failed = op.failed || t.failed;
                 }
             } else if (op.kind === "update") {
+                // Done or not, new text, or both: whichever it carries.
                 if (!t)
                     continue;
-                t.completed = op.done;
-                t.completedAt = op.done ? op.at : 0;
+                if (op.done !== undefined) {
+                    t.completed = op.done;
+                    t.completedAt = op.done ? op.at : 0;
+                }
+                if (op.summary !== undefined) {
+                    t.summary = op.summary;
+                    t.description = op.description || "";
+                }
                 t.pending = true;
                 t.failed = op.failed || t.failed;
             } else if (op.kind === "delete") {
@@ -325,18 +340,24 @@ function createEngine(env) {
             return true;
         }
         const server = serverTasks()[uid] || null;
-        // Already waiting to be marked: change its mind, or drop it when the
-        // task is back to what the server has.
+        // Already waiting to be marked or edited: change its mind, or drop the
+        // mark when the task is back to what the server has -- and the whole
+        // update when that leaves it nothing to send.
         const ui = waitingOp(uid, "update");
         if (ui >= 0) {
-            if (server && server.completed === done)
+            const op = Object.assign({}, state.pending[ui], {
+                done: done,
+                at: now,
+                failed: ""
+            });
+            if (server && server.completed === done) {
+                delete op.done;
+                delete op.at;
+            }
+            if (op.done === undefined && op.summary === undefined)
                 state.pending.splice(ui, 1);
             else
-                state.pending[ui] = Object.assign({}, state.pending[ui], {
-                    done: done,
-                    at: now,
-                    failed: ""
-                });
+                state.pending[ui] = op;
             changed();
             return true;
         }
@@ -351,6 +372,71 @@ function createEngine(env) {
             href: server ? server.href : sending.href,
             done: done,
             at: now
+        });
+        changed();
+        return true;
+    };
+
+    // New text for a task: the first line its title, the rest its notes, read
+    // the way add() reads them. The title and the notes are all that change;
+    // its due date, alarms and whatever else it has go back as they came.
+    // false when there is no such task, or no title left in the text.
+    engine.edit = function (uid, text) {
+        const t = ICal.splitText(text);
+        if (t.summary === "")
+            return false;
+        const now = env.now();
+        // Not sent yet: change what will be sent. Marked edited, for when an
+        // earlier try turns out to have got through (see sendCreate).
+        const ci = waitingOp(uid, "create");
+        if (ci >= 0) {
+            const op = state.pending[ci];
+            state.pending[ci] = Object.assign({}, op, {
+                ics: ICal.withText(op.ics, t.summary, t.description, now),
+                edited: true
+            });
+            changed();
+            return true;
+        }
+        const server = serverTasks()[uid] || null;
+        // On its way to the server right now: changed once it is there.
+        const sending = inFlight && inFlight.uid === uid && inFlight.kind !== "delete" ? inFlight : null;
+        if (!server && !sending)
+            return false;
+        const same = !!server && sameText(server, t);
+        // Already waiting to be marked or edited: one update carries both,
+        // and the text goes from it when it is back to what the server has.
+        const ui = waitingOp(uid, "update");
+        if (ui >= 0) {
+            const op = Object.assign({}, state.pending[ui], {
+                failed: ""
+            });
+            if (same) {
+                delete op.summary;
+                delete op.description;
+                delete op.editedAt;
+            } else {
+                op.summary = t.summary;
+                op.description = t.description;
+                op.editedAt = now;
+            }
+            if (op.done === undefined && op.summary === undefined)
+                state.pending.splice(ui, 1);
+            else
+                state.pending[ui] = op;
+            changed();
+            return true;
+        }
+        if (same && !sending)
+            return true;
+        state.pending.push({
+            id: ++state.seq,
+            kind: "update",
+            uid: uid,
+            href: server ? server.href : sending.href,
+            summary: t.summary,
+            description: t.description,
+            editedAt: now
         });
         changed();
         return true;
@@ -535,19 +621,26 @@ function createEngine(env) {
                 return done(null);
             }
             // It is there already: an earlier try got through and only its
-            // answer was lost. It may have been marked here since, which the
-            // server has not seen, so that much goes again as an update, in
-            // this one's place in the queue; and the list is read afresh.
+            // answer was lost. It may have been marked or edited here since,
+            // which the server has not seen, so that much goes again as an
+            // update, in this one's place in the queue; and the list is read
+            // afresh.
             if (res.status === 412) {
                 const local = ICal.readTask(op.ics) || {};
-                state.pending.splice(state.pending.indexOf(op), 1, {
+                const update = {
                     id: ++state.seq,
                     kind: "update",
                     uid: op.uid,
                     href: op.href,
                     done: !!local.completed,
                     at: local.completedAt || env.now()
-                });
+                };
+                if (op.edited) {
+                    update.summary = local.summary || "";
+                    update.description = local.description || "";
+                    update.editedAt = env.now();
+                }
+                state.pending.splice(state.pending.indexOf(op), 1, update);
                 state.ctag = "";
                 return done(null);
             }
@@ -562,7 +655,11 @@ function createEngine(env) {
     // which If-Match never matches; the server's own is the quoted part.
     function sendUpdate(op, done, retried) {
         const put = item => {
-            const ics = ICal.withCompleted(item.ics, op.done, op.at);
+            let ics = item.ics;
+            if (op.done !== undefined)
+                ics = ICal.withCompleted(ics, op.done, op.at);
+            if (op.summary !== undefined)
+                ics = ICal.withText(ics, op.summary, op.description || "", op.editedAt || env.now());
             const headers = {
                 "Content-Type": "text/calendar; charset=utf-8"
             };
@@ -586,7 +683,7 @@ function createEngine(env) {
                     delete state.items[op.href];
                     return sendUpdate(op, done, true);
                 }
-                done(_failure(res, "Marking a task"));
+                done(_failure(res, op.done === undefined ? "Editing a task" : "Marking a task"));
             });
         };
         const cached = state.items[op.href];

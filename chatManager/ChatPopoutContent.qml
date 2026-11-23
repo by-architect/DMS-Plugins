@@ -86,6 +86,9 @@ FocusScope {
         event.accepted = true;
     }
 
+    // Ctrl+W and Ctrl+U in every field here.
+    EditKeys {}
+
     // The candidate the keyboard is on, when a query matched several. The
     // popout is reached from a keybind, so choosing who was meant should not
     // need the mouse either.
@@ -93,6 +96,13 @@ FocusScope {
     onCandidatesChanged: root.candidateIndex = 0
 
     Keys.onPressed: event => {
+        // Not the conversation that was wanted, or none: Tab goes back to
+        // pick again, as it does from a conversation.
+        if (event.key === Qt.Key_Tab && event.modifiers === Qt.NoModifier && !root.resolving && !root.showingConversation) {
+            root.popout?.backRequested();
+            event.accepted = true;
+            return;
+        }
         if (root.resolving || root.candidates.length === 0)
             return;
         switch (event.key) {
@@ -212,6 +222,7 @@ FocusScope {
         anchors.margins: Theme.spacingS
         onScreen: root.onScreen
         visible: root.showingConversation && root.chatCore.hasActiveChat
+        onBackRequested: root.popout?.backRequested()
     }
 
     StyledText {

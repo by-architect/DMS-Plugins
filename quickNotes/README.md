@@ -37,8 +37,8 @@ and not saved is still in the field next time — a search is not.
 ## Keys
 
 The field has the keyboard the whole time, so typing always types. The
-selected task is a highlight you move with Ctrl+J/K; Ctrl+Enter and
-Ctrl+Delete act on it.
+selected task is a highlight you move with Ctrl+J/K; Ctrl+Enter, Ctrl+Delete,
+Ctrl+E and Ctrl+Shift+C act on it.
 
 | Key | Does |
 |---|---|
@@ -47,12 +47,17 @@ Ctrl+Delete act on it.
 | `Ctrl+K` / `Ctrl+J` | move the selection up / down; down from the bottom task is back to the field |
 | `↑` / `↓` | the same, while the field is empty |
 | `Ctrl+Enter` | mark the selected task done, or not done again |
+| `Ctrl+E` | edit the selected task — with nothing selected, the newest: its title, and its notes on the lines after, go into the field, and whatever was typed there waits |
+| `Enter`, while editing | save the change (left blank, or unchanged, nothing changes) and give the field back what was in it |
+| `Esc`, while editing | leave the task as it was |
+| `Ctrl+Shift+C` | copy the selected task: its title, and its notes on the lines after |
+| `Ctrl+W` / `Ctrl+U` | delete the word before the cursor / everything in the field (`Ctrl+Z` puts either back) |
 | `Ctrl+Delete` | delete the selected task (with nothing selected, it is the field's own delete-next-word) |
 | `Ctrl+Z` | while "Deleted … — Ctrl+Z brings it back" shows (8 seconds), bring the deleted task back; otherwise the field's own undo |
 | `/` | start a search: text beginning with `/` filters the tasks instead of being a task |
 | `Enter`, while searching | back to the whole list with what you found still selected, the way Enter ends a search in vim |
 | `Ctrl+R` | sync now (also tries again a change the server refused) |
-| `Esc` | leave the search, then drop the selection, then close |
+| `Esc` | leave an edit, then the search, then drop the selection, then close |
 
 Clicking works too: a task's circle marks it done, the ✕ that shows on hover
 deletes it, and clicking a task selects it.
@@ -70,8 +75,8 @@ selected as you type, so `/dentist` then `Ctrl+Enter` marks it done.
   every 5 minutes (a setting), and when you press `Ctrl+R`. When nothing in the
   list has changed, that costs one small request: the list's ctag is compared
   and nothing more is fetched.
-- **Every change you make** — a new task, done, not done, deleted — is in the
-  list at once and sent on its own a moment later. A task waiting to reach the
+- **Every change you make** — a new task, an edit, done, not done, deleted —
+  is in the list at once and sent on its own a moment later. A task waiting to reach the
   server has a small ☁ next to it.
 - **Offline**, changes wait in a queue, which survives a restart, and are sent
   when the server answers again: retried after 15 s, 30 s, 1 min, … up to the
@@ -80,20 +85,24 @@ selected as you type, so `/dentist` then `Ctrl+Enter` marks it done.
   it back.
 
 Several changes to the same task before it is sent are merged: a task typed
-and marked done goes up as one task already done; one typed and deleted never
-goes up at all.
+and marked done goes up as one task already done; one typed and corrected goes
+up corrected; one edited and marked done goes up as one change; one typed and
+deleted never goes up at all, and an edit changed back to what was there
+sends nothing.
 
 ### When someone else changed it too
 
 Marking a task done changes three properties — `STATUS`, `COMPLETED` and
-`PERCENT-COMPLETE`, as Nextcloud Tasks writes them — and the timestamps.
-Everything else in the task (its due date, alarms, categories, subtask link,
-properties some other app added) goes back exactly as it came.
+`PERCENT-COMPLETE`, as Nextcloud Tasks writes them — and the timestamps; an
+edit changes `SUMMARY` and `DESCRIPTION` (the title and the notes). Everything
+else in the task (its due date, alarms, categories, subtask link, properties
+some other app added) goes back exactly as it came.
 
 The change is sent with `If-Match` on the ETag it was read with. If the task
-was edited elsewhere in the meantime — renamed on your phone, say — the server
-refuses it with 412; the task is read again and marked on top of the new
-version, so neither change is lost.
+was changed elsewhere in the meantime — marked done on your phone, say — the
+server refuses it with 412; the task is read again and the change made on top
+of the new version, so neither is lost. (Two edits of the same title are the
+one place one wins: the one sent last.)
 
 A change the server refuses for good (a list shared with you read-only, for
 instance) is marked in red with the server's reason and stops holding up the
@@ -159,8 +168,9 @@ dms ipc call quickNotes status            # server, list, counts, queue, last sy
 
 ## What it does not do
 
-It writes titles, notes and done-ness. It does not edit a task's text, set due
-dates or priorities, or make subtasks — do that in Nextcloud Tasks. Subtasks
+It writes titles, notes and done-ness, and changes a task's title and notes
+(`Ctrl+E`). It does not set due dates or priorities, or make subtasks — do
+that in Nextcloud Tasks. Subtasks
 made there are shown, indented under their parent. A repeating task is marked
 done as a whole.
 

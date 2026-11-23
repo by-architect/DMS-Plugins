@@ -27,6 +27,9 @@ Item {
     readonly property bool syncing: false
     property int syncs: 0
     property var engine: null
+    // What copy() was last given, and how many times.
+    property string copied: ""
+    property int copies: 0
 
     function refresh() {
         tasks = engine.tasks();
@@ -35,6 +38,8 @@ Item {
 
     function seed() {
         syncs = 0;
+        copied = "";
+        copies = 0;
         keepDoneHours = 24;
         const now = Date.now();
         const items = {};
@@ -82,6 +87,15 @@ Item {
 
     function setDone(uid, done) {
         engine.setDone(uid, done);
+    }
+
+    function edit(uid, text) {
+        return engine.edit(uid, text);
+    }
+
+    function copy(text) {
+        copied = text;
+        copies++;
     }
 
     function remove(uid) {

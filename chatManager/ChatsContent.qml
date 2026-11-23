@@ -32,6 +32,13 @@ FocusScope {
         searchField.forceActiveFocus();
     }
 
+    // Tab in a conversation comes back here, with what was typed before
+    // selected, so the next name typed replaces it. Tab here goes back.
+    function focusSearch() {
+        searchField.forceActiveFocus();
+        searchField.selectAll();
+    }
+
     // openConversation opens one and hands it the keyboard.
     //
     // The focus half is not optional. Picking a conversation is picking what to
@@ -233,6 +240,9 @@ FocusScope {
         onTriggered: root.runSearch()
     }
 
+    // Ctrl+W and Ctrl+U in the search box and every field in the window.
+    EditKeys {}
+
     Keys.onEscapePressed: event => {
         if (searchField.text !== "") {
             searchField.text = "";
@@ -269,6 +279,24 @@ FocusScope {
                         placeholderText: I18n.tr("Search conversations and messages")
                         leftIconName: "search"
                         showClearButton: true
+                        keyForwardTargets: [searchKeys]
+
+                        // Tab goes back into the conversation that is open,
+                        // the way Tab there comes here. A forward target, as
+                        // the field would pass Tab along the focus chain
+                        // before any handler of its own saw it.
+                        Item {
+                            id: searchKeys
+
+                            Keys.onPressed: event => {
+                                if (event.key !== Qt.Key_Tab || event.modifiers !== Qt.NoModifier)
+                                    return;
+                                if (root.authProvider !== null || root.showingResults || !root.chatCore.hasActiveChat)
+                                    return;
+                                conversation.takeFocus();
+                                event.accepted = true;
+                            }
+                        }
 
                         // Typing puts the keyboard on the best match, so
                         // Enter opens it.
@@ -501,6 +529,7 @@ FocusScope {
                 anchors.fill: parent
                 onScreen: root.onScreen
                 visible: root.authProvider === null && !root.showingResults && root.chatCore.hasActiveChat
+                onBackRequested: root.focusSearch()
             }
 
             StyledText {

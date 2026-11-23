@@ -63,27 +63,6 @@ PanelWindow {
     // ------------------------------------------------------------- search
     property string searchQuery: ""
 
-    function clearSearch() {
-        searchQuery = "";
-        searchBar.text = "";
-    }
-
-    function deleteSearchWord() {
-        const text = searchBar.text;
-        const pos = searchBar.field.cursorPosition;
-        if (pos === 0)
-            return;
-        let i = pos;
-        while (i > 0 && /\s/.test(text[i - 1]))
-            i--;
-        while (i > 0 && !/\s/.test(text[i - 1]))
-            i--;
-        const next = text.slice(0, i) + text.slice(pos);
-        searchQuery = next;
-        searchBar.text = next;
-        searchBar.field.cursorPosition = i;
-    }
-
     // Enter behaves differently per tab: Wallhaven fires the API search;
     // Local's filter is already live, so Enter there just hands focus back
     // to the grid. Either way, focus returns to panel mode so Ctrl+hjkl
@@ -430,20 +409,13 @@ PanelWindow {
                     win.closeRequested();
             }
 
+            // Ctrl+W deletes a word and Ctrl+U clears, in the search field,
+            // before the field acts on them.
+            EditKeys {}
+
             Keys.onPressed: event => {
                 const ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
                 const alt = (event.modifiers & Qt.AltModifier) !== 0;
-
-                if (win.searchFocused && ctrl && event.key === Qt.Key_U) {
-                    win.clearSearch();
-                    event.accepted = true;
-                    return;
-                }
-                if (win.searchFocused && ctrl && event.key === Qt.Key_W) {
-                    win.deleteSearchWord();
-                    event.accepted = true;
-                    return;
-                }
 
                 // Modifier combos below are unambiguous (Ctrl/Alt+Enter never
                 // types a character), so they're live regardless of whether

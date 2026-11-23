@@ -361,13 +361,13 @@ func TestSearchChatMessages(t *testing.T) {
 		{Provider: prov, ID: "m3", ChatID: "c2", TS: 400, Kind: KindText, Text: "did the invoice come?"},
 	}))
 
-	hits, err := store.SearchChatMessages(ctx, "c1", "invoice", 10)
+	hits, err := store.SearchChatMessages(ctx, prov, "c1", "invoice", 10)
 	require.NoError(t, err)
 	require.Len(t, hits, 2)
 	assert.Equal(t, "m2", hits[0].ID, "newest first")
 	assert.Equal(t, "m1", hits[1].ID)
 
-	none, err := store.SearchChatMessages(ctx, "", "invoice", 10)
+	none, err := store.SearchChatMessages(ctx, prov, "", "invoice", 10)
 	require.NoError(t, err)
 	assert.Empty(t, none, "no conversation is not every conversation")
 

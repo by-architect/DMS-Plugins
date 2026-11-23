@@ -1,9 +1,10 @@
 .pragma library
 
 // Just enough iCalendar (RFC 5545) for to-dos: read a VTODO out of a calendar
-// object, write a new one, and mark one done or not done without disturbing
-// anything else in the file -- alarms, categories, a due date or properties
-// some other client invented all go back to the server exactly as they came.
+// object, write a new one, mark one done or not done, and change its title and
+// notes, without disturbing anything else in the file -- alarms, categories, a
+// due date or properties some other client invented all go back to the server
+// exactly as they came.
 //
 // A task's text is split the way Nextcloud Tasks shows it: the first line is
 // the SUMMARY (its title), every line after that the DESCRIPTION (its notes).
@@ -284,6 +285,35 @@ function withCompleted(text, done, nowMs) {
         removeProp(todo, "PERCENT-COMPLETE");
         removeProp(todo, "COMPLETED");
     }
+    setProp(todo, "LAST-MODIFIED", stamp);
+    setProp(todo, "DTSTAMP", stamp);
+    return serialize(cal);
+}
+
+// The same calendar object with its task's title and notes as given, and
+// everything else as it was. Only what changed is rewritten, so a title kept
+// keeps its parameters (a LANGUAGE, say); notes that changed lose the HTML
+// copy some clients keep beside them (X-ALT-DESC), which would go on showing
+// the old ones. Text that holds no to-do comes back unchanged.
+function withText(text, summary, description, nowMs) {
+    const cal = parse(text);
+    const todo = findTodo(cal);
+    if (!todo)
+        return text;
+    const value = name => {
+        const p = prop(todo, name);
+        return p ? unescapeText(p.value) : "";
+    };
+    if (value("SUMMARY") !== summary)
+        setProp(todo, "SUMMARY", escapeText(summary));
+    if (value("DESCRIPTION") !== description) {
+        if (description)
+            setProp(todo, "DESCRIPTION", escapeText(description));
+        else
+            removeProp(todo, "DESCRIPTION");
+        removeProp(todo, "X-ALT-DESC");
+    }
+    const stamp = formatUtc(nowMs);
     setProp(todo, "LAST-MODIFIED", stamp);
     setProp(todo, "DTSTAMP", stamp);
     return serialize(cal);

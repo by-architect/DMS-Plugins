@@ -10,9 +10,11 @@ import "sync.js" as Sync
 //
 // The field keeps the keyboard the whole time, so typing always types; the
 // selected task is only a highlight that Ctrl+J/K walk up and down, and
-// what Ctrl+Enter and Ctrl+Delete act on. Text starting with "/" searches
-// instead of being a task, and Enter then goes back to the whole list with
-// what was found still selected, the way Enter ends a search in vim.
+// what Ctrl+Enter, Ctrl+Delete, Ctrl+E and Ctrl+Shift+C act on. Text starting
+// with "/" searches instead of being a task, and Enter then goes back to the
+// whole list with what was found still selected, the way Enter ends a search
+// in vim. Ctrl+E puts a task's text in the field to be changed -- what was
+// typed there waits until the edit is over -- and Enter saves it.
 //
 // An Item of its own, apart from the layer-shell window around it, so the
 // tests can drive it under qmltestrunner.
@@ -33,7 +35,20 @@ Rectangle {
     property string undoText: ""
     readonly property bool undoActive: undoText !== ""
 
-    readonly property bool searching: field.text.charAt(0) === "/"
+    // The task whose text is in the field to be changed, or "". Enter saves
+    // the change, Esc leaves the task as it was; either way the field gets
+    // back what was in it before.
+    property string editUid: ""
+    readonly property bool editing: editUid !== ""
+    property string _editOriginal: ""
+    property string _editTitle: ""
+    property string _draftAside: ""
+
+    // A word on what was just done -- "Copied …" -- for a moment.
+    property string noteText: ""
+
+    // A task's text is never a search, even one starting with "/".
+    readonly property bool searching: !editing && field.text.charAt(0) === "/"
     readonly property string query: searching ? field.text.slice(1) : ""
     readonly property var rows: View.rows(service ? service.tasks : [], {
         query: searching ? query : null,
@@ -61,6 +76,9 @@ Rectangle {
     // field, the newest tasks in view. A half-typed task is a draft and
     // stays; a search does not.
     function opened() {
+        // An edit is not a draft: closing leaves the task as it was.
+        if (editing)
+            leaveEdit();
         nowMs = Date.now();
         keep = ({});
         selectedUid = "";
@@ -146,6 +164,10 @@ Rectangle {
     // The selection moves to the row that takes the deleted one's place --
     // the one above it, or below when it was the top one.
     function remove(uid) {
+        // Out of its edit first: what comes back into the field may be a
+        // search, and change the rows.
+        if (uid === editUid)
+            leaveEdit();
         const i = rows.findIndex(x => x.uid === uid);
         if (i < 0 || !service)
             return;
@@ -170,8 +192,72 @@ Rectangle {
         }
     }
 
+    // A task's title, and its notes on the lines after: what Ctrl+E puts in
+    // the field and Ctrl+Shift+C on the clipboard.
+    function taskText(t) {
+        return (t.summary || "") + (t.description ? "\n" + t.description : "");
+    }
+
+    // Ctrl+E: the selected task's text into the field, to change -- or, with
+    // nothing selected, the newest task's, the one most likely just typed
+    // wrong. What was in the field is set aside until the edit is over.
+    function startEdit() {
+        if (editing || !service)
+            return;
+        const r = selectedIndex >= 0 ? rows[selectedIndex] : rows[0];
+        if (!r)
+            return;
+        _draftAside = field.text;
+        keep = Object.assign({}, keep, {
+            [r.uid]: true
+        });
+        // Before the text goes in, so it is not read as a search.
+        editUid = r.uid;
+        selectedUid = r.uid;
+        _editTitle = r.summary || "(untitled)";
+        _editOriginal = taskText(r);
+        field.text = _editOriginal;
+        field.cursorPosition = field.length;
+        Qt.callLater(positionSelection);
+    }
+
+    // Enter while editing: the task takes the new text, unless nothing is
+    // left of it or nothing changed.
+    function saveEdit() {
+        const text = field.text;
+        if (service && text.trim() !== "" && text !== _editOriginal)
+            service.edit(editUid, text);
+        leaveEdit();
+    }
+
+    // Out of an edit, saved or not: the field gets back what was in it, and
+    // the task stays selected.
+    function leaveEdit() {
+        const uid = editUid;
+        field.text = _draftAside;
+        field.cursorPosition = field.length;
+        editUid = "";
+        _draftAside = "";
+        _editOriginal = "";
+        _editTitle = "";
+        selectedUid = uid;
+        Qt.callLater(positionSelection);
+    }
+
+    // Ctrl+Shift+C: the selected task's text on the clipboard.
+    function copySelected() {
+        const r = selectedIndex >= 0 ? rows[selectedIndex] : null;
+        if (!r || !service)
+            return;
+        service.copy(taskText(r));
+        noteText = "Copied “" + (r.summary || "(untitled)") + "”";
+        noteTimer.restart();
+    }
+
     function stepBack() {
-        if (searching) {
+        if (editing) {
+            leaveEdit();
+        } else if (searching) {
             field.text = "";
             selectedUid = "";
             positionSelection();
@@ -194,9 +280,23 @@ Rectangle {
                     toggle(selectedUid);
             } else if (shift) {
                 newLine();
+            } else if (editing) {
+                saveEdit();
             } else {
                 submit();
             }
+            event.accepted = true;
+            return;
+        }
+        if (ctrl && !shift && event.key === Qt.Key_E) {
+            startEdit();
+            event.accepted = true;
+            return;
+        }
+        // Ctrl+Shift+C, not Ctrl+C: that one copies what is selected in the
+        // field, as ever.
+        if (ctrl && shift && event.key === Qt.Key_C) {
+            copySelected();
             event.accepted = true;
             return;
         }
@@ -245,7 +345,7 @@ Rectangle {
     // an empty field changes the search and its words in one go.
     function searchEdited() {
         const text = field.text;
-        if (text.charAt(0) !== "/")
+        if (editing || text.charAt(0) !== "/")
             return;
         const found = View.rows(service ? service.tasks : [], {
             query: text.slice(1),
@@ -263,6 +363,10 @@ Rectangle {
     property int _rowCount: 0
 
     onRowsChanged: {
+        // The task being edited went -- deleted here, or on the server --
+        // and the edit with it.
+        if (editing && service && !service.tasks.some(t => t.uid === editUid))
+            leaveEdit();
         if (rows.length === _rowCount)
             return;
         _rowCount = rows.length;
@@ -281,6 +385,18 @@ Rectangle {
 
         interval: Sync.UNDO_MS
         onTriggered: card.undoText = ""
+    }
+
+    Timer {
+        id: noteTimer
+
+        interval: 2500
+        onTriggered: card.noteText = ""
+    }
+
+    // Ctrl+W and Ctrl+U in the field, as in every text field.
+    EditKeys {
+        id: editKeys
     }
 
     radius: Theme.cornerRadius * 1.5
@@ -346,9 +462,11 @@ Rectangle {
                 }
 
                 StyledText {
+                    readonly property bool plainSync: !card.editing && card.noteText === "" && !card.undoActive
+
                     Layout.fillWidth: true
-                    text: card.undoActive ? "Deleted “" + card.undoText + "” — Ctrl+Z brings it back" : card.syncLine.text
-                    color: !card.undoActive && card.syncLine.error ? Theme.error : Theme.surfaceVariantText
+                    text: card.editing ? "Editing “" + card._editTitle + "” — Enter saves it, Esc leaves it as it was" : card.noteText !== "" ? card.noteText : card.undoActive ? "Deleted “" + card.undoText + "” — Ctrl+Z brings it back" : card.syncLine.text
+                    color: card.editing ? Theme.primary : plainSync && card.syncLine.error ? Theme.error : Theme.surfaceVariantText
                     font.pixelSize: Theme.fontSizeSmall
                     elide: Text.ElideRight
                 }
@@ -403,6 +521,7 @@ Rectangle {
                     width: list.width
                     task: card.rows[index] || null
                     selected: index === card.selectedIndex
+                    editing: !!task && task.uid === card.editUid
                     nowMs: card.nowMs
                     onSelectRequested: card.select(task.uid)
                     onToggleRequested: {
@@ -446,9 +565,9 @@ Rectangle {
             DankIcon {
                 id: fieldIcon
 
-                name: card.searching ? "search" : "add"
+                name: card.editing ? "edit" : card.searching ? "search" : "add"
                 size: 20
-                color: card.searching ? Theme.primary : Theme.surfaceVariantText
+                color: card.editing || card.searching ? Theme.primary : Theme.surfaceVariantText
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.spacingM
                 anchors.top: parent.top
@@ -511,6 +630,13 @@ Rectangle {
                     focus: true
                     onCursorRectangleChanged: fieldFlick.follow(cursorRectangle)
                     onTextChanged: card.searchEdited()
+                    // Ctrl+W and Ctrl+U before anything else, and claimed
+                    // before any shortcut of the window's is asked.
+                    Keys.forwardTo: [editKeys]
+                    Keys.onShortcutOverride: event => {
+                        if (editKeys.claims(event))
+                            event.accepted = true;
+                    }
                     Keys.onPressed: event => card.handleKey(event)
                 }
             }
@@ -520,7 +646,7 @@ Rectangle {
                 anchors.right: fieldFlick.right
                 anchors.top: fieldFlick.top
                 visible: field.text === "" && !field.preeditText
-                text: "A new task — Enter saves it, / searches"
+                text: card.editing ? "The task's title, and its notes on the lines after — Esc leaves it as it was" : "A new task — Enter saves it, / searches"
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.surfaceVariantText
                 elide: Text.ElideRight
@@ -530,10 +656,12 @@ Rectangle {
         StyledText {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
-            text: "Enter save · Shift+Enter new line · Ctrl+J/K move · Ctrl+Enter done · Ctrl+Del delete · / search · Ctrl+R sync · Esc close"
+            text: card.editing ? "Enter save the change · Shift+Enter new line · Ctrl+W/U delete a word / all · Esc leave it as it was" : "Enter save · Shift+Enter new line · Ctrl+J/K move · Ctrl+Enter done · Ctrl+E edit · Ctrl+Shift+C copy · Ctrl+Del delete · / search · Ctrl+R sync · Esc close"
             font.pixelSize: Theme.fontSizeSmall - 1
             color: Theme.surfaceVariantText
             opacity: 0.8
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
             elide: Text.ElideRight
         }
     }

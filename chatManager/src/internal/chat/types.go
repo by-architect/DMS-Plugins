@@ -202,6 +202,12 @@ type ReactionSummary struct {
 type SearchHit struct {
 	Message
 	ChatName string `json:"chatName"`
+
+	// Marks is what matched, as the message writes it, for the result to
+	// light up; Approx says the words were only nearly there, a typo away.
+	// Set by the search inside one conversation (search.go).
+	Marks  []string `json:"marks,omitempty"`
+	Approx bool     `json:"approx,omitempty"`
 }
 
 // placeholderFor is the preview text for a message with no words in it -- used
